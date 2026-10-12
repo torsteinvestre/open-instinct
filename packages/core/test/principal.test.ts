@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ContactStore } from "../src/contacts.js";
-import { OWNER_EMAIL_PRINCIPAL_ID, isReservedHandle, normalizeHandle, normalizePhone, resolvePrincipal } from "../src/principal.js";
+import { OWNER_EMAIL_PRINCIPAL_ID, isReservedHandle, normalizeHandle, normalizePhone, phoneCountryOf, resolvePrincipal, type PhoneCountry } from "../src/principal.js";
 import { inbound, tempState, testConfig } from "./helpers.js";
 
 describe("normalizePhone", () => {
@@ -12,6 +12,46 @@ describe("normalizePhone", () => {
     expect(normalizePhone("+44 20 7946 0958")).toBe("+442079460958");
     expect(normalizePhone("")).toBe("");
     expect(normalizePhone("abc")).toBe("");
+  });
+
+  it("keeps the country of a number written with +, even when it has ten digits", () => {
+    // A Norwegian number is ten digits with its 47. It used to become +1 474...
+    expect(normalizePhone("+4745775184")).toBe("+4745775184");
+    expect(normalizePhone("+47 457 75 184")).toBe("+4745775184");
+    expect(normalizePhone("  +4745775184 ")).toBe("+4745775184");
+    expect(normalizePhone("+46 8 123 4567")).toBe("+4681234567");
+  });
+
+  it("reads local formats as the default country", () => {
+    const cases: Array<[string, PhoneCountry, string]> = [
+      ["457 75 184", "NO", "+4745775184"],
+      ["004745775184", "NO", "+4745775184"],
+      ["+46 70 123 45 67", "SE", "+46701234567"],
+      ["070-123 45 67", "SE", "+46701234567"],
+      ["08-123 456 78", "SE", "+46812345678"],
+      ["+44 7400 123456", "GB", "+447400123456"],
+      ["07400 123456", "GB", "+447400123456"],
+      ["+44 20 7946 0958", "GB", "+442079460958"],
+      ["(617) 555-0100", "US", "+16175550100"],
+      ["+1 617 555 0100", "US", "+16175550100"],
+      ["+46 70 123 45 67", "NO", "+46701234567"],
+    ];
+    for (const [input, country, want] of cases) expect(normalizePhone(input, country), `${input} in ${country}`).toBe(want);
+  });
+
+  it("keeps the digits of a number the library cannot place", () => {
+    expect(normalizePhone("12345")).toBe("+12345");
+  });
+});
+
+describe("phoneCountryOf", () => {
+  it("takes the country from the owner's phone and falls back to US", () => {
+    const owner = (phones: string[]) => ({ owner: { ...testConfig().owner, phones } });
+    expect(phoneCountryOf(owner(["+4745775184"]))).toBe("NO");
+    expect(phoneCountryOf(owner(["+46701234567"]))).toBe("SE");
+    expect(phoneCountryOf(owner(["+447400123456"]))).toBe("GB");
+    expect(phoneCountryOf(owner(["+16175550100"]))).toBe("US");
+    expect(phoneCountryOf(owner([]))).toBe("US");
   });
 });
 
@@ -46,6 +86,17 @@ describe("resolvePrincipal", () => {
     for (const channel of ["chat", "scheduled", "system"] as const) {
       expect(resolvePrincipal(inbound({ channel, from: "anything" }), config, c).kind).toBe("owner");
     }
+  });
+
+  it("recognises an owner outside the US by their real number, not a US look-alike", () => {
+    const norwegian = { ...config, owner: { ...config.owner, phones: ["+4745775184"] } };
+    const c = contacts();
+    for (const from of ["+4745775184", "+47 457 75 184", "004745775184"]) {
+      const p = resolvePrincipal(inbound({ channel: "imessage", from }), norwegian, c);
+      expect(p.kind, from).toBe("owner");
+      expect(p.phone).toBe("+4745775184");
+    }
+    expect(resolvePrincipal(inbound({ channel: "imessage", from: "+14745775184" }), norwegian, c).kind).toBe("stranger");
   });
 
   it("reduces the owner's own email address to a partner-tier contact, because From can be forged", () => {

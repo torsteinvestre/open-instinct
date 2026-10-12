@@ -20,7 +20,7 @@ import type { ContactStore } from "./contacts.js";
 import type { MemoryStore } from "./memory.js";
 import { OwnerNotifier } from "./notifier.js";
 import { DEFAULT_TIER_TABLE, SPEND_CAPABILITIES, type PolicyEngine } from "./policy.js";
-import { normalizePhone, resolvePrincipal } from "./principal.js";
+import { normalizePhone, phoneCountryOf, resolvePrincipal } from "./principal.js";
 import { readAgentsInstructions, readPersona } from "./persona.js";
 import { buildSystemPrompt, wrapUntrusted } from "./prompt.js";
 import { A2AStore, a2aState, a2aTerminal } from "./a2a-state.js";
@@ -903,12 +903,13 @@ export class AgentRuntime {
    * tier present. Unknown participants are strangers; an unknown member list caps to stranger.
    */
   private capForGroup(sender: Principal, msg: InboundMessage): Principal {
-    const ownerPhones = new Set(this.deps.config.owner.phones.map(normalizePhone));
+    const country = phoneCountryOf(this.deps.config);
+    const ownerPhones = new Set(this.deps.config.owner.phones.map((p) => normalizePhone(p, country)));
     const participants = Array.isArray(msg.meta?.participants) ? (msg.meta!.participants as unknown[]).filter((p): p is string => typeof p === "string") : [];
     let lowest: Tier = sender.tier;
     let others = 0;
     for (const raw of participants) {
-      const phone = normalizePhone(raw);
+      const phone = normalizePhone(raw, country);
       if (!phone || ownerPhones.has(phone)) continue;
       others++;
       const tier = this.deps.contacts.findByPhone(phone)?.tier ?? "stranger";

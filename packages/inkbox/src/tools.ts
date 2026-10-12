@@ -6,7 +6,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { Type } from "typebox";
-import { defineTool, normalizeHandle, normalizePhone, textResult } from "@open-instinct/core";
+import { defineTool, normalizeHandle, normalizePhone, phoneCountryOf, textResult } from "@open-instinct/core";
 import type { Contact, ContactStore, InstinctConfig, OutboundMessage, RegisteredTool, ToolContext, ToolResultLike } from "@open-instinct/core";
 import type { FileSend, InkboxChannel } from "./channel.js";
 import { parseConversationKey } from "./channel.js";
@@ -81,7 +81,7 @@ export function resolveTarget(to: string, deps: Pick<MessagingDeps, "contacts" |
     return { channel: "email", to: raw.toLowerCase(), label: c?.name ?? raw };
   }
   if (looksLikePhone(raw)) {
-    const phone = normalizePhone(raw);
+    const phone = normalizePhone(raw, phoneCountryOf(deps.config));
     const c = deps.contacts.findByPhone(phone);
     return { channel: preferred === "sms" ? "sms" : "imessage", to: phone, label: c?.name ?? phone };
   }

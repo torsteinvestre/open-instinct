@@ -10,15 +10,40 @@
  * forged and the mail webhook carries no SPF/DKIM/DMARC result. The literal sender
  * `owner` is never a sentinel on a network channel.
  */
+import { parsePhoneNumberFromString, type CountryCode } from "libphonenumber-js";
 import type { ContactStore } from "./contacts.js";
 import type { Contact, InboundMessage, InstinctConfig, Principal } from "./types.js";
 
-/** Digits only, E.164 with a leading `+`. Ten digits are assumed to be US numbers. */
-export function normalizePhone(s: string): string {
-  const digits = (s ?? "").replace(/\D/g, "");
+/** ISO 3166 country code ("NO", "SE", "GB", "US") used to read numbers written without one. */
+export type PhoneCountry = CountryCode;
+
+export const DEFAULT_PHONE_COUNTRY: PhoneCountry = "US";
+
+/**
+ * E.164 with a leading `+`. A number written with `+` or an international prefix keeps its
+ * own country. One written the local way ("070-123 45 67", "457 75 184") is read as
+ * `defaultCountry`. A digit count cannot tell these apart: a Norwegian number is ten digits
+ * with its 47, like a US number without its 1. libphonenumber-js knows each country's
+ * lengths and trunk prefix.
+ */
+export function normalizePhone(s: string, defaultCountry: PhoneCountry = DEFAULT_PHONE_COUNTRY): string {
+  const raw = (s ?? "").trim();
+  const digits = raw.replace(/\D/g, "");
   if (!digits) return "";
-  if (digits.length === 10) return `+1${digits}`;
+  const parsed = parsePhoneNumberFromString(raw, defaultCountry);
+  // isPossible checks length only, so reserved test ranges and newly issued ones still normalize.
+  if (parsed?.isPossible()) return parsed.number;
+  // Keep the digits so a number the library cannot place still matches itself.
   return `+${digits}`;
+}
+
+/** The owner's country, from the first owner phone that names one. Local numbers are read as this. */
+export function phoneCountryOf(config: Pick<InstinctConfig, "owner">): PhoneCountry {
+  for (const phone of config.owner.phones) {
+    const country = parsePhoneNumberFromString(phone)?.country;
+    if (country) return country;
+  }
+  return DEFAULT_PHONE_COUNTRY;
 }
 
 /** Inkbox handles compare case-insensitively and may be written with a leading `@`. */
@@ -144,8 +169,9 @@ export function resolvePrincipal(msg: InboundMessage, config: InstinctConfig, co
   }
 
   if (looksLikePhone(from)) {
-    const phone = normalizePhone(from);
-    if (config.owner.phones.some((p) => normalizePhone(p) === phone)) return ownerPrincipalOf(config);
+    const country = phoneCountryOf(config);
+    const phone = normalizePhone(from, country);
+    if (config.owner.phones.some((p) => normalizePhone(p, country) === phone)) return ownerPrincipalOf(config);
     const contact = contacts.findByPhone(phone);
     if (contact) return contactPrincipal(contact);
     return strangerPrincipal(msg, phone);

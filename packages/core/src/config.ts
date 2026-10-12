@@ -48,7 +48,7 @@ const COMPUTER_MODES = new Set<InstinctConfig["computer"]["mode"]>(["auto", "des
 export function configFromEnv(env: NodeJS.ProcessEnv): InstinctConfig {
   const cfg = defaultConfig();
   if (env.INSTINCT_OWNER_NAME?.trim()) cfg.owner.name = env.INSTINCT_OWNER_NAME.trim();
-  cfg.owner.phones = splitList(env.INSTINCT_OWNER_PHONE).map(normalizePhone).filter(Boolean);
+  cfg.owner.phones = splitList(env.INSTINCT_OWNER_PHONE).map((p) => normalizePhone(p)).filter(Boolean);
   cfg.owner.emails = splitList(env.INSTINCT_OWNER_EMAIL).map(normalizeEmail).filter(Boolean);
   // INSTINCT_TIMEZONE is the name older .env.example files used; keep honouring it.
   const timezone = env.INSTINCT_OWNER_TIMEZONE?.trim() || env.INSTINCT_TIMEZONE?.trim();
@@ -74,7 +74,7 @@ function withDefaults(raw: Partial<InstinctConfig>): InstinctConfig {
     owner: {
       ...d.owner,
       ...(raw.owner ?? {}),
-      phones: (raw.owner?.phones ?? []).map(normalizePhone).filter(Boolean),
+      phones: (raw.owner?.phones ?? []).map((p) => normalizePhone(p)).filter(Boolean),
       emails: (raw.owner?.emails ?? []).map(normalizeEmail).filter(Boolean),
     },
     agent: { ...d.agent, ...(raw.agent ?? {}) },

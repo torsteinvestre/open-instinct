@@ -38,7 +38,7 @@ export function fakeContacts(initial: Array<Partial<Contact> & { name: string }>
         id,
         name: input.name,
         tier: input.tier ?? prev?.tier ?? "stranger",
-        phones: (input.phones ?? prev?.phones ?? []).map(phoneKey),
+        phones: (input.phones ?? prev?.phones ?? []).map((p) => phoneKey(p)),
         emails: (input.emails ?? prev?.emails ?? []).map((e) => e.toLowerCase()),
         agentHandle: input.agentHandle ?? prev?.agentHandle,
         notes: input.notes ?? prev?.notes,

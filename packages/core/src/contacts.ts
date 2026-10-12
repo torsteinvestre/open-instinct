@@ -3,7 +3,7 @@
  * them. Stored as a plain JSON array in contacts.json so the owner can edit it.
  */
 import type { StateDir } from "./state.js";
-import { isReservedHandle, normalizeEmail, normalizeHandle, normalizePhone } from "./principal.js";
+import { isReservedHandle, normalizeEmail, normalizeHandle, normalizePhone, type PhoneCountry } from "./principal.js";
 import type { Contact, Tier } from "./types.js";
 
 const FILE = "contacts.json";
@@ -28,12 +28,23 @@ function copy(c: Contact): Contact {
   return structuredClone(c);
 }
 
+export interface ContactStoreOptions {
+  /** How numbers written without a country code are read. Pass `phoneCountryOf(config)`. */
+  phoneCountry?: PhoneCountry;
+}
+
 export class ContactStore {
   private readonly state: StateDir;
+  private readonly phoneCountry: PhoneCountry | undefined;
   private cache: Contact[] | undefined;
 
-  constructor(state: StateDir) {
+  constructor(state: StateDir, opts: ContactStoreOptions = {}) {
     this.state = state;
+    this.phoneCountry = opts.phoneCountry;
+  }
+
+  private phone(s: string): string {
+    return normalizePhone(s, this.phoneCountry);
   }
 
   private load(): Contact[] {
@@ -59,9 +70,9 @@ export class ContactStore {
   }
 
   findByPhone(phone: string): Contact | undefined {
-    const n = normalizePhone(phone);
+    const n = this.phone(phone);
     if (!n) return undefined;
-    const found = this.load().find((c) => c.phones.some((p) => normalizePhone(p) === n));
+    const found = this.load().find((c) => c.phones.some((p) => this.phone(p) === n));
     return found ? copy(found) : undefined;
   }
 
@@ -100,7 +111,7 @@ export class ContactStore {
   upsert(input: Partial<Contact> & { name: string }): Contact {
     const list = this.load();
     const now = new Date().toISOString();
-    const phones = uniq((input.phones ?? []).map(normalizePhone));
+    const phones = uniq((input.phones ?? []).map((p) => this.phone(p)));
     const emails = uniq((input.emails ?? []).map(normalizeEmail));
     const handle = input.agentHandle ? normalizeHandle(input.agentHandle) : undefined;
     if (handle !== undefined && isReservedHandle(handle)) {
@@ -111,7 +122,7 @@ export class ContactStore {
       (input.id ? list.find((c) => c.id === input.id) : undefined) ??
       list.find(
         (c) =>
-          c.phones.some((p) => phones.includes(normalizePhone(p))) ||
+          c.phones.some((p) => phones.includes(this.phone(p))) ||
           c.emails.some((e) => emails.includes(normalizeEmail(e))) ||
           (handle !== undefined && c.agentHandle !== undefined && normalizeHandle(c.agentHandle) === handle),
       ) ??
@@ -120,7 +131,7 @@ export class ContactStore {
     if (existing) {
       existing.name = input.name;
       if (input.tier) existing.tier = input.tier;
-      existing.phones = uniq([...existing.phones.map(normalizePhone), ...phones]);
+      existing.phones = uniq([...existing.phones.map((p) => this.phone(p)), ...phones]);
       existing.emails = uniq([...existing.emails.map(normalizeEmail), ...emails]);
       if (handle) existing.agentHandle = handle;
       if (input.notes !== undefined) existing.notes = input.notes;

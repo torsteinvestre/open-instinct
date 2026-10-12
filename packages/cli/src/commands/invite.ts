@@ -3,7 +3,7 @@
  * and, when we have an admin key, create an Inkbox A2A invitation their agent
  * can accept.
  */
-import { ContactStore, TIER_ORDER, normalizeHandle, type Tier } from "@open-instinct/core";
+import { ContactStore, TIER_ORDER, normalizeHandle, phoneCountryOf, type Tier } from "@open-instinct/core";
 import { parse, str, type OptionSpec } from "../args.js";
 import type { CliContext } from "../context.js";
 import { UsageError } from "../io.js";
@@ -38,7 +38,10 @@ export async function runInvite(ctx: CliContext, argv: string[]): Promise<number
   const peerHandle = str(values, "handle") ? normalizeHandle(str(values, "handle")!) : undefined;
   const { c } = ctx;
 
-  const contacts = new ContactStore(ctx.state());
+  // Read a --phone written the local way as the owner's country. Without config.json, keep the default.
+  const state = ctx.state();
+  const phoneCountry = state.exists("config.json") ? phoneCountryOf(loadConfig(state, ctx.env)) : undefined;
+  const contacts = new ContactStore(state, { phoneCountry });
   const existing = contacts.search(name).find((x) => x.name.toLowerCase() === name.toLowerCase());
   const contact = contacts.upsert({
     ...(existing ?? {}),

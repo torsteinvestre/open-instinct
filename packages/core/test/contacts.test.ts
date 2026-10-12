@@ -11,6 +11,16 @@ describe("slugify", () => {
 });
 
 describe("ContactStore", () => {
+  it("reads local numbers as the owner's country and finds them in any format", () => {
+    const store = new ContactStore(tempState(), { phoneCountry: "SE" });
+    const c = store.upsert({ name: "Anna Berg", phones: ["070-123 45 67"] });
+    expect(c.phones).toEqual(["+46701234567"]);
+    expect(store.findByPhone("+46 70 123 45 67")?.id).toBe("anna-berg");
+    expect(store.findByPhone("0701234567")?.id).toBe("anna-berg");
+    const friend = store.upsert({ name: "Ola Nordmann", phones: ["+47 912 34 567"] });
+    expect(friend.phones).toEqual(["+4791234567"]);
+  });
+
   it("refuses the reserved agent handle \"owner\"", () => {
     const store = new ContactStore(tempState());
     expect(() => store.upsert({ name: "Impostor", agentHandle: "@Owner" })).toThrow(/reserved/);

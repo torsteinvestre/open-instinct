@@ -102,7 +102,7 @@ open-instinct/
 Package rules:
 
 - TypeScript, ESM, Node 22.19+ (Pi requires it). `pnpm` workspaces. Strict mode.
-- `core` depends on Pi only. `inkbox`, `computer`, `apps`, `network` and `payments` depend on `core` for types. `server` wires them. `gateway` and `cli` depend on `maritime-sdk` and `@inkbox/sdk`.
+- `core` depends on Pi, plus small libraries for features that need them: pdfkit for `create_pdf` and libphonenumber-js for phone numbers. `inkbox`, `computer`, `apps`, `network` and `payments` depend on `core` for types. `server` wires them. `gateway` and `cli` depend on `maritime-sdk` and `@inkbox/sdk`.
 - Every package exports from `src/index.ts`, ships `dist/` built by `tsc`, and has vitest tests in `test/`.
 - No package reads `process.env` except `server`, `gateway` and `cli` (through `core`'s `loadConfig`). Libraries take options.
 

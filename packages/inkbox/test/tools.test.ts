@@ -62,6 +62,12 @@ describe("resolveTarget", () => {
     expect(resolveTarget("Someone@Example.com", deps)).toEqual({ channel: "email", to: "someone@example.com", label: "Someone@Example.com" });
   });
 
+  it("reads a phone written the local way as the owner's country", () => {
+    const norwegian = { contacts, config: { ...config, owner: { ...config.owner, phones: ["+4745775184"] } } };
+    expect(resolveTarget("912 34 567", norwegian)).toEqual({ channel: "imessage", to: "+4791234567", label: "+4791234567" });
+    expect(resolveTarget("+46 70 123 45 67", norwegian)).toEqual({ channel: "imessage", to: "+46701234567", label: "+46701234567" });
+  });
+
   it("refuses ambiguous names, unknown people and missing addresses", () => {
     const deps = { contacts, config };
     expect(() => resolveTarget("Sam", deps)).toThrow(/several contacts/);

@@ -22,41 +22,66 @@ export function safeUrl(u: string | undefined, allowData = false): string {
   return "";
 }
 
-// Amber accent with dark ink on buttons: white on amber is too faint to read. Links use a deeper amber for contrast.
+// Always dark, whatever the device prefers: the warm light reads best on it. Amber buttons carry dark ink.
+// Sunlight comes in from beyond the top-left corner of the screen: a wide glow that fades out across the
+// page with no visible edge (a background, so it can never widen the page on a phone). It sits on <html>
+// with min-height 100%, so it always fills the window; on a short page, zoomed out, a background sized to
+// the content would stop in a hard line. Nothing on the page gives off light; everything is lit from that
+// corner, the same way for text as for cards: the color stays, a faint warm tint fades in from the lit
+// side, a soft warm haze sits only on the side facing the light, and a faint shadow falls down and to the
+// right. A card's border is warm where it faces the light, along the top and left edges, fading out along
+// both (a gradient painted under a transparent border). The tint only paints inside the heading's box, so the heading
+// gets room below for descenders (the tail of a "g"), taken back from its margin so nothing moves.
 const CSS = `
-:root{--bg:#fffaf3;--card:#fff;--text:#1f1a14;--muted:#6f655a;--line:#efe4d6;--accent:#f59e0b;--accent-ink:#1f1404;--link:#b45309;--bad:#b42318;--code:#fbf1e2}
-@media (prefers-color-scheme:dark){:root{--bg:#14110d;--card:#1c1813;--text:#f6efe6;--muted:#a89c8d;--line:#2c261e;--accent:#fbbf24;--accent-ink:#1f1404;--link:#fbbf24;--bad:#f97066;--code:#262019}}
+:root{color-scheme:dark;--bg:#14110d;--card:#1c1813;--text:#f6efe6;--muted:#a89c8d;--line:#2c261e;--accent:#fbbf24;--accent-ink:#1f1404;--link:#fbbf24;--bad:#f97066;--code:#262019;--sunlight:rgba(251,191,36,.13);--sunlight-in:rgba(251,191,36,.06);--sunlight-edge:rgba(251,191,36,.26);--sunlit:#fff0d4;--sunlit-haze:rgba(251,191,36,.2);--shade:rgba(0,0,0,.5)}
 *{box-sizing:border-box}
-html{-webkit-text-size-adjust:100%}
-body{margin:0;background:var(--bg);color:var(--text);font:16px/1.55 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,Inter,Helvetica,Arial,sans-serif}
+html{-webkit-text-size-adjust:100%;min-height:100%;background:radial-gradient(130vmax 95vmax at -12% -18%,var(--sunlight),transparent 62%) no-repeat,var(--bg)}
+body{margin:0;color:var(--text);font:16px/1.55 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,Inter,Helvetica,Arial,sans-serif}
+h1,.lit{filter:drop-shadow(-1px -1px 3px var(--sunlit-haze)) drop-shadow(1px 2px 2px var(--shade))}
+@supports ((-webkit-background-clip:text) or (background-clip:text)){h1,.lit{background:linear-gradient(135deg,var(--sunlit),var(--text) 42%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}h1{padding-bottom:.15em;margin-bottom:calc(24px - .15em)}}
 a{color:var(--link)}
 .wrap{max-width:480px;margin:0 auto;padding:40px 20px 56px}
 header{margin-bottom:40px}
 .brand{font-weight:700;font-size:18px;letter-spacing:-.01em}
-.sun{width:22px;height:22px;margin-right:8px;vertical-align:-5px}
+.sun{display:inline-block;width:22px;height:22px;margin-right:8px;vertical-align:-5px;animation:turn 40s linear infinite}
+.sun-wrap{display:inline-block;filter:drop-shadow(1px 2px 2px var(--shade))}
 .sun circle{fill:var(--accent)}
 .sun path{fill:none;stroke:var(--accent);stroke-width:2;stroke-linecap:round}
 h1{font-size:clamp(28px,7vw,36px);line-height:1.15;letter-spacing:-.02em;margin:0 0 24px}
 p{margin:0 0 12px}
 .muted{color:var(--muted)}
-.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:20px}
+.card{border:1px solid transparent;border-radius:16px;padding:20px;background:linear-gradient(135deg,var(--sunlight-in),transparent 45%) padding-box,linear-gradient(var(--card),var(--card)) padding-box,linear-gradient(135deg,var(--sunlight-edge),var(--line) 40%) border-box;box-shadow:-8px -6px 26px -16px var(--sunlight-edge),6px 10px 24px -14px var(--shade)}
 label{display:block;font-size:14px;font-weight:600;margin:16px 0 6px}
 label small{font-weight:400;color:var(--muted)}
 input,select{width:100%;font:inherit;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text)}
 input:focus,select:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:transparent}
-.btn{display:block;width:100%;text-align:center;font:inherit;font-weight:600;padding:14px 18px;border:0;border-radius:12px;background:var(--accent);color:var(--accent-ink);text-decoration:none;cursor:pointer;margin-top:20px}
-.error{background:rgba(180,35,24,.08);border:1px solid rgba(180,35,24,.35);color:var(--bad);border-radius:10px;padding:10px 12px;font-size:14px;margin:8px 0}
+.btn{display:block;width:100%;text-align:center;font:inherit;font-weight:600;padding:14px 18px;border:0;border-radius:12px;background:var(--accent);color:var(--accent-ink);text-decoration:none;cursor:pointer;margin-top:20px;transition:transform .15s ease,box-shadow .15s ease,filter .15s ease}
+.btn:hover{transform:translateY(-1px);filter:brightness(1.04);box-shadow:0 8px 18px -10px rgba(245,158,11,.75)}
+.btn:active{transform:scale(.98);box-shadow:none}
+.btn:focus-visible{outline:2px solid var(--link);outline-offset:2px}.error{background:rgba(180,35,24,.08);border:1px solid rgba(180,35,24,.35);color:var(--bad);border-radius:10px;padding:10px 12px;font-size:14px;margin:8px 0}
 .step{font-size:13px;color:var(--muted);margin:0 0 6px}
-.code{background:var(--code);border-radius:12px;padding:14px 16px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:18px;font-weight:600;word-break:break-all;margin:0 0 16px}
-.number{font-size:clamp(24px,7vw,30px);font-weight:700;letter-spacing:.01em}
-.qr{display:block;width:180px;height:180px;margin:20px auto 0;border-radius:12px;background:#fff;padding:8px}
+#send-step{transition:opacity .35s ease}
+.locked{opacity:.35;pointer-events:none;user-select:none}
+.manual{margin-top:14px;font-size:14px;color:var(--muted)}
+.manual summary{cursor:pointer}
+.manual .code{font-size:16px;color:var(--text)}
+.code{background:var(--code);border-radius:12px;padding:14px 16px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:18px;font-weight:600;word-break:break-all;margin:0 0 16px}.qr{display:block;width:180px;height:180px;margin:20px auto 0;border-radius:12px;background:#fff;padding:8px}
 footer{margin-top:40px;color:var(--muted);font-size:13px}
+@keyframes turn{to{transform:rotate(360deg)}}
+@keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.enter h1,.enter .card{animation:rise .5s ease both}
+.enter .card{animation-delay:.08s}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
 `;
 
 /** A disc and eight short rays. Colored by CSS so it follows the light and dark theme. */
 const SUN = `<svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path d="M12 2.5V5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8"/></svg>`;
 
-function layout(title: string, body: string, opts: PageOptions & { refreshSeconds?: number } = {}): string {
+/**
+ * `enter` fades the heading and card in once. Pages that reload themselves (the connect page
+ * while an agent is set up) leave it off, or they would replay it every few seconds.
+ */
+function layout(title: string, body: string, opts: PageOptions & { refreshSeconds?: number; enter?: boolean } = {}): string {
   const refresh = opts.refreshSeconds ? `<meta http-equiv="refresh" content="${opts.refreshSeconds}">` : "";
   const product = escapeHtml((opts.brand ?? DEFAULT_BRAND).product);
   // A branded service credits the project it runs on; the MIT license asks for nothing more.
@@ -68,14 +93,14 @@ function layout(title: string, body: string, opts: PageOptions & { refreshSecond
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="color-scheme" content="light dark">
+<meta name="color-scheme" content="dark">
 ${refresh}
 <title>${escapeHtml(title)}</title>
 <style>${CSS}</style>
 </head>
 <body>
-<div class="wrap">
-<header><span class="brand">${SUN}${product}</span></header>
+<div class="wrap${opts.enter ? " enter" : ""}">
+<header><span class="brand"><span class="sun-wrap">${SUN}</span><span class="lit">${product}</span></span></header>
 ${body}
 <footer>${credit}</footer>
 </div>
@@ -141,7 +166,7 @@ export function renderLanding(opts: LandingOptions): string {
 </form>`
     : `<div class="card"><p class="muted" style="margin:0">Signups are closed here.</p></div>`;
 
-  return layout(brand.product, `<h1>A personal agent you text.</h1>\n${form}`, { brand: opts.brand });
+  return layout(brand.product, `<h1>Your own personal agent.</h1>\n${form}`, { brand: opts.brand, enter: true });
 }
 
 export interface RouterInfo {
@@ -190,16 +215,63 @@ export function connectRouterFor(handle: string, shared: RouterInfo | undefined,
   return out;
 }
 
-/** The text to send, the number, and a button that fills both in. Shared by the connect and pending pages. */
-function connectBlock(handle: string, router: ConnectRouter, qrPngDataUrl?: string): string {
+/** Where the connect page's "save to contacts" button points. */
+export function contactCardPath(userId: string): string {
+  return `/connect/${encodeURIComponent(userId)}/contact.vcf`;
+}
+
+/**
+ * Locks step 2 until the save button is tapped. The page itself never ships step 2 locked, so a
+ * phone without JavaScript is never stuck. The tap is remembered per person because the page
+ * reloads itself while the agent is being set up. A page cannot see whether the contact was
+ * really created, only that the button was tapped.
+ */
+function unlockAfterSaveScript(key: string): string {
+  // JSON keeps the key a plain string; "<" is escaped so it can never close the script tag.
+  const storageKey = JSON.stringify(`saved-contact:${key}`).replace(/</g, "\\u003c");
+  return `(function(){
+var key=${storageKey};
+var step=document.getElementById("send-step"),save=document.getElementById("save-contact");
+function saved(){try{return localStorage.getItem(key)==="1"}catch(e){return false}}
+function unlock(){step.classList.remove("locked");step.removeAttribute("aria-disabled")}
+if(!saved()){step.classList.add("locked");step.setAttribute("aria-disabled","true")}
+save.addEventListener("click",function(){try{localStorage.setItem(key,"1")}catch(e){}unlock()});
+})();`;
+}
+
+/**
+ * The text to send, the number, and a button that fills both in. Shared by the connect and
+ * pending pages; only the connect page knows whose card to offer, so only it passes `saveAs`.
+ * The card comes first as step 1: saved before the first text, even the first reply shows the
+ * agent's name and picture instead of a number. A phone always asks before adding a contact,
+ * so requiring the tap is as far as a page can go.
+ */
+function connectBlock(handle: string, router: ConnectRouter, opts: { qrPngDataUrl?: string; saveAs?: { href: string; name: string; key: string } } = {}): string {
   const smsHref = safeUrl(smsHrefFor(router.number, handle));
-  const qr = safeUrl(qrPngDataUrl, true);
-  return `<p class="step">Text</p>
-  <div class="code">${escapeHtml(connectCommandFor(handle))}</div>
+  const qr = safeUrl(opts.qrPngDataUrl, true);
+  const sendStep = `<div class="code">${escapeHtml(connectCommandFor(handle))}</div>
   <p class="step">to</p>
-  <div class="number">${escapeHtml(router.number)}</div>
+  <div class="code" style="margin-bottom:0">${escapeHtml(router.number)}</div>
   ${smsHref ? `<a class="btn" href="${smsHref}">Open Messages</a>` : ""}
   ${qr ? `<img class="qr" alt="QR code that opens Messages with the text filled in" src="${qr}">` : ""}`;
+  if (!opts.saveAs) return `<p class="step">Text</p>\n  ${sendStep}`;
+  const name = escapeHtml(opts.saveAs.name);
+  // Two buttons and nothing else. The Messages link fills in the number and the text, but a
+  // computer has no Messages to open, so the text and number wait folded under "On a computer?".
+  return `<p class="step">Step 1</p>
+  <a class="btn" id="save-contact" style="margin-top:0" href="${escapeHtml(opts.saveAs.href)}">Save ${name}</a>
+  <div id="send-step">
+  <p class="step" style="margin-top:28px">Step 2</p>
+  ${smsHref ? `<a class="btn" style="margin-top:0" href="${smsHref}">Connect to ${name}</a>` : ""}
+  <details class="manual"><summary>On a computer?</summary>
+  <p class="step" style="margin-top:12px">From your phone, text</p>
+  <div class="code">${escapeHtml(connectCommandFor(handle))}</div>
+  <p class="step">to</p>
+  <div class="code" style="margin-bottom:0">${escapeHtml(router.number)}</div>
+  </details>
+  ${qr ? `<img class="qr" alt="QR code that opens Messages with the text filled in" src="${qr}">` : ""}
+  </div>
+  <script>${unlockAfterSaveScript(opts.saveAs.key)}</script>`;
 }
 
 export function renderConnect(user: UserRecord, router: ConnectRouter | undefined, opts: PageOptions & { autoHandle?: boolean } = {}): string {
@@ -213,7 +285,7 @@ export function renderConnect(user: UserRecord, router: ConnectRouter | undefine
         ? `<p class="muted">Setting up your ${escapeHtml(brand.agent)}. You can send the text now; it answers once it is ready.</p>`
         : "";
   const card = router
-    ? `<div class="card">${connectBlock(user.handle, router, router.qrPngDataUrl)}</div>`
+    ? `<div class="card">${connectBlock(user.handle, router, { qrPngDataUrl: router.qrPngDataUrl, saveAs: { href: contactCardPath(user.id), name: brand.agent, key: user.id } })}</div>`
     : `<div class="error">The number could not be loaded right now. Reload in a minute.</div>`;
   return layout(brand.product, `<h1>Hi ${escapeHtml(user.name)}.</h1>\n${status}\n${card}`, {
     refreshSeconds: provisioning ? 5 : undefined,

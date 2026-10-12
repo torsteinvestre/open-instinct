@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { type SignupLimits, SlidingWindowLimiter, clientAddress, pendingCount, signupLimits } from "./limits.js";
 import { type Logger, consoleLogger } from "./logger.js";
 import { type Brand, DEFAULT_BRAND } from "./brand.js";
+import { contactCard } from "./contact.js";
 import { GITHUB_URL, type LandingOptions, type PageOptions, type RouterInfo, connectRouterFor, renderConnect, renderLanding, renderLinkDone, renderMessage, renderPending } from "./pages.js";
 import { type LinkPassthrough, type MaritimeProvisionOptions, newUserId, provisionUser } from "./provision.js";
 import { EventDeduper, type HeaderMap, relayVerifiedEvent, relayGatewayEvent, verifyForUser } from "./relay.js";
@@ -397,6 +398,25 @@ export function createGateway(opts: GatewayOptions): GatewayServer {
       if (!user) return html(res, 404, renderMessage("Not found", `No ${agentName} with that id. Check the link you were given.`, "error", page));
       const [shared, perUser] = await Promise.all([routerInfo(), routerInfoForUser(user)]);
       return html(res, 200, renderConnect(user, connectRouterFor(user.handle, shared, perUser), { ...page, autoHandle: pickHandles }));
+    }
+    if (parts[0] === "connect" && parts.length === 3 && parts[2] === "contact.vcf") {
+      if (method !== "GET") throw new HttpError(405, "method not allowed");
+      const user = opts.store.get(decodeURIComponent(parts[1] ?? ""));
+      if (!user) throw new HttpError(404, "unknown user");
+      // The card names the agent and the number it writes from; nothing about the person.
+      const [shared, perUser] = await Promise.all([routerInfo(), routerInfoForUser(user)]);
+      const router = connectRouterFor(user.handle, shared, perUser);
+      if (!router) throw new HttpError(503, "the number could not be loaded; try again in a minute");
+      const card = contactCard({ name: agentName, number: router.number });
+      res.writeHead(200, {
+        "Content-Type": "text/vcard; charset=utf-8",
+        "Content-Disposition": `attachment; filename="${agentName.replace(/[^A-Za-z0-9 _-]/g, "") || "contact"}.vcf"`,
+        "Content-Length": Buffer.byteLength(card),
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+      });
+      res.end(card);
+      return;
     }
     if (parts[0] === "webhooks" && parts[1] === "inkbox" && parts.length === 3) {
       if (method !== "POST") throw new HttpError(405, "method not allowed");

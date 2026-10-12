@@ -245,7 +245,7 @@ describe("gateway http", () => {
     expect((mar.calls.find((c) => c.method === "POST")?.body as Record<string, unknown>)["desktop"]).toBe(false);
     const connect = await (await fetch(`${base}/connect/${userId}`)).text();
     expect(connect).toContain(`connect @${user.handle}`);
-    expect(connect).toContain("Open Messages");
+    expect(connect).toContain("Connect to Sunshine");
 
     // The same phone, written another way: no second agent, and nothing about the first one.
     const again = await fetch(`${base}/api/signup`, {
@@ -261,6 +261,27 @@ describe("gateway http", () => {
     expect(page).not.toContain("connect @");
     expect(store.all()).toHaveLength(1);
     expect(ink.calls.filter((c) => c === "provisionIdentity")).toHaveLength(1);
+  });
+
+  it("offers a contact card with the agent's name, the number it writes from and nothing about the person", async () => {
+    const { base } = await boot({ brand: { product: "Sunshine", agent: "Sunshine" }, seed: [readyUser({ id: "usr_c", handle: "sunshine-maria-abcd" })] });
+    const page = await (await fetch(`${base}/connect/usr_c`)).text();
+    expect(page).toContain('href="/connect/usr_c/contact.vcf"');
+    expect(page).toContain(">Save Sunshine</a>");
+    // Saving is step 1, before connecting, so even the first reply shows the name and picture.
+    expect(page.indexOf("Step 1")).toBeLessThan(page.indexOf("Step 2"));
+    expect(page.indexOf("contact.vcf")).toBeLessThan(page.indexOf("sms:"));
+
+    const res = await fetch(`${base}/connect/usr_c/contact.vcf`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/vcard");
+    expect(res.headers.get("content-disposition")).toBe('attachment; filename="Sunshine.vcf"');
+    const card = await res.text();
+    expect(card).toContain("FN:Sunshine\r\n");
+    expect(card).toContain("TEL;TYPE=CELL:+14155550199\r\n");
+    expect(card).not.toContain("Maria");
+    expect(card).not.toContain("+14155550123");
+    expect((await fetch(`${base}/connect/usr_nobody/contact.vcf`)).status).toBe(404);
   });
 
   it("with picked handles, signing up again restarts a setup that failed", async () => {

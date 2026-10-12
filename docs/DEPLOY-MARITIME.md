@@ -142,6 +142,7 @@ Any other host works the same way: run the gateway image, give it a persistent d
 | `MARITIME_API_KEY` | yes | `mk_` key that creates agents and calls `/chat`. |
 | `INKBOX_ADMIN_API_KEY` | for signup | Org-wide Inkbox key. Without it the gateway relays for existing users only and the signup form becomes a notice. |
 | `GATEWAY_SIGNUP_SECRET` | yes when signup is on | Invite code. Every signup bills your Maritime wallet and Inkbox plan, so signup is closed without it. |
+| `GATEWAY_DEFAULT_COUNTRY` | no | The signup form's preselected country: `NO`, `SE`, `GB` or `US`. Default `US`. |
 | `GATEWAY_ALLOW_OPEN_SIGNUP` | no | `1` runs the form without an invite code, on purpose. |
 | `GATEWAY_TRUST_PROXY` | behind a proxy | `1` counts signups by the first `X-Forwarded-For` address. |
 | `GATEWAY_DATA_DIR` | no | Where `users.json` lives. Default `./.instinct-gateway`. Mount a volume. |
@@ -158,7 +159,7 @@ Any other host works the same way: run the gateway image, give it a persistent d
 
 ### The signup page
 
-`GET /` serves a form: name, phone, optional email, handle, and the invite code when `GATEWAY_SIGNUP_SECRET` is set. Submitting it calls `POST /api/signup`.
+`GET /` serves a form: name, country, phone, optional email, handle, and the invite code when `GATEWAY_SIGNUP_SECRET` is set. Submitting it calls `POST /api/signup`.
 
 Signup then runs six steps, saving after each one so a crash resumes instead of creating a second billed agent:
 

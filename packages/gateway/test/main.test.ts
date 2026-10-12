@@ -31,6 +31,12 @@ describe("readEnv", () => {
     expect(plain.allowOpenSignup).toBe(false);
     expect(plain.useMaritimeLlm).toBe(false);
     expect(plain.link).toBeUndefined();
+    expect(plain.defaultCountry).toBeUndefined();
+  });
+
+  it("reads GATEWAY_DEFAULT_COUNTRY and refuses a country the form does not offer", () => {
+    expect(readEnv({ MARITIME_API_KEY: "mk", GATEWAY_DEFAULT_COUNTRY: " no " }).defaultCountry).toBe("NO");
+    expect(() => readEnv({ MARITIME_API_KEY: "mk", GATEWAY_DEFAULT_COUNTRY: "Norway" })).toThrow(/GATEWAY_DEFAULT_COUNTRY/);
   });
 });
 

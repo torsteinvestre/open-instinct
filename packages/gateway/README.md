@@ -4,7 +4,7 @@ The gateway is the small, always-on front door for a multi-user Open Instinct de
 
 It does three things:
 
-1. **Signup.** A static page where a person enters a name, phone, optional email, a handle and (optionally) an invite code. The gateway then provisions everything the agent needs.
+1. **Signup.** A static page where a person enters a name, their country, phone, optional email, a handle and (optionally) an invite code. The gateway then provisions everything the agent needs.
 2. **Connect.** A page with the Inkbox router number, the exact `connect @handle` command, an `sms:` button that opens Messages with the command filled in, and a QR code for the same.
 3. **Relay.** Inkbox posts signed webhooks (iMessage, SMS, email, A2A) to `/webhooks/inkbox/<userId>`. The gateway verifies the signature, drops duplicates and delivery receipts, and forwards the event to that user's agent through `POST https://api.maritime.sh/api/agents/<agentId>/chat`. Maritime wakes the VM and the agent answers the human directly through Inkbox.
 
@@ -21,13 +21,13 @@ person's iPhone ──iMessage──▶ Inkbox ──signed webhook──▶ gat
 |---|---|---|
 | `GET` | `/` | Landing page with the signup form (or a notice when signup is disabled) |
 | `GET` | `/health` | `{ ok, users, signup }` |
-| `POST` | `/api/signup` | JSON or form body `{ name, phone, email?, handle, inviteCode? }`. A new signup gets `202 { userId, connectUrl, status }` (JSON) or a 303 to `/connect/:userId` (form). A phone that already has an Instinct, or a repeat of the same signup, gets the neutral `202 { status: "pending" }` or a "Check your phone" page; see Security notes. `429` when the per-address or global cap is hit |
+| `POST` | `/api/signup` | JSON or form body `{ name, country?, phone, email?, handle, inviteCode? }`. A new signup gets `202 { userId, connectUrl, status }` (JSON) or a 303 to `/connect/:userId` (form). A phone that already has an Instinct, or a repeat of the same signup, gets the neutral `202 { status: "pending" }` or a "Check your phone" page; see Security notes. `429` when the per-address or global cap is hit |
 | `GET` | `/connect/:userId` | Connect page with router number, command, `sms:` button, QR (when Inkbox can produce one for this handle) and status. Refreshes itself every 5 s while provisioning |
 | `GET` | `/api/users/:userId` | Status JSON without secrets or personal fields (`status`, `handle`, masked phone, `hasAgent`, `hasError`) |
 | `POST` | `/webhooks/inkbox/:userId` | Inkbox webhook intake. `404` unknown user, `401` bad signature, otherwise `204` at once and the forward happens in the background |
 | `GET` | `/oauth/link/callback/:userId?code&state` | Stripe Link OAuth redirect. Wraps `{ type: "link.oauth_callback", code, state }` in the event envelope, relays it to that user's agent through Maritime `/chat`, and shows a "Connected, go back to your messages" page. The agent holds the PKCE verifier and finishes the token exchange |
 
-Validation: phone must normalize to E.164 (`+14155550123`; a bare 10-digit US number is accepted), handle must match `[a-z0-9-]{3,40}` (a leading `@` and upper case are normalized away) and may not be the reserved `owner`, email is optional but checked when given.
+Validation: phone must be a possible number for the picked `country` (`NO`, `SE`, `GB`, `US`, or `other`; without the field, `GATEWAY_DEFAULT_COUNTRY`), written the local way or with `+`/`00` and its own country code. `other` needs the country code. It is stored as E.164. Handle must match `[a-z0-9-]{3,40}` (a leading `@` and upper case are normalized away) and may not be the reserved `owner`, email is optional but checked when given.
 
 ## Environment
 
@@ -38,6 +38,7 @@ Validation: phone must normalize to E.164 (`+14155550123`; a bare 10-digit US nu
 | `INKBOX_ADMIN_API_KEY` | for signup | Org-wide Inkbox key used to create identities, mint identity-scoped keys, signing keys and webhook subscriptions. Without it the gateway runs in relay-only mode and the signup form is replaced by a notice |
 | `INSTINCT_AGENT_IMAGE` | no | Image built from `deploy/Dockerfile.agent`. Default `ghcr.io/mariagorskikh/open-instinct-agent:latest` |
 | `GATEWAY_SIGNUP_SECRET` | yes when signup is on | Invite code. The form shows an "Invite code" field and `/api/signup` rejects requests without the exact value. With `INKBOX_ADMIN_API_KEY` set and no secret, the gateway refuses to start unless `GATEWAY_ALLOW_OPEN_SIGNUP=1` |
+| `GATEWAY_DEFAULT_COUNTRY` | no | The signup form's preselected country: `NO`, `SE`, `GB` or `US`. Default `US`. A local number like `912 34 567` is read as this country unless the person picks another. The gateway refuses to start on any other value |
 | `GATEWAY_ALLOW_OPEN_SIGNUP` | no | `1` runs the signup form without an invite code, on purpose. Every signup bills your Maritime wallet and Inkbox plan, so the gateway logs a warning at boot and relies on the rate limits below |
 | `GATEWAY_TRUST_PROXY` | no | `1` counts signups by the first `X-Forwarded-For` address instead of the socket address. Set it behind Railway, Fly or a reverse proxy you run; never on a host reachable directly |
 | `ANTHROPIC_API_KEY` | no | Passed to every new agent as a secret env var so it can call the model. Other Pi provider keys can be passed the same way by extending `provisionUser` in your own fork |

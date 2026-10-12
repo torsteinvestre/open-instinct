@@ -27,14 +27,20 @@ export const DEFAULT_PHONE_COUNTRY: PhoneCountry = "US";
  * lengths and trunk prefix.
  */
 export function normalizePhone(s: string, defaultCountry: PhoneCountry = DEFAULT_PHONE_COUNTRY): string {
-  const raw = (s ?? "").trim();
-  const digits = raw.replace(/\D/g, "");
+  const digits = (s ?? "").replace(/\D/g, "");
   if (!digits) return "";
-  const parsed = parsePhoneNumberFromString(raw, defaultCountry);
-  // isPossible checks length only, so reserved test ranges and newly issued ones still normalize.
-  if (parsed?.isPossible()) return parsed.number;
   // Keep the digits so a number the library cannot place still matches itself.
-  return `+${digits}`;
+  return parsePhone(s, defaultCountry) ?? `+${digits}`;
+}
+
+/**
+ * E.164 when the number has a possible length for its country, else undefined. For places
+ * where a wrong guess is worse than an error, such as a signup form. isPossible checks length
+ * only, so reserved test ranges and newly issued ones still pass.
+ */
+export function parsePhone(s: string, defaultCountry: PhoneCountry = DEFAULT_PHONE_COUNTRY): string | undefined {
+  const parsed = parsePhoneNumberFromString((s ?? "").trim(), defaultCountry);
+  return parsed?.isPossible() ? parsed.number : undefined;
 }
 
 /** The owner's country, from the first owner phone that names one. Local numbers are read as this. */

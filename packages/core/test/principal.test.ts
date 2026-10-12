@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ContactStore } from "../src/contacts.js";
-import { OWNER_EMAIL_PRINCIPAL_ID, isReservedHandle, normalizeHandle, normalizePhone, phoneCountryOf, resolvePrincipal, type PhoneCountry } from "../src/principal.js";
+import { OWNER_EMAIL_PRINCIPAL_ID, isReservedHandle, normalizeHandle, normalizePhone, parsePhone, phoneCountryOf, resolvePrincipal, type PhoneCountry } from "../src/principal.js";
 import { inbound, tempState, testConfig } from "./helpers.js";
 
 describe("normalizePhone", () => {
@@ -41,6 +41,15 @@ describe("normalizePhone", () => {
 
   it("keeps the digits of a number the library cannot place", () => {
     expect(normalizePhone("12345")).toBe("+12345");
+  });
+});
+
+describe("parsePhone", () => {
+  it("answers undefined instead of guessing when the number does not fit", () => {
+    expect(parsePhone("457 75 184", "NO")).toBe("+4745775184");
+    expect(parsePhone("415 555 0123", "NO")).toBeUndefined();
+    expect(parsePhone("+46 70 123 45 67", "NO")).toBe("+46701234567");
+    expect(parsePhone("")).toBeUndefined();
   });
 });
 

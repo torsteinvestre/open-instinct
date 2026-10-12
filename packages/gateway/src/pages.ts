@@ -1,4 +1,5 @@
 import type { UserRecord } from "./store.js";
+import { DEFAULT_SIGNUP_COUNTRY, OTHER_COUNTRY, SIGNUP_COUNTRIES } from "./validate.js";
 
 export const GITHUB_URL = "https://github.com/mariagorskikh/open-instinct";
 
@@ -37,8 +38,8 @@ p{margin:0 0 12px}
 .feature p{margin:0;color:var(--muted);font-size:14px}
 label{display:block;font-size:14px;font-weight:600;margin:14px 0 6px}
 label small{font-weight:400;color:var(--muted)}
-input{width:100%;font:inherit;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text)}
-input:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:transparent}
+input,select{width:100%;font:inherit;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text)}
+input:focus,select:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:transparent}
 .btn{display:inline-block;width:100%;text-align:center;font:inherit;font-weight:600;padding:13px 18px;border:0;border-radius:12px;background:var(--accent);color:var(--accent-ink);cursor:pointer;margin-top:18px}
 .btn.secondary{background:var(--code);color:var(--text)}
 .hint{color:var(--muted);font-size:13px;margin-top:10px}
@@ -88,11 +89,25 @@ export interface LandingOptions {
   requireInvite: boolean;
   errors?: Record<string, string>;
   values?: Record<string, string>;
+  /** The country selected first. Default US. */
+  defaultCountry?: string;
+}
+
+function countryOptions(picked: string): string {
+  const options = SIGNUP_COUNTRIES.map(
+    (c) => `<option value="${c.code}"${c.code === picked ? " selected" : ""}>${escapeHtml(c.name)} (${c.dial})</option>`,
+  );
+  options.push(`<option value="${OTHER_COUNTRY}"${picked === OTHER_COUNTRY ? " selected" : ""}>Other: type the number with + and country code</option>`);
+  return options.join("");
 }
 
 export function renderLanding(opts: LandingOptions): string {
   const v = (k: string) => escapeHtml(opts.values?.[k] ?? "");
   const err = (k: string) => (opts.errors?.[k] ? `<div class="error">${escapeHtml(opts.errors[k] ?? "")}</div>` : "");
+  // What the person picked before an error wins over the gateway's default.
+  const wanted = (opts.values?.["country"] || opts.defaultCountry || DEFAULT_SIGNUP_COUNTRY).toUpperCase();
+  const picked = wanted === OTHER_COUNTRY.toUpperCase() ? OTHER_COUNTRY : wanted;
+  const example = SIGNUP_COUNTRIES.find((c) => c.code === picked)?.example ?? "+47 912 34 567";
   const form = opts.signupEnabled
     ? `<form class="card" method="post" action="/api/signup">
   <h2 style="margin-top:0">Get your Instinct</h2>
@@ -100,8 +115,11 @@ export function renderLanding(opts: LandingOptions): string {
   <label for="name">Your name</label>
   <input id="name" name="name" required maxlength="80" autocomplete="name" value="${v("name")}">
   ${err("name")}
-  <label for="phone">Phone <small>the number you will text from</small></label>
-  <input id="phone" name="phone" type="tel" required inputmode="tel" autocomplete="tel" placeholder="+1 415 555 0123" value="${v("phone")}">
+  <label for="country">Country <small>of the phone you will text from</small></label>
+  <select id="country" name="country" autocomplete="country">${countryOptions(picked)}</select>
+  ${err("country")}
+  <label for="phone">Phone <small>the number you will text from, written the way you usually write it</small></label>
+  <input id="phone" name="phone" type="tel" required inputmode="tel" autocomplete="tel" placeholder="${escapeHtml(example)}" value="${v("phone")}">
   ${err("phone")}
   <label for="email">Email <small>optional, lets your Instinct know it is you on email</small></label>
   <input id="email" name="email" type="email" autocomplete="email" value="${v("email")}">

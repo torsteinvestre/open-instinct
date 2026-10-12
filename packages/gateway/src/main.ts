@@ -1,8 +1,10 @@
+import type { PhoneCountry } from "@open-instinct/core";
 import { InkboxProvisioner } from "@open-instinct/inkbox";
 import { consoleLogger } from "./logger.js";
 import type { LinkPassthrough } from "./provision.js";
 import { type GatewayServer, createGateway } from "./server.js";
 import { UserStore } from "./store.js";
+import { SIGNUP_COUNTRIES, signupCountry } from "./validate.js";
 
 export const DEFAULT_AGENT_IMAGE = "ghcr.io/mariagorskikh/open-instinct-agent:latest";
 
@@ -16,6 +18,8 @@ export interface GatewayEnv {
   maritimeBaseUrl?: string;
   agentImage: string;
   signupSecret?: string;
+  /** GATEWAY_DEFAULT_COUNTRY: the signup form's preselected country (NO, SE, GB, US). Default US. */
+  defaultCountry?: PhoneCountry;
   /** GATEWAY_ALLOW_OPEN_SIGNUP=1: run the signup form without an invite code. Off by default. */
   allowOpenSignup: boolean;
   /** GATEWAY_TRUST_PROXY=1: rate-limit by X-Forwarded-For (Railway, Fly, a reverse proxy you run). */
@@ -47,6 +51,12 @@ export function readEnv(env: NodeJS.ProcessEnv): GatewayEnv {
   if (!maritimeApiKey) throw new Error("MARITIME_API_KEY is required (the gateway forwards every message through Maritime).");
   const publicUrl = env["GATEWAY_PUBLIC_URL"] ?? `http://localhost:${port}`;
   const idle = env["INSTINCT_IDLE_TTL_SECONDS"] ? Number(env["INSTINCT_IDLE_TTL_SECONDS"]) : undefined;
+  const countryRaw = env["GATEWAY_DEFAULT_COUNTRY"]?.trim();
+  const defaultCountry = countryRaw ? signupCountry(countryRaw) : undefined;
+  // A typo here would silently read every local number as US, the bug this setting exists to avoid.
+  if (countryRaw && !defaultCountry) {
+    throw new Error(`GATEWAY_DEFAULT_COUNTRY must be one of ${SIGNUP_COUNTRIES.map((c) => c.code).join(", ")} (got "${countryRaw}").`);
+  }
   const linkClientId = env["LINK_CLIENT_ID"] || undefined;
   const link: LinkPassthrough | undefined = linkClientId
     ? {
@@ -65,6 +75,7 @@ export function readEnv(env: NodeJS.ProcessEnv): GatewayEnv {
     maritimeBaseUrl: env["MARITIME_API_URL"] || undefined,
     agentImage: env["INSTINCT_AGENT_IMAGE"] || DEFAULT_AGENT_IMAGE,
     signupSecret: env["GATEWAY_SIGNUP_SECRET"] || undefined,
+    defaultCountry,
     allowOpenSignup: truthy(env["GATEWAY_ALLOW_OPEN_SIGNUP"]) || truthy(env["GATEWAY_OPEN_SIGNUP"]),
     trustProxy: truthy(env["GATEWAY_TRUST_PROXY"]),
     anthropicApiKey: env["ANTHROPIC_API_KEY"] || undefined,
@@ -144,6 +155,7 @@ export function startGateway(cfg: GatewayEnv): GatewayServer {
       extraEnv: agentExtraEnv(cfg),
     },
     signupSecret: cfg.signupSecret,
+    defaultCountry: cfg.defaultCountry,
     anthropicApiKey: cfg.anthropicApiKey,
     composioApiKey: cfg.composioApiKey,
     composioToolkits: cfg.composioToolkits,

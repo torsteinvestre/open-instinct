@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import type { PhoneCountry } from "@open-instinct/core";
 import type { InkboxProvisioner } from "@open-instinct/inkbox";
 import { DurableInbox } from "@open-instinct/inkbox";
 import { join } from "node:path";
@@ -18,6 +19,8 @@ export interface GatewayOptions {
   inkboxBaseUrl?: string;
   maritime: MaritimeProvisionOptions;
   signupSecret?: string;
+  /** The country the signup form selects first and assumes for API signups without one. Default US. */
+  defaultCountry?: PhoneCountry;
   anthropicApiKey?: string;
   composioApiKey?: string;
   /** Comma-separated Composio toolkits sent with the key. Default gmail,googlecalendar,googlecontacts. */
@@ -221,11 +224,11 @@ export function createGateway(opts: GatewayOptions): GatewayServer {
       return html(res, 503, renderMessage("Signups are closed", "This gateway only relays messages.", "error"));
     }
     const body = parseBody(await readBody(req, 64 * 1024), req.headers["content-type"]);
-    const check = validateSignup(body, { signupSecret: opts.signupSecret });
+    const check = validateSignup(body, { signupSecret: opts.signupSecret, defaultCountry: opts.defaultCountry });
     if (!check.ok) {
       if (asJson) return json(res, 400, { error: "invalid signup", errors: check.errors });
       const values = Object.fromEntries(Object.entries(body).filter(([k, v]) => k !== "inviteCode" && typeof v === "string")) as Record<string, string>;
-      return html(res, 400, renderLanding({ signupEnabled: true, requireInvite: Boolean(opts.signupSecret), errors: check.errors, values }));
+      return html(res, 400, renderLanding({ signupEnabled: true, requireInvite: Boolean(opts.signupSecret), errors: check.errors, values, defaultCountry: opts.defaultCountry }));
     }
     const { value } = check;
 
@@ -248,10 +251,10 @@ export function createGateway(opts: GatewayOptions): GatewayServer {
       // Only invitees learn that a handle exists; the open form gets a generic answer.
       if (opts.signupSecret) {
         if (asJson) return json(res, 409, { error: "handle taken", errors: { handle: "That handle is taken." } });
-        return html(res, 409, renderLanding({ signupEnabled: true, requireInvite: true, errors: { handle: "That handle is taken." }, values: { ...value } }));
+        return html(res, 409, renderLanding({ signupEnabled: true, requireInvite: true, errors: { handle: "That handle is taken." }, values: { ...value }, defaultCountry: opts.defaultCountry }));
       }
       if (asJson) return json(res, 400, { error: "could not create" });
-      return html(res, 400, renderLanding({ signupEnabled: true, requireInvite: false, errors: { form: "Could not create an Instinct with these details. Try different ones." }, values: { ...value } }));
+      return html(res, 400, renderLanding({ signupEnabled: true, requireInvite: false, errors: { form: "Could not create an Instinct with these details. Try different ones." }, values: { ...value }, defaultCountry: opts.defaultCountry }));
     }
     if (byPhone) {
       void opts.notifyExisting?.(byPhone, connectUrl(byPhone.id)).catch((err: unknown) => log.warn("notify.failed", { userId: byPhone.id, error: String(err) }));
@@ -328,7 +331,7 @@ export function createGateway(opts: GatewayOptions): GatewayServer {
 
     if (parts.length === 0) {
       if (method !== "GET" && method !== "HEAD") throw new HttpError(405, "method not allowed");
-      return html(res, 200, renderLanding({ signupEnabled: Boolean(opts.inkbox), requireInvite: Boolean(opts.signupSecret) }));
+      return html(res, 200, renderLanding({ signupEnabled: Boolean(opts.inkbox), requireInvite: Boolean(opts.signupSecret), defaultCountry: opts.defaultCountry }));
     }
     if (parts[0] === "health" && parts.length === 1) {
       return json(res, 200, { ok: true, users: opts.store.all().length, signup: Boolean(opts.inkbox), github: GITHUB_URL, inbox: inbox.summary() });

@@ -34,6 +34,25 @@ describe("readEnv", () => {
     expect(plain.defaultCountry).toBeUndefined();
   });
 
+  it("reads the brand, picked handles, the desktop switch and the agent model", () => {
+    const cfg = readEnv({
+      MARITIME_API_KEY: "mk",
+      GATEWAY_BRAND_NAME: " Sunshine ",
+      GATEWAY_HANDLE_PREFIX: "sunshine",
+      INSTINCT_AGENT_DESKTOP: "0",
+      INSTINCT_MODEL: "anthropic/claude-sonnet-5-5",
+    });
+    expect(cfg.brand).toEqual({ product: "Sunshine", agent: "Sunshine" });
+    expect(cfg.handlePrefix).toBe("sunshine");
+    expect(cfg.agentDesktop).toBe(false);
+    expect(agentExtraEnv(cfg)).toEqual({ INSTINCT_MODEL: "anthropic/claude-sonnet-5-5" });
+    const plain = readEnv({ MARITIME_API_KEY: "mk" });
+    expect(plain.brand).toBeUndefined();
+    expect(plain.handlePrefix).toBeUndefined();
+    expect(plain.agentDesktop).toBe(true);
+    expect(readEnv({ MARITIME_API_KEY: "mk", INSTINCT_AGENT_DESKTOP: "yes" }).agentDesktop).toBe(true);
+  });
+
   it("reads GATEWAY_DEFAULT_COUNTRY and refuses a country the form does not offer", () => {
     expect(readEnv({ MARITIME_API_KEY: "mk", GATEWAY_DEFAULT_COUNTRY: " no " }).defaultCountry).toBe("NO");
     expect(() => readEnv({ MARITIME_API_KEY: "mk", GATEWAY_DEFAULT_COUNTRY: "Norway" })).toThrow(/GATEWAY_DEFAULT_COUNTRY/);

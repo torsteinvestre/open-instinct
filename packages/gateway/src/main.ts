@@ -1,5 +1,6 @@
 import type { PhoneCountry } from "@open-instinct/core";
 import { InkboxProvisioner } from "@open-instinct/inkbox";
+import { type Brand, brandFrom } from "./brand.js";
 import { consoleLogger } from "./logger.js";
 import type { LinkPassthrough } from "./provision.js";
 import { type GatewayServer, createGateway } from "./server.js";
@@ -20,6 +21,14 @@ export interface GatewayEnv {
   signupSecret?: string;
   /** GATEWAY_DEFAULT_COUNTRY: the signup form's preselected country (NO, SE, GB, US). Default US. */
   defaultCountry?: PhoneCountry;
+  /** GATEWAY_BRAND_NAME: the service's name on every page and every agent's name. Default Open Instinct. */
+  brand?: Brand;
+  /** GATEWAY_HANDLE_PREFIX: pick handles like "<prefix>-anna-k3f9" instead of asking for one. */
+  handlePrefix?: string;
+  /** INSTINCT_AGENT_DESKTOP=0: create agents without a desktop, which Maritime's free plan needs. Default on. */
+  agentDesktop: boolean;
+  /** INSTINCT_MODEL: the model every new agent uses, for example anthropic/claude-sonnet-5-5. */
+  agentModel?: string;
   /** GATEWAY_ALLOW_OPEN_SIGNUP=1: run the signup form without an invite code. Off by default. */
   allowOpenSignup: boolean;
   /** GATEWAY_TRUST_PROXY=1: rate-limit by X-Forwarded-For (Railway, Fly, a reverse proxy you run). */
@@ -42,6 +51,10 @@ export interface GatewayEnv {
 
 function truthy(v: string | undefined): boolean {
   return v !== undefined && /^(1|true|yes)$/i.test(v.trim());
+}
+
+function falsy(v: string | undefined): boolean {
+  return v !== undefined && /^(0|false|no|off)$/i.test(v.trim());
 }
 
 /** The only place the gateway reads process.env. Everything else takes options. */
@@ -76,6 +89,10 @@ export function readEnv(env: NodeJS.ProcessEnv): GatewayEnv {
     agentImage: env["INSTINCT_AGENT_IMAGE"] || DEFAULT_AGENT_IMAGE,
     signupSecret: env["GATEWAY_SIGNUP_SECRET"] || undefined,
     defaultCountry,
+    brand: brandFrom(env["GATEWAY_BRAND_NAME"]),
+    handlePrefix: env["GATEWAY_HANDLE_PREFIX"]?.trim() || undefined,
+    agentDesktop: !falsy(env["INSTINCT_AGENT_DESKTOP"]),
+    agentModel: env["INSTINCT_MODEL"]?.trim() || undefined,
     allowOpenSignup: truthy(env["GATEWAY_ALLOW_OPEN_SIGNUP"]) || truthy(env["GATEWAY_OPEN_SIGNUP"]),
     trustProxy: truthy(env["GATEWAY_TRUST_PROXY"]),
     anthropicApiKey: env["ANTHROPIC_API_KEY"] || undefined,
@@ -110,9 +127,11 @@ export function checkSignupPolicy(cfg: Pick<GatewayEnv, "inkboxAdminApiKey" | "s
 }
 
 /** Settings every agent gets. Only keys safe to share across people belong here. */
-export function agentExtraEnv(cfg: Pick<GatewayEnv, "contextDevApiKey" | "ampleSignup" | "composioMode">): Record<string, string> | undefined {
+export function agentExtraEnv(cfg: Pick<GatewayEnv, "contextDevApiKey" | "ampleSignup" | "composioMode" | "agentModel">): Record<string, string> | undefined {
   const env: Record<string, string> = {};
   if (cfg.composioMode) env["COMPOSIO_MODE"] = cfg.composioMode;
+  // Without this every agent runs core's default model. Maritime's metered proxy sets its own and wins.
+  if (cfg.agentModel) env["INSTINCT_MODEL"] = cfg.agentModel;
   if (cfg.contextDevApiKey) env["CONTEXT_DEV_API_KEY"] = cfg.contextDevApiKey;
   if (cfg.ampleSignup) env["AMPLE_SIGNUP"] = "1";
   return Object.keys(env).length > 0 ? env : undefined;
@@ -150,12 +169,15 @@ export function startGateway(cfg: GatewayEnv): GatewayServer {
       baseUrl: cfg.maritimeBaseUrl,
       agentImage: cfg.agentImage,
       idleTtlSeconds: cfg.idleTtlSeconds,
+      desktop: cfg.agentDesktop,
       useMaritimeLlm: cfg.useMaritimeLlm,
       maritimeModel: cfg.maritimeModel,
       extraEnv: agentExtraEnv(cfg),
     },
     signupSecret: cfg.signupSecret,
     defaultCountry: cfg.defaultCountry,
+    brand: cfg.brand,
+    handlePrefix: cfg.handlePrefix,
     anthropicApiKey: cfg.anthropicApiKey,
     composioApiKey: cfg.composioApiKey,
     composioToolkits: cfg.composioToolkits,

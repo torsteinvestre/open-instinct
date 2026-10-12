@@ -1,15 +1,15 @@
-import { timingSafeEqual } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { isReservedHandle, normalizePhone as normalizeCorePhone, parsePhone, type PhoneCountry } from "@open-instinct/core";
 
 export const HANDLE_RE = /^[a-z0-9-]{3,40}$/;
 export const E164_RE = /^\+[1-9]\d{6,14}$/;
 
 /** The form's country list. A number written with + or 00 keeps its own country whatever is picked. */
-export const SIGNUP_COUNTRIES: ReadonlyArray<{ code: PhoneCountry; name: string; dial: string; example: string }> = [
-  { code: "NO", name: "Norway", dial: "+47", example: "912 34 567" },
-  { code: "SE", name: "Sweden", dial: "+46", example: "070-123 45 67" },
-  { code: "GB", name: "United Kingdom", dial: "+44", example: "07400 123456" },
-  { code: "US", name: "United States", dial: "+1", example: "(415) 555-0123" },
+export const SIGNUP_COUNTRIES: ReadonlyArray<{ code: PhoneCountry; flag: string; name: string; dial: string; example: string }> = [
+  { code: "NO", flag: "🇳🇴", name: "Norway", dial: "+47", example: "912 34 567" },
+  { code: "SE", flag: "🇸🇪", name: "Sweden", dial: "+46", example: "070-123 45 67" },
+  { code: "GB", flag: "🇬🇧", name: "United Kingdom", dial: "+44", example: "07400 123456" },
+  { code: "US", flag: "🇺🇸", name: "United States", dial: "+1", example: "(415) 555-0123" },
 ];
 
 /** The form's last option: the number must carry its own country code. */
@@ -43,6 +43,27 @@ export function normalizeHandle(raw: string): string {
   return raw.trim().replace(/^@+/, "").toLowerCase();
 }
 
+const HANDLE_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
+
+/**
+ * A handle for a signup that does not choose one: "sunshine-anna-k3f9". The first name makes
+ * the connect text readable; the random tail keeps two people called Anna apart. Letters that
+ * NFKD cannot split (ø, æ) are spelled out so "Bjørn" stays "bjorn".
+ */
+export function autoHandle(prefix: string, name: string, random: (n: number) => Buffer = randomBytes): string {
+  const first = (name.trim().split(/\s+/)[0] ?? "")
+    .toLowerCase()
+    .replace(/ø/g, "o")
+    .replace(/æ/g, "ae")
+    .replace(/œ/g, "oe")
+    .replace(/ß/g, "ss")
+    .normalize("NFKD")
+    .replace(/[^a-z0-9]/g, "")
+    .slice(0, 12);
+  const tail = [...random(4)].map((b) => HANDLE_ALPHABET[b % HANDLE_ALPHABET.length]).join("");
+  return [normalizeHandle(prefix).replace(/[^a-z0-9-]/g, "").slice(0, 20), first, tail].filter(Boolean).join("-");
+}
+
 export function isEmail(s: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
 }
@@ -60,7 +81,14 @@ function str(v: unknown): string {
   return typeof v === "string" ? v.trim() : "";
 }
 
-export function validateSignup(input: Record<string, unknown>, opts: { signupSecret?: string; defaultCountry?: PhoneCountry } = {}): SignupValidation {
+export interface SignupRules {
+  signupSecret?: string;
+  defaultCountry?: PhoneCountry;
+  /** The gateway picks the handle (GATEWAY_HANDLE_PREFIX), so the form has none to check. */
+  autoHandle?: boolean;
+}
+
+export function validateSignup(input: Record<string, unknown>, opts: SignupRules = {}): SignupValidation {
   const errors: Record<string, string> = {};
   const name = str(input["name"]);
   const rawPhone = str(input["phone"]);
@@ -83,13 +111,16 @@ export function validateSignup(input: Record<string, unknown>, opts: { signupSec
   else if (other && !international) errors["phone"] = "Start the number with + and its country code, or pick your country.";
   else if (!E164_RE.test(phone)) errors["phone"] = "That does not look like a phone number for the country you picked. You can also type it with + and the country code.";
   if (emailRaw && !isEmail(emailRaw)) errors["email"] = "Email does not look valid.";
-  if (!HANDLE_RE.test(handle)) errors["handle"] = "Handle must be 3 to 40 characters: lowercase letters, digits and dashes.";
-  // `owner` names the person behind every agent; core refuses it as a contact handle too.
-  else if (isReservedHandle(handle)) errors["handle"] = `"${handle}" is reserved. Pick another handle.`;
+  // With autoHandle the server fills the handle in once it knows this phone is new.
+  if (!opts.autoHandle) {
+    if (!HANDLE_RE.test(handle)) errors["handle"] = "Handle must be 3 to 40 characters: lowercase letters, digits and dashes.";
+    // `owner` names the person behind every agent; core refuses it as a contact handle too.
+    else if (isReservedHandle(handle)) errors["handle"] = `"${handle}" is reserved. Pick another handle.`;
+  }
   if (opts.signupSecret && !secretMatches(inviteCode, opts.signupSecret)) errors["inviteCode"] = "Invite code is not valid.";
 
   if (Object.keys(errors).length > 0) return { ok: false, errors };
-  const value: SignupValue = { name, phone, handle };
+  const value: SignupValue = { name, phone, handle: opts.autoHandle ? "" : handle };
   if (emailRaw) value.email = emailRaw;
   return { ok: true, value };
 }

@@ -143,6 +143,10 @@ Any other host works the same way: run the gateway image, give it a persistent d
 | `INKBOX_ADMIN_API_KEY` | for signup | Org-wide Inkbox key. Without it the gateway relays for existing users only and the signup form becomes a notice. |
 | `GATEWAY_SIGNUP_SECRET` | yes when signup is on | Invite code. Every signup bills your Maritime wallet and Inkbox plan, so signup is closed without it. |
 | `GATEWAY_DEFAULT_COUNTRY` | no | The signup form's preselected country: `NO`, `SE`, `GB` or `US`. Default `US`. |
+| `GATEWAY_BRAND_NAME` | no | Your service's name on every page and every agent's name. Default Open Instinct. |
+| `GATEWAY_HANDLE_PREFIX` | no | The gateway picks handles like `<prefix>-anna-k3f9`; the form stops asking for one. |
+| `INSTINCT_AGENT_DESKTOP` | no | `0` creates agents without a desktop, as Maritime's free plan requires. |
+| `INSTINCT_MODEL` | no | The model every new agent uses, for example `anthropic/claude-sonnet-5-5`. |
 | `GATEWAY_ALLOW_OPEN_SIGNUP` | no | `1` runs the form without an invite code, on purpose. |
 | `GATEWAY_TRUST_PROXY` | behind a proxy | `1` counts signups by the first `X-Forwarded-For` address. |
 | `GATEWAY_DATA_DIR` | no | Where `users.json` lives. Default `./.instinct-gateway`. Mount a volume. |
@@ -167,7 +171,7 @@ Signup then runs six steps, saving after each one so a crash resumes instead of 
 2. Mint an API key scoped to that identity. It goes to the agent as `INKBOX_API_KEY`.
 3. Create the webhook signing key. It stays in the gateway.
 4. Subscribe Inkbox webhooks to `<GATEWAY_PUBLIC_URL>/webhooks/inkbox/<userId>`.
-5. Create the Maritime agent from `INSTINCT_AGENT_IMAGE` with `desktop: true` and `externalId: <userId>`. An agent with that `externalId` is reused if it exists.
+5. Create the Maritime agent from `INSTINCT_AGENT_IMAGE` with `desktop: true` (unless `INSTINCT_AGENT_DESKTOP=0`) and `externalId: <userId>`. An agent with that `externalId` is reused if it exists.
 6. Mark the record `ready`.
 
 A phone that already has an agent gets a neutral "Check your phone" answer. No second agent is created and nothing about the existing record is revealed.

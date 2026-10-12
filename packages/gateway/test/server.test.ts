@@ -22,6 +22,9 @@ interface BootOpts {
   notifyExisting?: GatewayOptions["notifyExisting"];
   seed?: UserRecord[];
   now?: () => number;
+  brand?: GatewayOptions["brand"];
+  handlePrefix?: string;
+  desktop?: boolean;
 }
 
 async function boot(opts: BootOpts = {}) {
@@ -33,8 +36,10 @@ async function boot(opts: BootOpts = {}) {
     store,
     publicUrl: "https://gw.example.com",
     inkbox: opts.withInkbox === false ? undefined : ink.provisioner,
-    maritime: { apiKey: "mk_test", baseUrl: "https://maritime.test", agentImage: "img:1" },
+    maritime: { apiKey: "mk_test", baseUrl: "https://maritime.test", agentImage: "img:1", desktop: opts.desktop },
     signupSecret: opts.signupSecret,
+    brand: opts.brand,
+    handlePrefix: opts.handlePrefix,
     logger: silentLogger,
     fetchImpl: mar.fetch,
     routerInfoFor: opts.routerInfoFor,
@@ -106,7 +111,8 @@ describe("gateway http", () => {
     expect(page).not.toContain("connect%20%40handle");
     // The shared QR encodes the placeholder handle, so it is not shown.
     expect(page).not.toContain("data:image/png;base64,");
-    expect(page).toContain("Ready");
+    // A ready agent needs no status line and no refresh.
+    expect(page).not.toContain("Setting up");
     expect(page).not.toContain('http-equiv="refresh"');
     // Router info is cached, so a second page view does not call Inkbox again.
     await fetch(`${base}/connect/${body.userId}`);
@@ -219,6 +225,53 @@ describe("gateway http", () => {
     expect(again.status).toBe(202);
     await new Promise((r) => setTimeout(r, 30));
     expect(ink.calls.filter((c) => c === "provisionIdentity")).toHaveLength(1);
+  });
+
+  it("with a brand and picked handles, asks for no handle and knows a repeat by phone alone", async () => {
+    const { base, store, ink, mar } = await boot({ brand: { product: "Sunshine", agent: "Sunshine" }, handlePrefix: "sunshine", desktop: false });
+    const landing = await (await fetch(base)).text();
+    expect(landing).toContain("<title>Sunshine</title>");
+    expect(landing).toContain("Create my Sunshine");
+    expect(landing).not.toContain('name="handle"');
+    expect(landing).toContain("built on <a");
+
+    const res = await signup(base, { name: "Bjørn Ås", country: "NO", phone: "457 75 184" });
+    expect(res.status).toBe(202);
+    const { userId } = (await res.json()) as { userId: string };
+    await waitFor(() => store.get(userId)?.status === "ready");
+    const user = store.get(userId)!;
+    expect(user.phone).toBe("+4745775184");
+    expect(user.handle).toMatch(/^sunshine-bjorn-[a-z0-9]{4}$/);
+    expect((mar.calls.find((c) => c.method === "POST")?.body as Record<string, unknown>)["desktop"]).toBe(false);
+    const connect = await (await fetch(`${base}/connect/${userId}`)).text();
+    expect(connect).toContain(`connect @${user.handle}`);
+    expect(connect).toContain("Open Messages");
+
+    // The same phone, written another way: no second agent, and nothing about the first one.
+    const again = await fetch(`${base}/api/signup`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded", accept: "text/html" },
+      body: new URLSearchParams({ name: "Someone", country: "NO", phone: "+47 457 75 184" }).toString(),
+      redirect: "manual",
+    });
+    expect(again.status).toBe(202);
+    const page = await again.text();
+    expect(page).toContain("Check your phone");
+    expect(page).not.toContain(user.handle);
+    expect(page).not.toContain("connect @");
+    expect(store.all()).toHaveLength(1);
+    expect(ink.calls.filter((c) => c === "provisionIdentity")).toHaveLength(1);
+  });
+
+  it("with picked handles, signing up again restarts a setup that failed", async () => {
+    const failed = readyUser({ id: "usr_failed", handle: "sunshine-maria-abcd", phone: "+14155550123", status: "error", identityId: "", identityApiKey: "", signingKey: "", maritimeAgentId: undefined });
+    const { base, store } = await boot({ handlePrefix: "sunshine", seed: [failed] });
+    const retry = await signup(base, { name: "Maria", phone: "+14155550123" });
+    expect(retry.status).toBe(202);
+    expect(await retry.json()).toEqual({ status: "pending" });
+    await waitFor(() => store.get("usr_failed")?.status === "ready");
+    expect(store.get("usr_failed")?.handle).toBe("sunshine-maria-abcd");
+    expect(store.all()).toHaveLength(1);
   });
 
   it("resumePending restarts every record a crash left in provisioning", async () => {

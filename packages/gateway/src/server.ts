@@ -5,11 +5,12 @@ import { DurableInbox } from "@open-instinct/inkbox";
 import { join } from "node:path";
 import { type SignupLimits, SlidingWindowLimiter, clientAddress, pendingCount, signupLimits } from "./limits.js";
 import { type Logger, consoleLogger } from "./logger.js";
-import { GITHUB_URL, type RouterInfo, connectRouterFor, renderConnect, renderLanding, renderLinkDone, renderMessage, renderPending } from "./pages.js";
+import { type Brand, DEFAULT_BRAND } from "./brand.js";
+import { GITHUB_URL, type LandingOptions, type PageOptions, type RouterInfo, connectRouterFor, renderConnect, renderLanding, renderLinkDone, renderMessage, renderPending } from "./pages.js";
 import { type LinkPassthrough, type MaritimeProvisionOptions, newUserId, provisionUser } from "./provision.js";
 import { EventDeduper, type HeaderMap, relayVerifiedEvent, relayGatewayEvent, verifyForUser } from "./relay.js";
 import { type UserRecord, type UserStore, publicUser } from "./store.js";
-import { validateSignup } from "./validate.js";
+import { autoHandle, validateSignup } from "./validate.js";
 
 export interface GatewayOptions {
   store: UserStore;
@@ -21,6 +22,13 @@ export interface GatewayOptions {
   signupSecret?: string;
   /** The country the signup form selects first and assumes for API signups without one. Default US. */
   defaultCountry?: PhoneCountry;
+  /** Names shown on every page and given to every agent. Unset is Open Instinct. */
+  brand?: Brand;
+  /**
+   * Set to pick each person's handle ("sunshine-anna-k3f9") instead of asking for one.
+   * A repeat signup is then recognized by phone number alone.
+   */
+  handlePrefix?: string;
   anthropicApiKey?: string;
   composioApiKey?: string;
   /** Comma-separated Composio toolkits sent with the key. Default gmail,googlecalendar,googlecontacts. */
@@ -186,6 +194,7 @@ export function createGateway(opts: GatewayOptions): GatewayServer {
       composioApiKey: opts.composioApiKey,
       composioToolkits: opts.composioToolkits,
       link: opts.link,
+      brand: opts.brand,
       fetchImpl: opts.fetchImpl,
       logger: log,
       userId: user.id,
@@ -210,25 +219,48 @@ export function createGateway(opts: GatewayOptions): GatewayServer {
     return `${opts.publicUrl.replace(/\/+$/, "")}/connect/${encodeURIComponent(userId)}`;
   }
 
+  const page: PageOptions = { brand: opts.brand };
+  const agentName = (opts.brand ?? DEFAULT_BRAND).agent;
+  const pickHandles = Boolean(opts.handlePrefix);
+
+  /** The landing page with this gateway's settings; callers add errors and values. */
+  function landing(extra: Partial<LandingOptions> = {}): string {
+    return renderLanding({
+      signupEnabled: Boolean(opts.inkbox),
+      requireInvite: Boolean(opts.signupSecret),
+      defaultCountry: opts.defaultCountry,
+      autoHandle: pickHandles,
+      ...page,
+      ...extra,
+    });
+  }
+
+  /** A handle no record holds yet. Inkbox suffixes it if another org has it. */
+  function freshHandle(name: string): string {
+    let handle = autoHandle(opts.handlePrefix ?? "", name);
+    for (let i = 0; i < 5 && opts.store.byHandle(handle); i++) handle = autoHandle(opts.handlePrefix ?? "", name);
+    return handle;
+  }
+
   /** Same body for "this phone already has an Instinct" and "you asked again": nothing to learn. */
-  async function respondPending(req: IncomingMessage, res: ServerResponse, handle: string): Promise<void> {
+  async function respondPending(req: IncomingMessage, res: ServerResponse, handle: string | undefined): Promise<void> {
     if (wantsJson(req)) return json(res, 202, { status: "pending" });
-    const shared = await routerInfo();
-    return html(res, 202, renderPending(handle, connectRouterFor(handle, shared, undefined)));
+    const shared = handle ? await routerInfo() : undefined;
+    return html(res, 202, renderPending(handle, handle ? connectRouterFor(handle, shared, undefined) : undefined, page));
   }
 
   async function handleSignup(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const asJson = wantsJson(req);
     if (!opts.inkbox) {
       if (asJson) return json(res, 503, { error: "signup disabled on this gateway" });
-      return html(res, 503, renderMessage("Signups are closed", "This gateway only relays messages.", "error"));
+      return html(res, 503, renderMessage("Signups are closed", "This gateway only relays messages.", "error", page));
     }
     const body = parseBody(await readBody(req, 64 * 1024), req.headers["content-type"]);
-    const check = validateSignup(body, { signupSecret: opts.signupSecret, defaultCountry: opts.defaultCountry });
+    const check = validateSignup(body, { signupSecret: opts.signupSecret, defaultCountry: opts.defaultCountry, autoHandle: pickHandles });
     if (!check.ok) {
       if (asJson) return json(res, 400, { error: "invalid signup", errors: check.errors });
       const values = Object.fromEntries(Object.entries(body).filter(([k, v]) => k !== "inviteCode" && typeof v === "string")) as Record<string, string>;
-      return html(res, 400, renderLanding({ signupEnabled: true, requireInvite: Boolean(opts.signupSecret), errors: check.errors, values, defaultCountry: opts.defaultCountry }));
+      return html(res, 400, landing({ errors: check.errors, values }));
     }
     const { value } = check;
 
@@ -236,7 +268,20 @@ export function createGateway(opts: GatewayOptions): GatewayServer {
     if (!ipLimiter.allow(address)) {
       log.warn("signup.rate_limited", { reason: "per address" });
       if (asJson) return json(res, 429, { error: "too many signups from this address; try again later" });
-      return html(res, 429, renderMessage("Slow down", "Too many signups from this address. Try again in a few minutes.", "error"));
+      return html(res, 429, renderMessage("Slow down", "Too many signups from this address. Try again in a few minutes.", "error", page));
+    }
+
+    if (pickHandles) {
+      // Nobody typed a handle, so the phone alone says "same person again": a retry after an
+      // error, a crash mid-setup, a lost connect page, or someone else's number. Resume a stuck
+      // setup and show nothing about the record.
+      const existing = opts.store.byPhone(value.phone);
+      if (existing) {
+        if (existing.status !== "ready") startProvisioning(existing);
+        void opts.notifyExisting?.(existing, connectUrl(existing.id)).catch((err: unknown) => log.warn("notify.failed", { userId: existing.id, error: String(err) }));
+        return respondPending(req, res, undefined);
+      }
+      value.handle = freshHandle(value.name);
     }
 
     const byHandle = opts.store.byHandle(value.handle);
@@ -251,10 +296,10 @@ export function createGateway(opts: GatewayOptions): GatewayServer {
       // Only invitees learn that a handle exists; the open form gets a generic answer.
       if (opts.signupSecret) {
         if (asJson) return json(res, 409, { error: "handle taken", errors: { handle: "That handle is taken." } });
-        return html(res, 409, renderLanding({ signupEnabled: true, requireInvite: true, errors: { handle: "That handle is taken." }, values: { ...value }, defaultCountry: opts.defaultCountry }));
+        return html(res, 409, landing({ errors: { handle: "That handle is taken." }, values: { ...value } }));
       }
       if (asJson) return json(res, 400, { error: "could not create" });
-      return html(res, 400, renderLanding({ signupEnabled: true, requireInvite: false, errors: { form: "Could not create an Instinct with these details. Try different ones." }, values: { ...value }, defaultCountry: opts.defaultCountry }));
+      return html(res, 400, landing({ errors: { form: `Could not create your ${agentName} with these details. Try different ones.` }, values: { ...value } }));
     }
     if (byPhone) {
       void opts.notifyExisting?.(byPhone, connectUrl(byPhone.id)).catch((err: unknown) => log.warn("notify.failed", { userId: byPhone.id, error: String(err) }));
@@ -265,7 +310,7 @@ export function createGateway(opts: GatewayOptions): GatewayServer {
     if (pending >= limits.maxPending) {
       log.warn("signup.rate_limited", { reason: "pending cap", pending });
       if (asJson) return json(res, 429, { error: "signups are paused for a moment; try again later" });
-      return html(res, 429, renderMessage("Busy", "Many people are signing up right now. Try again in an hour.", "error"));
+      return html(res, 429, renderMessage("Busy", "Many people are signing up right now. Try again in an hour.", "error", page));
     }
 
     const user = opts.store.save({
@@ -312,7 +357,7 @@ export function createGateway(opts: GatewayOptions): GatewayServer {
   /** Link sends the browser here after approval. The code goes to the agent, which holds the PKCE verifier. */
   async function handleLinkCallback(res: ServerResponse, userId: string, query: URLSearchParams): Promise<void> {
     const user = opts.store.get(userId);
-    if (!user) return html(res, 404, renderMessage("Not found", "No Instinct with that id.", "error"));
+    if (!user) return html(res, 404, renderMessage("Not found", `No ${agentName} with that id.`, "error", page));
     const code = query.get("code") ?? "";
     const state = query.get("state") ?? "";
     const error = query.get("error") ?? undefined;
@@ -321,7 +366,7 @@ export function createGateway(opts: GatewayOptions): GatewayServer {
     if (error) event["error"] = error;
     const result = await relayGatewayEvent(user, event, `link:${user.id}`, relayDeps);
     log.info("link.callback", { userId: user.id, status: result.status, reason: result.reason });
-    return html(res, result.status === "forwarded" ? 200 : 502, renderLinkDone(result.status === "forwarded"));
+    return html(res, result.status === "forwarded" ? 200 : 502, renderLinkDone(result.status === "forwarded", page));
   }
 
   async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -331,7 +376,7 @@ export function createGateway(opts: GatewayOptions): GatewayServer {
 
     if (parts.length === 0) {
       if (method !== "GET" && method !== "HEAD") throw new HttpError(405, "method not allowed");
-      return html(res, 200, renderLanding({ signupEnabled: Boolean(opts.inkbox), requireInvite: Boolean(opts.signupSecret), defaultCountry: opts.defaultCountry }));
+      return html(res, 200, landing());
     }
     if (parts[0] === "health" && parts.length === 1) {
       return json(res, 200, { ok: true, users: opts.store.all().length, signup: Boolean(opts.inkbox), github: GITHUB_URL, inbox: inbox.summary() });
@@ -349,9 +394,9 @@ export function createGateway(opts: GatewayOptions): GatewayServer {
     if (parts[0] === "connect" && parts.length === 2) {
       if (method !== "GET") throw new HttpError(405, "method not allowed");
       const user = opts.store.get(decodeURIComponent(parts[1] ?? ""));
-      if (!user) return html(res, 404, renderMessage("Not found", "No Instinct with that id. Check the link you were given.", "error"));
+      if (!user) return html(res, 404, renderMessage("Not found", `No ${agentName} with that id. Check the link you were given.`, "error", page));
       const [shared, perUser] = await Promise.all([routerInfo(), routerInfoForUser(user)]);
-      return html(res, 200, renderConnect(user, connectRouterFor(user.handle, shared, perUser)));
+      return html(res, 200, renderConnect(user, connectRouterFor(user.handle, shared, perUser), { ...page, autoHandle: pickHandles }));
     }
     if (parts[0] === "webhooks" && parts[1] === "inkbox" && parts.length === 3) {
       if (method !== "POST") throw new HttpError(405, "method not allowed");

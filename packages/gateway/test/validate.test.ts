@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { renderLanding } from "../src/pages.js";
-import { normalizeHandle, normalizePhone, secretMatches, validateSignup } from "../src/validate.js";
+import { HANDLE_RE, autoHandle, normalizeHandle, normalizePhone, secretMatches, validateSignup } from "../src/validate.js";
 
 describe("validateSignup", () => {
   it("normalizes and accepts a good signup", () => {
@@ -87,11 +87,35 @@ describe("validateSignup", () => {
   });
 });
 
+describe("autoHandle", () => {
+  const fixed = () => Buffer.from([0, 1, 2, 35]);
+
+  it("joins the prefix, the first name and a random tail", () => {
+    expect(autoHandle("sunshine", "Bjørn Ås", fixed)).toBe("sunshine-bjorn-abc9");
+    expect(autoHandle("Sunshine", "  José María ", fixed)).toBe("sunshine-jose-abc9");
+    expect(autoHandle("sunshine", "Æsa", fixed)).toBe("sunshine-aesa-abc9");
+    expect(autoHandle("sunshine", "Maximilianusworth", fixed)).toBe("sunshine-maximilianus-abc9");
+    expect(autoHandle("sunshine", "", fixed)).toBe("sunshine-abc9");
+  });
+
+  it("always passes the handle rules, whatever the name", () => {
+    for (const name of ["Bjørn Ås", "", "李小龙", "Æsa", "O'Brien-Smith", "x".repeat(80)]) {
+      expect(HANDLE_RE.test(autoHandle("sunshine", name)), name).toBe(true);
+    }
+  });
+
+  it("lets a signup without a handle through when the gateway picks one", () => {
+    const r = validateSignup({ name: "S", phone: "+14155550123" }, { autoHandle: true });
+    expect(r.ok && r.value.handle).toBe("");
+    expect(validateSignup({ name: "S", phone: "+14155550123" }).ok).toBe(false);
+  });
+});
+
 describe("renderLanding country picker", () => {
   it("preselects the default country, keeps the person's pick after an error, and offers Other", () => {
     const page = renderLanding({ signupEnabled: true, requireInvite: false, defaultCountry: "NO" });
     expect(page).toContain('<select id="country" name="country"');
-    expect(page).toContain('<option value="NO" selected>Norway (+47)</option>');
+    expect(page).toContain('<option value="NO" selected>🇳🇴 Norway (+47)</option>');
     expect(page).toContain('placeholder="912 34 567"');
     expect(page).toContain('<option value="other">');
     const again = renderLanding({ signupEnabled: true, requireInvite: false, defaultCountry: "NO", values: { country: "SE" } });

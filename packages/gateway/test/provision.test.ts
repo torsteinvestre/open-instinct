@@ -109,6 +109,27 @@ describe("provisionUser", () => {
     expect(env.some((e) => e.value === "whsec_maria")).toBe(false);
   });
 
+  it("names every agent after the brand and can leave the desktop off", async () => {
+    const d = deps();
+    type IdentityInput = Parameters<InkboxProvisioner["provisionIdentity"]>[0];
+    const seen: IdentityInput[] = [];
+    const inkbox = {
+      ...d.ink.provisioner,
+      provisionIdentity: async (i: IdentityInput) => {
+        seen.push(i);
+        return d.ink.provisioner.provisionIdentity(i);
+      },
+    } as unknown as InkboxProvisioner;
+    const brand = { product: "Sunshine", agent: "Sunshine" };
+    await provisionUser(input, { ...d.deps, inkbox, brand, maritime: { ...d.deps.maritime, desktop: false } });
+    expect(seen[0]).toMatchObject({ displayName: "Sunshine", description: "Sunshine for Maria" });
+    const body = d.mar.calls[1]?.body as Record<string, unknown>;
+    expect(body["desktop"]).toBe(false);
+    expect(String(body["instructions"])).toMatch(/^You are Sunshine, Maria's personal agent \(@maria\), reached over/);
+    const env = body["initialEnvVars"] as Array<{ key: string; value: string }>;
+    expect(env.find((e) => e.key === "INSTINCT_AGENT_NAME")?.value).toBe("Sunshine");
+  });
+
   it("omits optional env when not configured", () => {
     const env = agentEnvFor(readyUser({ email: undefined }), { maritime: { apiKey: "k", agentImage: "img" } });
     const keys = env.map((e) => e.key);
@@ -118,6 +139,7 @@ describe("provisionUser", () => {
     expect(keys).not.toContain("COMPOSIO_TOOLKITS");
     expect(keys).not.toContain("INSTINCT_MODEL");
     expect(keys).not.toContain("LINK_CLIENT_ID");
+    expect(keys).not.toContain("INSTINCT_AGENT_NAME");
     expect(maritimeCreateBody(readyUser(), { maritime: { apiKey: "k", agentImage: "img", idleTtlSeconds: 60 } })["idleTtlSeconds"]).toBe(60);
     expect(webhookUrlFor("https://gw.example.com///", "usr x")).toBe("https://gw.example.com/webhooks/inkbox/usr%20x");
   });

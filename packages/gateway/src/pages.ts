@@ -240,41 +240,42 @@ save.addEventListener("click",function(){try{localStorage.setItem(key,"1")}catch
 }
 
 /**
- * The text to send, the number, and a button that fills both in. Shared by the connect and
- * pending pages; only the connect page knows whose card to offer, so only it passes `saveAs`.
- * The card comes first as step 1: saved before the first text, even the first reply shows the
- * agent's name and picture instead of a number. A phone always asks before adding a contact,
- * so requiring the tap is as far as a page can go.
+ * The connect button, which opens Messages with the number and the text filled in. A computer has
+ * no Messages to open, so the text and number wait folded under "On a computer?". Shared by the
+ * connect and pending pages.
+ *
+ * With `saveAs`, a "save to contacts" step comes first and the connect button waits until it is
+ * tapped, so even the first reply shows the agent's name and picture. That needs the number the
+ * agent texts from, which is only known on a dedicated line: on the shared line Inkbox picks the
+ * answering line at connect time and does not report it, so the card would name the wrong number.
  */
-function connectBlock(handle: string, router: ConnectRouter, opts: { qrPngDataUrl?: string; saveAs?: { href: string; name: string; key: string } } = {}): string {
+function connectBlock(handle: string, router: ConnectRouter, opts: { name: string; qrPngDataUrl?: string; saveAs?: { href: string; key: string } }): string {
   const smsHref = safeUrl(smsHrefFor(router.number, handle));
   const qr = safeUrl(opts.qrPngDataUrl, true);
-  const sendStep = `<div class="code">${escapeHtml(connectCommandFor(handle))}</div>
-  <p class="step">to</p>
-  <div class="code" style="margin-bottom:0">${escapeHtml(router.number)}</div>
-  ${smsHref ? `<a class="btn" href="${smsHref}">Open Messages</a>` : ""}
-  ${qr ? `<img class="qr" alt="QR code that opens Messages with the text filled in" src="${qr}">` : ""}`;
-  if (!opts.saveAs) return `<p class="step">Text</p>\n  ${sendStep}`;
-  const name = escapeHtml(opts.saveAs.name);
-  // Two buttons and nothing else. The Messages link fills in the number and the text, but a
-  // computer has no Messages to open, so the text and number wait folded under "On a computer?".
-  return `<p class="step">Step 1</p>
-  <a class="btn" id="save-contact" style="margin-top:0" href="${escapeHtml(opts.saveAs.href)}">Save ${name}</a>
-  <div id="send-step">
-  <p class="step" style="margin-top:28px">Step 2</p>
-  ${smsHref ? `<a class="btn" style="margin-top:0" href="${smsHref}">Connect to ${name}</a>` : ""}
+  const name = escapeHtml(opts.name);
+  const connect = `${smsHref ? `<a class="btn" style="margin-top:0" href="${smsHref}">Connect to ${name}</a>` : ""}
   <details class="manual"><summary>On a computer?</summary>
   <p class="step" style="margin-top:12px">From your phone, text</p>
   <div class="code">${escapeHtml(connectCommandFor(handle))}</div>
   <p class="step">to</p>
   <div class="code" style="margin-bottom:0">${escapeHtml(router.number)}</div>
   </details>
-  ${qr ? `<img class="qr" alt="QR code that opens Messages with the text filled in" src="${qr}">` : ""}
+  ${qr ? `<img class="qr" alt="QR code that opens Messages with the text filled in" src="${qr}">` : ""}`;
+  if (!opts.saveAs) return connect;
+  return `<p class="step">Step 1</p>
+  <a class="btn" id="save-contact" style="margin-top:0" href="${escapeHtml(opts.saveAs.href)}">Save ${name}</a>
+  <div id="send-step">
+  <p class="step" style="margin-top:28px">Step 2</p>
+  ${connect}
   </div>
   <script>${unlockAfterSaveScript(opts.saveAs.key)}</script>`;
 }
 
-export function renderConnect(user: UserRecord, router: ConnectRouter | undefined, opts: PageOptions & { autoHandle?: boolean } = {}): string {
+export function renderConnect(
+  user: UserRecord,
+  router: ConnectRouter | undefined,
+  opts: PageOptions & { autoHandle?: boolean; offerContact?: boolean } = {},
+): string {
   const brand = opts.brand ?? DEFAULT_BRAND;
   const provisioning = user.status === "provisioning";
   // Nothing to say once it works; a line only while it is not ready yet, so nobody is left guessing.
@@ -285,7 +286,11 @@ export function renderConnect(user: UserRecord, router: ConnectRouter | undefine
         ? `<p class="muted">Setting up your ${escapeHtml(brand.agent)}. You can send the text now; it answers once it is ready.</p>`
         : "";
   const card = router
-    ? `<div class="card">${connectBlock(user.handle, router, { qrPngDataUrl: router.qrPngDataUrl, saveAs: { href: contactCardPath(user.id), name: brand.agent, key: user.id } })}</div>`
+    ? `<div class="card">${connectBlock(user.handle, router, {
+        name: brand.agent,
+        ...(router.qrPngDataUrl ? { qrPngDataUrl: router.qrPngDataUrl } : {}),
+        ...(opts.offerContact ? { saveAs: { href: contactCardPath(user.id), key: user.id } } : {}),
+      })}</div>`
     : `<div class="error">The number could not be loaded right now. Reload in a minute.</div>`;
   return layout(brand.product, `<h1>Hi ${escapeHtml(user.name)}.</h1>\n${status}\n${card}`, {
     refreshSeconds: provisioning ? 5 : undefined,
@@ -302,7 +307,7 @@ export function renderConnect(user: UserRecord, router: ConnectRouter | undefine
  */
 export function renderPending(handle: string | undefined, router: ConnectRouter | undefined, opts: PageOptions = {}): string {
   const brand = opts.brand ?? DEFAULT_BRAND;
-  const steps = router && handle ? `<div style="margin-top:20px">${connectBlock(handle, router)}</div>` : "";
+  const steps = router && handle ? `<div style="margin-top:20px">${connectBlock(handle, router, { name: brand.agent })}</div>` : "";
   return layout(
     "Check your phone",
     `<h1>Check your phone.</h1>

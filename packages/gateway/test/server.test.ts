@@ -25,6 +25,7 @@ interface BootOpts {
   brand?: GatewayOptions["brand"];
   handlePrefix?: string;
   desktop?: boolean;
+  agentNumber?: string;
 }
 
 async function boot(opts: BootOpts = {}) {
@@ -40,6 +41,7 @@ async function boot(opts: BootOpts = {}) {
     signupSecret: opts.signupSecret,
     brand: opts.brand,
     handlePrefix: opts.handlePrefix,
+    agentNumber: opts.agentNumber,
     logger: silentLogger,
     fetchImpl: mar.fetch,
     routerInfoFor: opts.routerInfoFor,
@@ -263,8 +265,18 @@ describe("gateway http", () => {
     expect(ink.calls.filter((c) => c === "provisionIdentity")).toHaveLength(1);
   });
 
-  it("offers a contact card with the agent's name, the number it writes from and nothing about the person", async () => {
+  it("offers no contact card on the shared line, where the number the agent answers from is unknown", async () => {
     const { base } = await boot({ brand: { product: "Sunshine", agent: "Sunshine" }, seed: [readyUser({ id: "usr_c", handle: "sunshine-maria-abcd" })] });
+    const page = await (await fetch(`${base}/connect/usr_c`)).text();
+    expect(page).not.toContain("contact.vcf");
+    expect(page).not.toContain(">Save Sunshine</a>");
+    expect(page).not.toContain("<script>");
+    expect(page).toContain("Connect to Sunshine");
+    expect((await fetch(`${base}/connect/usr_c/contact.vcf`)).status).toBe(404);
+  });
+
+  it("with a known agent number, offers a contact card with that number and nothing about the person", async () => {
+    const { base } = await boot({ brand: { product: "Sunshine", agent: "Sunshine" }, agentNumber: "+14155550177", seed: [readyUser({ id: "usr_c", handle: "sunshine-maria-abcd" })] });
     const page = await (await fetch(`${base}/connect/usr_c`)).text();
     expect(page).toContain('href="/connect/usr_c/contact.vcf"');
     expect(page).toContain(">Save Sunshine</a>");
@@ -278,7 +290,9 @@ describe("gateway http", () => {
     expect(res.headers.get("content-disposition")).toBe('attachment; filename="Sunshine.vcf"');
     const card = await res.text();
     expect(card).toContain("FN:Sunshine\r\n");
-    expect(card).toContain("TEL;TYPE=CELL:+14155550199\r\n");
+    // The agent's own line, not the router number people text "connect" to.
+    expect(card).toContain("TEL;TYPE=CELL:+14155550177\r\n");
+    expect(card).not.toContain("+14155550199");
     expect(card).not.toContain("Maria");
     expect(card).not.toContain("+14155550123");
     expect((await fetch(`${base}/connect/usr_nobody/contact.vcf`)).status).toBe(404);

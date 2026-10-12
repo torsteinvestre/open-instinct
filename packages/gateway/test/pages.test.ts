@@ -52,8 +52,19 @@ describe("motion", () => {
   });
 });
 
+describe("connect page on the shared line", () => {
+  it("is one connect button, with no save step or script", () => {
+    const html = renderConnect(readyUser({ id: "usr_c", handle: "sunshine-maria-abcd" }), router, { brand, autoHandle: true });
+    expect(html).toContain('href="sms:+14155550199&amp;body=connect%20%40sunshine-maria-abcd">Connect to Sunshine</a>');
+    expect(html).not.toContain("Save Sunshine");
+    expect(html).not.toContain("Step 1");
+    expect(html).not.toContain("<script>");
+    expect(html).toContain("On a computer?");
+  });
+});
+
 describe("connect page: save the contact before texting", () => {
-  const html = renderConnect(readyUser({ id: "usr_c", handle: "sunshine-maria-abcd" }), router, { brand, autoHandle: true });
+  const html = renderConnect(readyUser({ id: "usr_c", handle: "sunshine-maria-abcd" }), router, { brand, autoHandle: true, offerContact: true });
 
   it("ships step 2 unlocked, so a phone without JavaScript is never stuck", () => {
     expect(html).toContain('<div id="send-step">');
@@ -84,7 +95,7 @@ describe("connect page: save the contact before texting", () => {
   it("remembers each person separately", () => {
     const storage = new Map<string, string>();
     load(html, storage)["save-contact"].click();
-    const other = renderConnect(readyUser({ id: "usr_other", handle: "sunshine-anna-wxyz" }), router, { brand, autoHandle: true });
+    const other = renderConnect(readyUser({ id: "usr_other", handle: "sunshine-anna-wxyz" }), router, { brand, autoHandle: true, offerContact: true });
     expect(load(other, storage)["send-step"].locked()).toBe(true);
   });
 

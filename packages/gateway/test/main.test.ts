@@ -53,6 +53,13 @@ describe("readEnv", () => {
     expect(readEnv({ MARITIME_API_KEY: "mk", INSTINCT_AGENT_DESKTOP: "yes" }).agentDesktop).toBe(true);
   });
 
+  it("reads GATEWAY_AGENT_NUMBER and refuses one without a country code", () => {
+    expect(readEnv({ MARITIME_API_KEY: "mk" }).agentNumber).toBeUndefined();
+    expect(readEnv({ MARITIME_API_KEY: "mk", GATEWAY_AGENT_NUMBER: "+1 (415) 555-0177" }).agentNumber).toBe("+14155550177");
+    expect(readEnv({ MARITIME_API_KEY: "mk", GATEWAY_AGENT_NUMBER: "0047 912 34 567" }).agentNumber).toBe("+4791234567");
+    expect(() => readEnv({ MARITIME_API_KEY: "mk", GATEWAY_AGENT_NUMBER: "912 34 567" })).toThrow(/GATEWAY_AGENT_NUMBER/);
+  });
+
   it("reads GATEWAY_DEFAULT_COUNTRY and refuses a country the form does not offer", () => {
     expect(readEnv({ MARITIME_API_KEY: "mk", GATEWAY_DEFAULT_COUNTRY: " no " }).defaultCountry).toBe("NO");
     expect(() => readEnv({ MARITIME_API_KEY: "mk", GATEWAY_DEFAULT_COUNTRY: "Norway" })).toThrow(/GATEWAY_DEFAULT_COUNTRY/);

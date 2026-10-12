@@ -1,4 +1,4 @@
-import type { PhoneCountry } from "@open-instinct/core";
+import { parsePhone, type PhoneCountry } from "@open-instinct/core";
 import { InkboxProvisioner } from "@open-instinct/inkbox";
 import { type Brand, brandFrom } from "./brand.js";
 import { consoleLogger } from "./logger.js";
@@ -25,6 +25,8 @@ export interface GatewayEnv {
   brand?: Brand;
   /** GATEWAY_HANDLE_PREFIX: pick handles like "<prefix>-anna-k3f9" instead of asking for one. */
   handlePrefix?: string;
+  /** GATEWAY_AGENT_NUMBER: the fixed number agents text from (a dedicated line); turns on "save to contacts". */
+  agentNumber?: string;
   /** INSTINCT_AGENT_DESKTOP=0: create agents without a desktop, which Maritime's free plan needs. Default on. */
   agentDesktop: boolean;
   /** INSTINCT_MODEL: the model every new agent uses, for example anthropic/claude-sonnet-5-5. */
@@ -70,6 +72,13 @@ export function readEnv(env: NodeJS.ProcessEnv): GatewayEnv {
   if (countryRaw && !defaultCountry) {
     throw new Error(`GATEWAY_DEFAULT_COUNTRY must be one of ${SIGNUP_COUNTRIES.map((c) => c.code).join(", ")} (got "${countryRaw}").`);
   }
+  // Every saved contact would carry this number, so a malformed one stops the gateway instead.
+  const agentNumberRaw = env["GATEWAY_AGENT_NUMBER"]?.trim();
+  const agentDialed = agentNumberRaw?.replace(/^00/, "+");
+  const agentNumber = agentDialed?.startsWith("+") ? parsePhone(agentDialed) : undefined;
+  if (agentNumberRaw && !agentNumber) {
+    throw new Error(`GATEWAY_AGENT_NUMBER must be a full number with country code, like +14155550123 (got "${agentNumberRaw}").`);
+  }
   const linkClientId = env["LINK_CLIENT_ID"] || undefined;
   const link: LinkPassthrough | undefined = linkClientId
     ? {
@@ -91,6 +100,7 @@ export function readEnv(env: NodeJS.ProcessEnv): GatewayEnv {
     defaultCountry,
     brand: brandFrom(env["GATEWAY_BRAND_NAME"]),
     handlePrefix: env["GATEWAY_HANDLE_PREFIX"]?.trim() || undefined,
+    agentNumber,
     agentDesktop: !falsy(env["INSTINCT_AGENT_DESKTOP"]),
     agentModel: env["INSTINCT_MODEL"]?.trim() || undefined,
     allowOpenSignup: truthy(env["GATEWAY_ALLOW_OPEN_SIGNUP"]) || truthy(env["GATEWAY_OPEN_SIGNUP"]),
@@ -178,6 +188,7 @@ export function startGateway(cfg: GatewayEnv): GatewayServer {
     defaultCountry: cfg.defaultCountry,
     brand: cfg.brand,
     handlePrefix: cfg.handlePrefix,
+    agentNumber: cfg.agentNumber,
     anthropicApiKey: cfg.anthropicApiKey,
     composioApiKey: cfg.composioApiKey,
     composioToolkits: cfg.composioToolkits,

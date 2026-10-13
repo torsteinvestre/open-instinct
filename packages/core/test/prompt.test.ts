@@ -67,6 +67,15 @@ describe("buildSystemPrompt", () => {
     // [sunshine:reply-guard]
     expect(buildSystemPrompt(input({ channel: "scheduled" }))).toContain("that text is the message and your reply is not sent");
     expect(buildSystemPrompt(input({ channel: "imessage" }))).toContain("Your reply is sent to this thread by itself");
+    expect(buildSystemPrompt(input({ channel: "imessage" }))).toContain("send_file and a caption is your reply");
+  });
+
+  // [sunshine:silent-reply] As in OpenClaw: only runs where silence is normal learn the word.
+  it("teaches the stay-quiet word to scheduled runs only", () => {
+    expect(buildSystemPrompt(input({ channel: "scheduled" }))).toContain("reply with exactly NO_REPLY and nothing else");
+    for (const channel of ["imessage", "sms", "email", "a2a", "chat", "system"] as const) {
+      expect(buildSystemPrompt(input({ channel })), channel).not.toContain("NO_REPLY");
+    }
   });
 
   it("omits empty memory and skills, includes them when present", () => {

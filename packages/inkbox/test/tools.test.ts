@@ -4,7 +4,7 @@ import { basename, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ContactStore, StateDir, defaultConfig, type InstinctConfig, type OutboundMessage, type Principal, type ToolContext } from "@open-instinct/core";
 import type { FileSend, InkboxChannel } from "../src/channel.js";
-import { messagingTools, resolveTarget, sendFileTool, sendMessageReplyTarget, type MessagingDeps } from "../src/tools.js";
+import { messagingTools, resolveTarget, sendFileReplyTarget, sendFileTool, sendMessageReplyTarget, type MessagingDeps } from "../src/tools.js";
 
 let dir: string;
 let contacts: ContactStore;
@@ -80,7 +80,18 @@ describe("resolveTarget", () => {
     // Every messaging tool that can text a person declares it; the rest send no text.
     const tools = messagingTools({ channel, contacts, config });
     expect(tools.find((t) => t.spec.name === "send_message")?.spec.meta.replyTarget).toBeDefined();
-    expect(tools.filter((t) => t.spec.meta.replyTarget).map((t) => t.spec.name)).toEqual(["send_message"]);
+    expect(tools.filter((t) => t.spec.meta.replyTarget).map((t) => t.spec.name)).toEqual(["send_message", "send_file"]);
+  });
+
+  // [sunshine:reply-guard]
+  it("send_file's caption is a text to the same people; a file without one leaves the reply to say it", () => {
+    expect(sendFileReplyTarget({ path: "a.pdf", caption: "Packing list" }, config)).toBe("current");
+    expect(sendFileReplyTarget({ path: "a.pdf", caption: "Packing list", to: "owner" }, config)).toBe("owner");
+    expect(sendFileReplyTarget({ path: "a.pdf", caption: "Packing list", to: "sam-lee" }, config)).toBeUndefined();
+    expect(sendFileReplyTarget({ path: "a.pdf", caption: "Packing list", to: "owner", channel: "email" }, config)).toBeUndefined();
+    expect(sendFileReplyTarget({ path: "a.pdf" }, config)).toBeUndefined();
+    expect(sendFileReplyTarget({ path: "a.pdf", caption: "   " }, config)).toBeUndefined();
+    expect(sendFileTool({ contacts, config }).spec.meta.replyTarget?.({ path: "a.pdf", caption: "Here" })).toBe("current");
   });
 
   it("refuses ambiguous names, unknown people and missing addresses", () => {

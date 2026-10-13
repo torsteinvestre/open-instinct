@@ -1215,4 +1215,100 @@ describe("[sunshine:reply-guard] one reply per run", () => {
     await h.runtime.handleInbound(inbound({ channel: "imessage", from: OWNER_PHONE, conversationKey: "imessage:owner", text: "what did I ask?", id: "m2" }));
     expect(h.sent.map((s) => s.msg.text)).toEqual(["Lock in.", "You asked me to text you."]);
   });
+
+  /** A stand-in for send_file: its caption counts as the reply, a bare file does not. */
+  const fileTool = (sent: () => Outbox) =>
+    defineTool({
+      name: "send_doc",
+      label: "Send file",
+      description: "send a file",
+      parameters: Type.Object({ path: Type.String(), caption: Type.Optional(Type.String()) }),
+      meta: {
+        capabilities: ["converse"],
+        group: "messaging",
+        replyTarget: (a) => ((a as { caption?: string }).caption?.trim() ? "current" : undefined),
+      },
+      execute: async (args, ctx) => {
+        const a = args as { path: string; caption?: string };
+        await sent().send({ channel: "imessage", conversationKey: ctx.deliveryKey ?? ctx.conversationKey, text: a.caption ?? "", mediaUrls: [`https://media.example/${a.path}`] }, { principal: ctx.principal, conversationKey: ctx.conversationKey });
+        return textResult("sent");
+      },
+    });
+
+  function withFileTool(): Harness {
+    let outbox: Outbox | undefined;
+    const h = harness({ withCoreTools: true, extraTools: [fileTool(() => outbox!)] });
+    outbox = h.deps.outbox;
+    return h;
+  }
+
+  it("a file sent with a caption is the reply: no \"Sent: ...\" after it", async () => {
+    const h = withFileTool();
+    h.faux.setResponses([toolTurn("send_doc", { path: "packing-list.pdf", caption: "Maldives weekend packing list" }), textTurn("Sent: a one-page packing list for the Maldives weekend.")]);
+    await h.runtime.handleInbound(inbound({ channel: "imessage", from: OWNER_PHONE, conversationKey: "imessage:owner", text: "make me a packing list pdf" }));
+    expect(h.sent.map((s) => s.msg.text)).toEqual(["Maldives weekend packing list"]);
+    expect(skipped(h)).toHaveLength(1);
+  });
+
+  it("a file sent without a caption still gets the reply as its message", async () => {
+    const h = withFileTool();
+    h.faux.setResponses([toolTurn("send_doc", { path: "packing-list.pdf" }), textTurn("Here is your packing list.")]);
+    await h.runtime.handleInbound(inbound({ channel: "imessage", from: OWNER_PHONE, conversationKey: "imessage:owner", text: "make me a packing list pdf" }));
+    expect(h.sent.map((s) => s.msg.text)).toEqual(["", "Here is your packing list."]);
+    expect(skipped(h)).toHaveLength(0);
+  });
+});
+
+// [sunshine:silent-reply] A run that has nothing to say replies with exactly NO_REPLY, as in OpenClaw,
+// and nothing is sent. Seen live: "only text me if it rains" texted "I'm not sending Torstein a
+// message. The current Oslo reading says ..." because any reply text is delivered.
+describe("[sunshine:silent-reply] the stay-quiet word", () => {
+  const job = (h: Harness, prompt: string) => h.deps.scheduler.create({ name: "job", prompt, enabled: true, nextRunAt: new Date(Date.now() + 60_000).toISOString() });
+  const silenced = (h: Harness) => h.deps.audit.read({ kinds: ["policy"] }).filter((e) => e.detail.silentReply);
+
+  it("a scheduled job that replies NO_REPLY sends nothing and logs it", async () => {
+    const h = harness();
+    h.faux.setResponses([textTurn("NO_REPLY")]);
+    await h.runtime.runScheduled(job(h, "Only text the owner if it rains"));
+    expect(h.sent).toHaveLength(0);
+    expect(silenced(h)).toHaveLength(1);
+  });
+
+  it("ignores case and surrounding whitespace", async () => {
+    const h = harness();
+    h.faux.setResponses([textTurn("  no_reply\n")]);
+    await h.runtime.runScheduled(job(h, "Only text the owner if it rains"));
+    expect(h.sent).toHaveLength(0);
+  });
+
+  it("only the word alone counts: a message that mentions it is still sent", async () => {
+    const h = harness();
+    h.faux.setResponses([textTurn("It's raining in Oslo now. NO_REPLY")]);
+    await h.runtime.runScheduled(job(h, "Only text the owner if it rains"));
+    expect(h.sent.map((s) => s.msg.text)).toEqual(["It's raining in Oslo now. NO_REPLY"]);
+    expect(silenced(h)).toHaveLength(0);
+  });
+
+  it("a scheduled job with something to say still sends it", async () => {
+    const h = harness();
+    h.faux.setResponses([textTurn("It's raining in Oslo now.")]);
+    await h.runtime.runScheduled(job(h, "Only text the owner if it rains"));
+    expect(h.sent.map((s) => s.msg.text)).toEqual(["It's raining in Oslo now."]);
+  });
+
+  it("the word is never texted in a thread either", async () => {
+    const h = harness();
+    h.faux.setResponses([textTurn("NO_REPLY")]);
+    await h.runtime.handleInbound(inbound({ channel: "imessage", from: OWNER_PHONE, conversationKey: "imessage:owner", text: "ok thanks" }));
+    expect(h.sent).toHaveLength(0);
+    expect(silenced(h)).toHaveLength(1);
+  });
+
+  it("the dashboard chat is unchanged", async () => {
+    const h = harness();
+    h.faux.setResponses([textTurn("NO_REPLY")]);
+    const result = await h.runtime.handleInbound(inbound({ channel: "chat", from: "owner", conversationKey: "chat:main", text: "hi" }));
+    expect(result.reply).toBe("NO_REPLY");
+    expect(silenced(h)).toHaveLength(0);
+  });
 });

@@ -229,6 +229,16 @@ export function sendMessageReplyTarget(args: unknown, config: InstinctConfig): R
   return config.owner.phones.some((p) => normalizePhone(p, country) === phone) ? "owner" : undefined;
 }
 
+/**
+ * [sunshine:reply-guard] Who send_file's caption texts: the same people as send_message. Without a
+ * caption the file arrives alone, so the final reply is still its message. Seen live: the PDF, its
+ * caption, then "Sent: a one-page packing list ...".
+ */
+export function sendFileReplyTarget(args: unknown, config: InstinctConfig): ReplyTarget | undefined {
+  const caption = (args as { caption?: string }).caption?.trim();
+  return caption ? sendMessageReplyTarget(args, config) : undefined;
+}
+
 export function messagingTools(deps: MessagingDeps): RegisteredTool[] {
   const sendMessage = defineTool({
     name: "send_message",
@@ -340,6 +350,7 @@ export function sendFileTool(deps: SendFileDeps): RegisteredTool {
         const a = args as { to?: string; path?: string };
         return `send_file ${a.path ?? ""} to ${a.to ?? "current conversation"}`;
       },
+      replyTarget: (args) => sendFileReplyTarget(args, deps.config), // [sunshine:reply-guard]
     },
     execute: async (args, ctx) => {
       if (!deps.dataDir) return fail("File sending is not configured (no data directory).");

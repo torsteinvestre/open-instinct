@@ -22,7 +22,7 @@ import { OwnerNotifier } from "./notifier.js";
 import { DEFAULT_TIER_TABLE, SPEND_CAPABILITIES, type PolicyEngine } from "./policy.js";
 import { normalizePhone, phoneCountryOf, resolvePrincipal } from "./principal.js";
 import { readAgentsInstructions, readPersona } from "./persona.js";
-import { buildSystemPrompt, wrapUntrusted } from "./prompt.js";
+import { buildSystemPrompt, SILENT_REPLY, wrapUntrusted } from "./prompt.js";
 import { A2AStore, a2aState, a2aTerminal } from "./a2a-state.js";
 import type { Scheduler } from "./scheduler.js";
 import type { StateDir } from "./state.js";
@@ -509,6 +509,11 @@ export class AgentRuntime {
       return;
     }
     if (!text.trim()) return;
+    // [sunshine:silent-reply] The job found nothing worth telling the owner.
+    if (isSilentReply(text)) {
+      this.recordSilentReply(key, principal);
+      return;
+    }
     // [sunshine:reply-guard] The job already texted the owner with a tool; send nothing more.
     if (conv.repliedViaTool) {
       this.recordSkippedReply(key, principal, text);
@@ -525,6 +530,11 @@ export class AgentRuntime {
       principal: principal.id,
       detail: { replyGuard: "final reply not sent: already replied with a tool", chars: text.length, preview: text.slice(0, 160) },
     });
+  }
+
+  /** [sunshine:silent-reply] Keep the decision to stay quiet in the audit log. */
+  private recordSilentReply(conversationKey: string, principal: Principal): void {
+    this.deps.audit.append({ kind: "policy", conversationKey, principal: principal.id, detail: { silentReply: `${SILENT_REPLY}: nothing sent` } });
   }
 
   // -------------------------------------------------------------------------
@@ -783,6 +793,11 @@ export class AgentRuntime {
     if (channel === "scheduled" || channel === "system") return;
     if (!DELIVERABLE.has(channel)) {
       this.stash(conv.key, text);
+      return;
+    }
+    // [sunshine:silent-reply] The word is never texted to anyone, as in OpenClaw. A2A still owes a result.
+    if (channel !== "a2a" && isSilentReply(text)) {
+      this.recordSilentReply(conv.key, conv.principal);
       return;
     }
     // [sunshine:reply-guard] The model already answered in this thread with a tool; its final text
@@ -1230,6 +1245,11 @@ function clip(text: string, max: number): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** [sunshine:silent-reply] The reply is the word alone, in any case, surrounding whitespace ignored. */
+function isSilentReply(text: string): boolean {
+  return text.trim().toUpperCase() === SILENT_REPLY;
 }
 
 /** [sunshine:reply-guard] A tool's declared reply target; a broken helper counts as none. */

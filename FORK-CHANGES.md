@@ -22,23 +22,51 @@ Torstein the reminder ...").
 **What the fork adds.** The same rule for text threads and scheduled jobs:
 
 - Tools declare who they text with `ToolMeta.replyTarget` (`"current"` or `"owner"`).
-  `send_message`, `notify_owner` and `ask_owner` declare it.
+  `send_message`, `notify_owner` and `ask_owner` declare it, and `send_file` when it has a caption
+  (seen live: the PDF, its caption, then "Sent: a one-page packing list ..."). A file without a
+  caption leaves the final reply as its message.
 - When a tool reached the run's own audience (the thread being answered, or the owner from a
   scheduled job or the owner's private text thread), `repliedViaTool` is set and the final reply
   is not sent. It is written to the audit log instead (`policy` entry with `replyGuard`).
 - Texts to anyone else, files, a contact's request relayed to the owner, and the dashboard chat
   are unchanged.
-- Two prompt lines tell the model the same, and not to send "on it" progress notes with a tool.
+- Prompt lines tell the model the same, not to send "on it" progress notes with a tool, and to
+  put what it wants to say about a file in the caption.
 
 **Files.** `packages/core/src/types.ts`, `runtime.ts`, `prompt.ts`, `core-tools.ts`,
 `packages/inkbox/src/tools.ts`, and tests in `packages/core/test` and `packages/inkbox/test`.
 
-**To remove.** Revert its commit (`git log --grep "reply-guard"` finds it), or delete every
+**To remove.** Revert its commits (`git log --grep "reply-guard"` finds them), or delete every
 tagged block. The tests tagged the same way go with it.
 
 **A new tool that texts the owner or the current conversation** must declare `replyTarget`,
 or the double message comes back for it. The tests list which tools declare it, so a new one
 shows up there.
+
+### `[sunshine:silent-reply]`: the stay-quiet word
+
+**Problem.** A scheduled run stays silent only if its final reply is empty. Seen live: "in 2 minutes,
+check if it's raining and only text me if it is" texted "I'm not sending Torstein a message. The
+current Oslo reading says ..." on a dry day, because any reply text is delivered.
+
+**What the fork adds,** copied from OpenClaw's `NO_REPLY` convention:
+
+- A final reply that is exactly `NO_REPLY` (any case, surrounding spaces ignored) is not sent. It is
+  written to the audit log instead (`policy` entry with `silentReply`).
+- Only scheduled runs are told about the word. A person who texts gets an answer, as in OpenClaw,
+  where direct chats never get the guidance.
+- The word alone is never texted in a thread either, in case it slips out there.
+- The word must be the whole reply: "It's raining. NO_REPLY" is still sent. A2A replies and the
+  dashboard chat are unchanged.
+
+**Files.** `packages/core/src/prompt.ts` (`SILENT_REPLY` and one scheduled-run line),
+`packages/core/src/runtime.ts` (`runScheduled`, `deliver`, `isSilentReply`), and tests in
+`packages/core/test`.
+
+**To remove.** Revert its commit (`git log --grep "silent-reply"` finds it), or delete every tagged
+block. Scheduled runs then fall back to upstream's empty reply.
+
+**The coming watcher** relies on this: most of its checks should end in `NO_REPLY`.
 
 ## Earlier changes (not tagged; find them by commit)
 

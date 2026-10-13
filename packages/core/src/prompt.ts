@@ -10,6 +10,12 @@ import { DEFAULT_PERSONA } from "./persona.js";
 import { OWNER_EMAIL_PRINCIPAL_ID } from "./principal.js";
 import type { Approval, Capability, Channel, InstinctConfig, Principal, Tier } from "./types.js";
 
+/**
+ * [sunshine:silent-reply] The whole reply that means "send nothing", as in OpenClaw. Only scheduled
+ * runs are told about it; anywhere else a person is waiting for an answer.
+ */
+export const SILENT_REPLY = "NO_REPLY";
+
 export interface PromptInput {
   config: InstinctConfig;
   principal: Principal;
@@ -218,6 +224,8 @@ function channelSection(channel: Channel): string {
       lines.push(
         "Your reply is sent to this thread by itself. Do not also send it with send_message, and do not send progress notes like \"on it\" with a tool; they see a typing indicator while you work.",
       );
+      // [sunshine:reply-guard] A captioned file is the reply too, so anything said after it is not sent.
+      lines.push("A file you send here with send_file and a caption is your reply: put what you want to say in the caption.");
       break;
     case "email":
       lines.push("This is email. Write normal prose with a greeting and a short sign-off as your agent name. Plain text, no markdown.");
@@ -232,6 +240,8 @@ function channelSection(channel: Channel): string {
       lines.push("This run was started by a schedule, not a person. Do the job. If there is something worth telling your owner, write it as a short text message; otherwise reply with nothing.");
       // [sunshine:reply-guard]
       lines.push("If you text your owner with a tool, that text is the message and your reply is not sent, so do not repeat it or report on it there.");
+      // [sunshine:silent-reply] Seen live: "only text me if it rains" texted its reasoning instead of staying quiet.
+      lines.push(`To stay quiet, reply with exactly ${SILENT_REPLY} and nothing else. Any other reply is texted to your owner, so never explain there why you are not texting.`);
       break;
     case "system":
       lines.push("This is an internal system prompt. Reply tersely.");

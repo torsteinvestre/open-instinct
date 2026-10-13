@@ -110,6 +110,40 @@ export interface WatchState {
   lastCheck?: CheckSummary;
 }
 
+/**
+ * The decision journal: one line per check, every headline it looked at and what happened to it,
+ * so missed stories can be found afterwards ("what did you skip today?"). Kept for a week, in its
+ * own file so watcher.json stays small.
+ */
+export const JOURNAL_FILE = "watcher-journal.jsonl";
+export const JOURNAL_DAYS = 7;
+/** Sieve-dropped headlines kept per check, most on-topic first: enough to spot a wrong drop. */
+export const JOURNAL_SIEVE_MAX = 40;
+
+export interface JournalItem {
+  title: string;
+  source?: string;
+  topic: string;
+  link: string;
+  /** Where its path ended: the Jev sieve, the screen (step 1) or the decision (step 2). */
+  stage: "sieve" | "screen" | "decide";
+  /** "undecided": step 2 never ran (it failed, or its answer was refused). */
+  result: "dropped" | "told" | "kept" | "nothing" | "undecided";
+  /** The sieve's probability that it is on topic. */
+  p?: number;
+  /** For "told": the story card it opened or updated. */
+  card?: string;
+}
+
+export interface JournalEntry {
+  at: string;
+  mode: string;
+  outcome: string;
+  note?: string;
+  costUsd?: number;
+  items: JournalItem[];
+}
+
 export function defaultState(now: Date = new Date()): WatchState {
   return {
     version: 1,
@@ -168,6 +202,37 @@ export class WatchStore {
     this.prune(s);
     this.state.writeJson(WATCH_FILE, s);
     return s;
+  }
+
+  appendJournal(entry: JournalEntry): void {
+    const lines = this.state.readLines(JOURNAL_FILE);
+    const cutoff = this.now().getTime() - JOURNAL_DAYS * DAY;
+    const atOf = (line: string): number => {
+      try {
+        return Date.parse((JSON.parse(line) as JournalEntry).at);
+      } catch {
+        return -Infinity; // a torn line counts as old, so the next rewrite drops it
+      }
+    };
+    if (lines[0] !== undefined && atOf(lines[0]) < cutoff) {
+      // Rewrite without the old days; this happens about once a day.
+      const keep = lines.filter((l) => atOf(l) >= cutoff);
+      this.state.writeText(JOURNAL_FILE, keep.map((l) => `${l}\n`).join(""));
+    }
+    this.state.appendLine(JOURNAL_FILE, JSON.stringify(entry));
+  }
+
+  readJournal(sinceMs: number): JournalEntry[] {
+    const out: JournalEntry[] = [];
+    for (const line of this.state.readLines(JOURNAL_FILE)) {
+      try {
+        const e = JSON.parse(line) as JournalEntry;
+        if (Date.parse(e.at) >= sinceMs) out.push(e);
+      } catch {
+        // A torn line from a crash mid-write: skip it.
+      }
+    }
+    return out;
   }
 
   private prune(s: WatchState): void {

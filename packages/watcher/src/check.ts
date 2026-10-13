@@ -15,14 +15,17 @@ import type { RelevanceSieve } from "./jev.js";
 import type { ModelCall } from "./models.js";
 import { DECIDE_SYSTEM, INTERESTS_QUESTION, SCREEN_SYSTEM, decideUser, screenUser, type PromptHeadline } from "./prompts.js";
 import { headlineKeys, runScan, type Candidate } from "./scan.js";
-import { newCardId, type StoryCard, type WatchState, type WatchStore } from "./store.js";
+import { JOURNAL_SIEVE_MAX, newCardId, type JournalItem, type StoryCard, type WatchState, type WatchStore } from "./store.js";
 
 /** Unprompted watcher texts per owner day. A fuse: reaching it means the judgment is too loose. */
 export const DAILY_TEXT_LIMIT = 6;
 /** Model calls per owner day (both steps). A cost fuse against a runaway loop. */
 export const DAILY_MODEL_CALL_LIMIT = 40;
-/** Headlines step 2 sees at most per check. */
-export const DECIDE_MAX = 15;
+/**
+ * Headlines step 2 sees at most per check. Raised from 15 after the first preview: on a busy day
+ * Haiku passed 26 and the rest went undecided. The prompt stays small (about 4k tokens).
+ */
+export const DECIDE_MAX = 25;
 /** Hours the watch runs without interests before it asks for them once. */
 export const ASK_AFTER_HOURS = 24;
 
@@ -67,10 +70,25 @@ export async function runCheck(deps: CheckDeps, mode: CheckMode, signal?: AbortS
   const today = localDate(at, tz);
   const s = deps.store.read();
   const log: Record<string, unknown> = { watcher: "check", mode };
+  // The decision journal: every headline this check looked at and where its path ended.
+  const items: JournalItem[] = [];
+  const fate = new Map<Candidate, JournalItem>();
   const finish = (outcome: CheckOutcome): CheckOutcome => {
     deps.audit.append({ kind: "policy", conversationKey: KEY, principal: OWNER_ID, detail: { ...log, outcome: outcome.status, ...(outcome.note ? { note: outcome.note } : {}) } });
+    if (items.length) {
+      deps.store.appendJournal({ at: at.toISOString(), mode, outcome: outcome.status, ...(outcome.note ? { note: outcome.note } : {}), ...(typeof log["costUsd"] === "number" ? { costUsd: log["costUsd"] } : {}), items });
+    }
     return outcome;
   };
+  const journalItem = (c: Candidate, stage: JournalItem["stage"], result: JournalItem["result"]): JournalItem => ({
+    title: c.title,
+    ...(c.source ? { source: c.source } : {}),
+    topic: c.topic,
+    link: c.link,
+    stage,
+    result,
+    ...(c.p !== undefined ? { p: Math.round(c.p * 100) / 100 } : {}),
+  });
 
   // 1. Fences.
   if (mode === "scheduled") {
@@ -93,11 +111,17 @@ export async function runCheck(deps: CheckDeps, mode: CheckMode, signal?: AbortS
   }
 
   // 2. Collect.
-  const { summary, candidates } = await runScan(
+  const { summary, candidates, rejected } = await runScan(
     { store: deps.store, ...(deps.sieve ? { sieve: deps.sieve } : {}), ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}), ...(deps.lookup ? { lookup: deps.lookup } : {}), now: () => at },
     signal,
   );
   Object.assign(log, { fetched: summary.fetched, fresh: summary.fresh, shortlist: summary.passed, sieve: summary.sieve, jevInputTokens: summary.jevInputTokens, ...(summary.errors.length ? { errors: summary.errors } : {}) });
+  for (const r of [...rejected].sort((a, b) => (b.p ?? 0) - (a.p ?? 0)).slice(0, JOURNAL_SIEVE_MAX)) items.push(journalItem(r, "sieve", "dropped"));
+  for (const c of candidates) {
+    const it = journalItem(c, "decide", "undecided");
+    fate.set(c, it);
+    items.push(it);
+  }
   if (candidates.length === 0) return finish({ status: "nothing new" });
 
   const decider = deps.decide ?? deps.screen;
@@ -123,6 +147,12 @@ export async function runCheck(deps: CheckDeps, mode: CheckMode, signal?: AbortS
       const result = parseScreen(reply.text, candidates.length);
       passed = result.pass.map((n) => candidates[n - 1]!).filter(Boolean);
       log["screened"] = { in: candidates.length, out: passed.length, model: reply.model, ...(result.note ? { note: result.note } : {}) };
+      for (const c of candidates) {
+        if (passed.includes(c)) continue;
+        const it = fate.get(c)!;
+        it.stage = "screen";
+        it.result = "dropped";
+      }
     } catch (err) {
       log["screenFailed"] = String(err instanceof Error ? err.message : err);
     }
@@ -176,7 +206,9 @@ export async function runCheck(deps: CheckDeps, mode: CheckMode, signal?: AbortS
   }
 
   // 5. The door.
+  for (const c of passed) fate.get(c)!.result = "nothing";
   const kept = decision.keep.map((k) => ({ c: byNumber.get(k.headline)!, why: k.why })).filter((k) => k.c);
+  for (const { c } of kept) fate.get(c)!.result = "kept";
   if (kept.length) {
     deps.store.update((st) => {
       for (const { c, why } of kept) if (!st.later.some((l) => l.link === c.link)) st.later.push({ at: at.toISOString(), title: c.title, link: c.link, topic: c.topic, ...(why ? { why } : {}) });
@@ -196,10 +228,17 @@ export async function runCheck(deps: CheckDeps, mode: CheckMode, signal?: AbortS
       deps.store.update((st) => {
         for (const { c } of stories) if (!st.later.some((l) => l.link === c.link)) st.later.push({ at: at.toISOString(), title: c.title, link: c.link, topic: c.topic, why: "held by quiet hours or the daily limit" });
       });
+      for (const { c } of stories) fate.get(c)!.result = "kept";
       return finish({ status: "held", text: decision.message.text, note: decision.note });
     }
   }
-  tell(deps, at, stories);
+  const cardOf = tell(deps, at, stories);
+  for (const { c } of stories) {
+    const it = fate.get(c)!;
+    it.result = "told";
+    const id = cardOf.get(c.link);
+    if (id) it.card = id;
+  }
   return finish({ status: mode === "scheduled" ? "sent" : "to tell", text: decision.message.text, note: decision.note, kept: kept.length });
 }
 
@@ -223,17 +262,21 @@ async function door(deps: CheckDeps, s: WatchState, at: Date, tz: string, text: 
   return true;
 }
 
-/** Record what the owner now knows: new story cards, or updates to existing ones. */
-function tell(deps: CheckDeps, at: Date, stories: Array<{ st: NewStory | StoryUpdate; c: Candidate }>): void {
+/** Record what the owner now knows: new story cards, or updates to existing ones. Returns link -> card id. */
+function tell(deps: CheckDeps, at: Date, stories: Array<{ st: NewStory | StoryUpdate; c: Candidate }>): Map<string, string> {
   const iso = at.toISOString();
+  const cardOf = new Map<string, string>();
   deps.store.update((s) => {
     for (const { st, c } of stories) {
       if (st.card === "new") {
         const n = st as NewStory;
-        s.stories.push({ id: newCardId(), subject: n.subject, event: n.event, status: n.status, titles: [c.title], links: [c.link], firstTold: iso, lastTold: iso, updates: 0 });
+        const id = newCardId();
+        cardOf.set(c.link, id);
+        s.stories.push({ id, subject: n.subject, event: n.event, status: n.status, titles: [c.title], links: [c.link], firstTold: iso, lastTold: iso, updates: 0 });
       } else {
         const card = s.stories.find((x) => x.id === st.card);
         if (!card) continue;
+        cardOf.set(c.link, card.id);
         card.status = (st as StoryUpdate).status;
         card.titles.push(c.title);
         card.links.push(c.link);
@@ -243,6 +286,7 @@ function tell(deps: CheckDeps, at: Date, stories: Array<{ st: NewStory | StoryUp
     }
     s.later = s.later.filter((l) => !stories.some(({ c }) => c.link === l.link));
   });
+  return cardOf;
 }
 
 function remember(deps: CheckDeps, at: Date, text: string): void {

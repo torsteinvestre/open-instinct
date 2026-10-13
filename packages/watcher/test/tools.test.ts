@@ -25,8 +25,8 @@ beforeEach(() => {
 afterEach(() => f.cleanup());
 
 describe("the news watch in conversation", () => {
-  it("has five tools, and every one refuses anyone but the owner", async () => {
-    expect([...tools.keys()]).toEqual(["watch_profile", "watch_profile_update", "watch_check", "watch_later", "watch_settings"]);
+  it("has six tools, and every one refuses anyone but the owner", async () => {
+    expect([...tools.keys()]).toEqual(["watch_profile", "watch_profile_update", "watch_check", "watch_journal", "watch_later", "watch_settings"]);
     for (const name of tools.keys()) {
       const r = await tools.get(name)!.execute({ profile: "x" } as never, ctx(NOON, FRIEND));
       expect(textOf(r), name).toMatch(/belongs to the owner/);
@@ -52,6 +52,30 @@ describe("the news watch in conversation", () => {
     expect(out).toMatch(/Worth telling them[\s\S]*Brann signed Ola Nordmann\./);
     expect(f.sent).toHaveLength(0);
     expect(textOf(await run("watch_check"))).toMatch(/Nothing new worth telling/);
+  });
+
+  it("answers 'what did you skip?' from the journal, by stage", async () => {
+    const { fetchImpl } = feeds({
+      "SK Brann": [
+        { title: "Brann signs Ola Nordmann", link: "https://n/1" },
+        { title: "Brann friendly in Spain", link: "https://n/2" },
+        { title: "Brann ticket office opening hours", link: "https://n/3" },
+        { title: "House fire in Bergen", link: "https://n/4" },
+      ],
+    });
+    const sieve = { name: "fake", relevance: async (_t: string, i: { title: string }) => ({ p: i.title.startsWith("House") ? 0.05 : 0.9, inputTokens: 10 }) };
+    const screen: ModelCall = async () => ({ text: '{"pass": [1, 2]}', costUsd: 0.001, model: "haiku" });
+    build({ fetchImpl, sieve, screen, decide: sonnet({ message: null, keep: [{ headline: 2, why: "nice to know" }], note: "Nothing big today." }) });
+    await run("watch_profile_update", { searches: [{ topic: "Brann", query: "SK Brann", edition: "no-NO" }] });
+    await run("watch_settings", { on: true });
+    expect((await w.runCheck("scheduled")).status).toBe("nothing to tell");
+    const out = textOf(await run("watch_journal"));
+    expect(out).toMatch(/Kept for later: 1\n- \[Brann\] Brann friendly in Spain/);
+    expect(out).toMatch(/not worth a text: 1\n- \[Brann\] Brann signs Ola Nordmann/);
+    expect(out).toMatch(/first pass: 1\n- \[Brann\] Brann ticket office opening hours/);
+    expect(out).toMatch(/off-topic: 1[\s\S]*House fire in Bergen \(relevance 0.05\)/);
+    expect(out).toContain("Nothing big today.");
+    expect(out).toContain("<untrusted");
   });
 
   it("lists kept stories once", async () => {

@@ -1,7 +1,7 @@
 // [sunshine:watcher]
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { RelevanceSieve } from "../src/jev.js";
-import { headlineKeys, runScan } from "../src/scan.js";
+import { fairShare, headlineKeys, runScan } from "../src/scan.js";
 import { WatchStore } from "../src/store.js";
 import { NOON, feeds, fixture, publicLookup, type Fixture } from "./helpers.js";
 
@@ -100,6 +100,12 @@ describe("a news check", () => {
     expect(candidates).toHaveLength(2);
     const seen = store.read().seen;
     expect(Object.keys(seen).filter((k) => k.startsWith("l:"))).toHaveLength(2);
+  });
+
+  it("shares the short list fairly, so a busy topic cannot crowd out a quiet one", () => {
+    const mk = (topic: string, n: number, p: number) => Array.from({ length: n }, (_, i) => ({ title: `${topic} ${i}`, link: `https://n/${topic}${i}`, topic, edition: "en-US", p }));
+    const list = fairShare([...mk("XRP", 20, 0.99), ...mk("Startups", 2, 0.6), ...mk("AI", 1, 0.5)], 6);
+    expect(list.map((c) => c.topic)).toEqual(["XRP", "Startups", "AI", "XRP", "Startups", "XRP"]);
   });
 
   it("remembers a headline by its wording too", () => {

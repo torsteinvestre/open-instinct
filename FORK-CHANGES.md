@@ -89,9 +89,10 @@ interests, and otherwise stays silent. Plan and reasoning: `~/sunshine-ops/WATCH
 
 No new headline means no model call. A failed step 2 sends nothing and its headlines wait for the
 next check. Each check leaves one `policy` audit entry (`watcher: "check"`) with counts, outcome,
-note and cost. In conversation the agent has five owner-only tools: `watch_profile`,
-`watch_profile_update`, `watch_check` (answers "anything new?" in its own reply), `watch_later`,
-`watch_settings`.
+note and cost, and one line in the decision journal (`watcher-journal.jsonl`) with every headline
+it looked at and where its path ended (Jev, screen, or decision). In conversation the agent has
+six owner-only tools: `watch_profile`, `watch_profile_update`, `watch_check` (answers "anything
+new?" in its own reply), `watch_journal` ("what did you skip?"), `watch_later`, `watch_settings`.
 
 **Where to change what.**
 
@@ -103,6 +104,9 @@ note and cost. In conversation the agent has five owner-only tools: `watch_profi
 | How often, quiet hours (per owner) | by text to Sunshine (`watch_settings`); defaults in `store.ts` / `clock.ts` |
 | Text limit, model budget, ask-after hours | constants at the top of `packages/watcher/src/check.ts` |
 | Jev threshold, how many headlines per search | `DEFAULTS` in `packages/watcher/src/scan.ts` |
+| How the short list is shared between searches | `fairShare` in `packages/watcher/src/scan.ts` |
+| How many headlines step 2 sees | `DECIDE_MAX` in `packages/watcher/src/check.ts` |
+| The decision journal (`watcher-journal.jsonl`, 7 days) | `JOURNAL_*` in `store.ts`; read by the `watch_journal` tool |
 | "Reads almost like a told story" threshold | `SAME_HEADLINE_OVERLAP` in `packages/watcher/src/decide.ts` |
 | How Sunshine keeps the picture, reacts to feedback | `skills/news-watch/SKILL.md` |
 | The interest question in the welcome chat | `skills/onboarding/SKILL.md` (tagged step 3) |

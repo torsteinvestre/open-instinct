@@ -94,6 +94,32 @@ describe("a news check", () => {
     expect(decide.asked[0]!.system).toContain("# The one question");
     expect(decide.asked[0]!.user).toContain("Lifelong SK Brann supporter");
     expect(checks().at(-1)?.detail).toMatchObject({ outcome: "sent", costUsd: 0.02, screened: { in: 2, out: 2 } });
+    // The journal records each headline's fate, and which card the told one opened.
+    const [entry] = store.readJournal(0);
+    expect(entry).toMatchObject({ outcome: "sent", costUsd: 0.02 });
+    expect(entry!.items.map((i) => [i.link, i.stage, i.result])).toEqual([
+      ["https://n/sign", "decide", "told"],
+      ["https://n/friendly", "decide", "kept"],
+    ]);
+    expect(entry!.items[0]!.card).toBe(s.stories[0]!.id);
+  });
+
+  it("journals what the sieve and the screen dropped, and keeps a week of it", async () => {
+    const sieve: RelevanceSieve = { name: "fake", relevance: async (_t, i) => ({ p: i.title.includes("fire") ? 0.04 : 0.9, inputTokens: 10 }) };
+    const fire = { title: "House fire in Bergen", link: "https://n/fire" };
+    await runCheck(deps([signing, friendly, fire], { sieve, screen: fakeModel("haiku", [{ pass: [] }]), decide: fakeModel("sonnet", []) }), "scheduled");
+    const items = store.readJournal(0)[0]!.items;
+    expect(items.find((i) => i.link === "https://n/fire")).toMatchObject({ stage: "sieve", result: "dropped", p: 0.04 });
+    expect(items.filter((i) => i.stage === "screen").map((i) => i.result)).toEqual(["dropped", "dropped"]);
+    // A week later, the old line is pruned when the next one is written.
+    const later = new WatchStore(f.state, () => new Date(NOON.getTime() + 8 * 24 * 3600_000));
+    later.appendJournal({ at: new Date(NOON.getTime() + 8 * 24 * 3600_000).toISOString(), mode: "scheduled", outcome: "nothing new", items: [] });
+    expect(later.readJournal(0).map((e) => e.outcome)).toEqual(["nothing new"]);
+  });
+
+  it("writes no journal line when there was nothing to look at", async () => {
+    await runCheck(deps([]), "scheduled");
+    expect(store.readJournal(0)).toEqual([]);
   });
 
   it("sends a real development as an update to its card", async () => {

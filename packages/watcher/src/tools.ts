@@ -146,7 +146,7 @@ export function createWatcher(deps: WatcherDeps): Watcher {
     name: "watch_profile_update",
     label: "News watch: update profile",
     description:
-      "Rewrite your picture of the owner's interests and/or the searches. `profile` replaces the whole note (plain words, at most 2000 characters): what they follow and how closely, where they live, how they like to hear things, and their reactions to past news texts as short examples; mark weak signals as weak. `searches` replaces the whole list, one per interest: `topic` says what it is, unambiguously (\"Brann, the Bergen football club (SK Brann)\", not \"Brann\"); `query` is a precise Google News search (\"SK Brann\"); `edition` is en-US, en-GB, no-NO, sv-SE or another language-COUNTRY pair.",
+      "Rewrite your picture of the owner's interests and/or the searches. `profile` replaces the whole note (plain words, at most 2000 characters): what they follow and how closely, where they live, how they like to hear things, and their reactions to past news texts as short examples; mark weak signals as weak. `searches` replaces the whole list, one per interest: `topic` says only what the news is about, unambiguously (\"Brann, the Bergen football club (SK Brann)\", not \"Brann\"), never how much they care or which kind of news (\"secondary\", \"major only\", \"funding and launches\" belong in `profile`): a relevance filter reads the topic literally and drops headlines that do not fit it; `query` is a precise Google News search (\"SK Brann\"); `edition` is en-US, en-GB, no-NO, sv-SE or another language-COUNTRY pair.",
     parameters: Type.Object({
       profile: Type.Optional(Type.String()),
       searches: Type.Optional(Type.Array(Type.Object({ topic: Type.String(), query: Type.String(), edition: Type.Optional(Type.String()) }))),
@@ -206,6 +206,43 @@ export function createWatcher(deps: WatcherDeps): Watcher {
     },
   });
 
+  const journal = defineTool({
+    name: "watch_journal",
+    label: "News watch: what it looked at",
+    description:
+      "What the news watch looked at recently and what it did with each headline: told them, kept for later, judged not worth a text, or filtered out early. Use it when the owner asks what you skipped, whether you saw a story, or why you did not text about something.",
+    parameters: Type.Object({ hours: Type.Optional(Type.Number({ description: "How far back, default 24, at most 168" })) }),
+    meta: { capabilities: ["memory.write"], group: "memory", describe: (a) => `watch_journal ${(a as { hours?: number }).hours ?? 24}h` },
+    execute: async ({ hours }, ctx) => {
+      const denied = ownerOnly(ctx);
+      if (denied) return denied;
+      const h = Math.min(168, Math.max(1, hours ?? 24));
+      const entries = store.readJournal(ctx.now().getTime() - h * 3600_000);
+      if (entries.length === 0) return textResult(`No headlines looked at in the last ${h} hours.`);
+      const all = entries.flatMap((e) => e.items.map((it) => ({ ...it, at: e.at })));
+      const pick = (f: (i: (typeof all)[number]) => boolean, max: number) => all.filter(f).slice(-max);
+      const line = (i: (typeof all)[number]) => `- [${i.topic}] ${i.title}${i.source ? ` (${i.source})` : ""}`;
+      const told = pick((i) => i.result === "told", 20);
+      const kept = pick((i) => i.result === "kept", 20);
+      const passedOn = pick((i) => i.stage === "decide" && (i.result === "nothing" || i.result === "undecided"), 25);
+      const screened = pick((i) => i.stage === "screen", 25);
+      const sieved = all.filter((i) => i.stage === "sieve");
+      const sievedTop = [...sieved].sort((a, b) => (b.p ?? 0) - (a.p ?? 0)).slice(0, 8);
+      const cost = entries.reduce((a, e) => a + (e.costUsd ?? 0), 0);
+      const body = [
+        `Told them: ${told.length}`, ...told.map(line),
+        "", `Kept for later: ${kept.length}`, ...kept.map(line),
+        "", `Looked at closely, not worth a text: ${passedOn.length}`, ...passedOn.map(line),
+        "", `Dropped as noise in the first pass: ${screened.length}`, ...screened.map(line),
+        "", `Filtered out as off-topic: ${sieved.length}. The most on-topic of those:`, ...sievedTop.map((i) => `${line(i)} (relevance ${i.p ?? "?"})`),
+      ].join("\n");
+      const notes = entries.filter((e) => e.note).slice(-6).map((e) => `- ${ago(e.at, ctx.now())}: ${e.note}`);
+      return textResult(
+        [`Last ${h} hours: ${entries.length} checks with news, model cost $${cost.toFixed(3)}.`, wrapUntrusted(body, "news headlines"), ...(notes.length ? ["", "Your notes from those checks:", ...notes] : [])].join("\n"),
+      );
+    },
+  });
+
   const later = defineTool({
     name: "watch_later",
     label: "News watch: kept items",
@@ -261,7 +298,7 @@ export function createWatcher(deps: WatcherDeps): Watcher {
   });
 
   return {
-    tools: [profileRead, profileWrite, check, later, settings],
+    tools: [profileRead, profileWrite, check, journal, later, settings],
     gate: async () => {
       await runCheck(checkDeps(), "scheduled");
       return false;

@@ -36,6 +36,8 @@ export interface ScanOptions {
 export interface ScanResult {
   summary: CheckSummary;
   candidates: Candidate[];
+  /** Headlines the sieve judged off-topic, with its probability; for the decision journal. */
+  rejected: Candidate[];
 }
 
 export const DEFAULTS = { threshold: 0.3, perSearchMax: 30, unsievedPerSearch: 6, totalMax: 30, maxAgeHours: 26, concurrency: 4 };
@@ -77,6 +79,7 @@ export async function runScan(opts: ScanOptions, signal?: AbortSignal): Promise<
   const minTime = now.getTime() - cfg.maxAgeHours * 3600_000;
   const looked: string[] = [];
   const candidates: Candidate[] = [];
+  const rejected: Candidate[] = [];
   let sieveFailures = 0;
   let sieveCalls = 0;
 
@@ -124,6 +127,7 @@ export async function runScan(opts: ScanOptions, signal?: AbortSignal): Promise<
       summary.jevInputTokens += r.inputTokens;
       looked.push(...headlineKeys(h));
       if (r.p >= cfg.threshold) candidates.push({ ...h, p: r.p });
+      else rejected.push({ ...h, p: r.p });
     });
     // The sieve failed on this search's headlines: the newest few still reach the agent.
     for (const h of failed.slice(0, cfg.unsievedPerSearch)) {
@@ -134,18 +138,37 @@ export async function runScan(opts: ScanOptions, signal?: AbortSignal): Promise<
 
   if (opts.sieve && sieveFailures > 0) summary.sieve = sieveFailures === sieveCalls ? "none" : "partial";
   if (opts.sieve && sieveFailures > 0) summary.errors.push(`relevance filter failed on ${sieveFailures} of ${sieveCalls} headlines`);
-  const shortlist = candidates
-    .sort((a, b) => (b.p ?? 0.5) - (a.p ?? 0.5) || Date.parse(b.publishedAt ?? "") - Date.parse(a.publishedAt ?? ""))
-    .slice(0, cfg.totalMax);
+  const shortlist = fairShare(candidates, cfg.totalMax);
   summary.passed = shortlist.length;
   // Passed but cut from a full short list: not looked at yet, so the next check may still show it.
-  const cut = new Set(candidates.slice(cfg.totalMax).flatMap((h) => headlineKeys(h)));
+  const kept = new Set(shortlist);
+  const cut = new Set(candidates.filter((c) => !kept.has(c)).flatMap((h) => headlineKeys(h)));
 
   opts.store.update((s) => {
     for (const k of looked) if (!cut.has(k)) s.seen[k] = summary.at;
     s.lastCheck = summary;
   });
-  return { summary, candidates: shortlist };
+  return { summary, candidates: shortlist, rejected };
+}
+
+/**
+ * The short list, shared fairly between searches: one busy topic (XRP produces dozens of articles a
+ * day) must not crowd out a quiet one. Takes the best of each search in turn, best first by sieve
+ * probability and then newest, until the list is full. Seen live in the first preview.
+ */
+export function fairShare(candidates: Candidate[], max: number): Candidate[] {
+  const best = (a: Candidate, b: Candidate) => (b.p ?? 0.5) - (a.p ?? 0.5) || Date.parse(b.publishedAt ?? "") - Date.parse(a.publishedAt ?? "");
+  const queues = new Map<string, Candidate[]>();
+  for (const c of candidates) queues.set(c.topic, [...(queues.get(c.topic) ?? []), c]);
+  for (const q of queues.values()) q.sort(best);
+  const out: Candidate[] = [];
+  while (out.length < max && [...queues.values()].some((q) => q.length)) {
+    for (const q of queues.values()) {
+      const next = q.shift();
+      if (next && out.length < max) out.push(next);
+    }
+  }
+  return out;
 }
 
 function definedOnly<T extends object>(o: T): Partial<T> {

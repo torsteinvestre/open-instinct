@@ -36,6 +36,7 @@ import {
   type InstinctConfig,
   type OutboundMessage,
   type Principal,
+  type ReplyTarget,
   type ScheduleEntry,
   type Tier,
   type ToolMeta,
@@ -508,7 +509,22 @@ export class AgentRuntime {
       return;
     }
     if (!text.trim()) return;
+    // [sunshine:reply-guard] The job already texted the owner with a tool; send nothing more.
+    if (conv.repliedViaTool) {
+      this.recordSkippedReply(key, principal, text);
+      return;
+    }
     await this.sendToOwner(text, principal, key);
+  }
+
+  /** [sunshine:reply-guard] Keep a skipped final reply in the audit log, so "what did you do" still sees it. */
+  private recordSkippedReply(conversationKey: string, principal: Principal, text: string): void {
+    this.deps.audit.append({
+      kind: "policy",
+      conversationKey,
+      principal: principal.id,
+      detail: { replyGuard: "final reply not sent: already replied with a tool", chars: text.length, preview: text.slice(0, 160) },
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -691,6 +707,9 @@ export class AgentRuntime {
     if (preview) detail.result = preview;
     audit.append({ kind: "tool_call", conversationKey: conv.key, principal: conv.principal.id, detail });
     if (toolName === REPLY_TOOL && !isError) conv.repliedViaTool = true;
+    // [sunshine:reply-guard] Upstream sets this only for A2A. A text sent with a tool to the run's
+    // own audience (this thread, or the owner from a scheduled job) is the reply just the same.
+    if (!isError && reachesOwnAudience(conv, safeReplyTarget(meta, args))) conv.repliedViaTool = true;
     if (isError) return;
     const amountUsd = meta?.amountUsd?.(args);
     const spends = meta?.capabilities.some((c) => SPEND_CAPABILITIES.has(c)) ?? false;
@@ -764,6 +783,12 @@ export class AgentRuntime {
     if (channel === "scheduled" || channel === "system") return;
     if (!DELIVERABLE.has(channel)) {
       this.stash(conv.key, text);
+      return;
+    }
+    // [sunshine:reply-guard] The model already answered in this thread with a tool; its final text
+    // would arrive as a second message (often a copy, or a note like "I sent Torstein ...").
+    if (conv.repliedViaTool && channel !== "a2a") {
+      this.recordSkippedReply(conv.key, conv.principal, text);
       return;
     }
     const out: OutboundMessage = { channel: channel as OutboundChannel, conversationKey: conv.deliveryKey, text, replyRef: conv.replyRef };
@@ -1205,6 +1230,29 @@ function clip(text: string, max: number): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** [sunshine:reply-guard] A tool's declared reply target; a broken helper counts as none. */
+function safeReplyTarget(meta: ToolMeta | undefined, args: unknown): ReplyTarget | undefined {
+  try {
+    return meta?.replyTarget?.(args);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * [sunshine:reply-guard] Whether a tool's text went where this run's final reply would go: the
+ * thread being answered, or the owner when the run is a scheduled job or the owner's own private
+ * text thread (on the shared line the owner's phone is that thread). A non-owner's thread, a
+ * group, or the dashboard chat is somewhere else, so relaying to the owner from there is not a reply.
+ */
+function reachesOwnAudience(conv: Conversation, target: ReplyTarget | undefined): boolean {
+  if (target === "current") return true;
+  if (target !== "owner") return false;
+  if (conv.channel === "scheduled") return true;
+  const privateOwnerText = conv.principal.kind === "owner" && (conv.channel === "imessage" || conv.channel === "sms") && conv.deliveryKey === conv.key;
+  return privateOwnerText;
 }
 
 function safeDescribe(meta: ToolMeta | undefined, args: unknown): string {

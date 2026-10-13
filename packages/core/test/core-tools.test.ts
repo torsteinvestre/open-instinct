@@ -75,6 +75,10 @@ describe("coreTools registration", () => {
     expect(registry.meta("web_search")?.capabilities).toEqual(["web.read"]);
     expect(registry.meta("ask_owner")?.amountUsd?.({ amountUsd: 42 })).toBe(42);
     expect(registry.meta("ask_owner")?.amountUsd?.({})).toBeUndefined();
+    // [sunshine:reply-guard] Both text the owner, so they count as the reply when the owner is the audience.
+    expect(registry.meta("notify_owner")?.replyTarget?.({ text: "x" })).toBe("owner");
+    expect(registry.meta("ask_owner")?.replyTarget?.({ question: "x", summary: "y" })).toBe("owner");
+    expect(registry.all().filter((t) => t.spec.meta.replyTarget).map((t) => t.spec.name).sort()).toEqual(["ask_owner", "notify_owner"]);
   });
 });
 

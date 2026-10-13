@@ -200,7 +200,13 @@ function ownerTools({ approvals, config, outbox, audit }: CoreToolDeps): Registe
       summary: Type.String({ description: "One line describing what is being approved" }),
       amountUsd: Type.Optional(Type.Number({ description: "Money involved, if any" })),
     }),
-    meta: { capabilities: ["owner.relay"], group: "owner", amountUsd: (a) => argNumber(a, "amountUsd"), describe: (a) => `ask owner: ${argText(a, "summary")}` },
+    meta: {
+      capabilities: ["owner.relay"],
+      group: "owner",
+      amountUsd: (a) => argNumber(a, "amountUsd"),
+      describe: (a) => `ask owner: ${argText(a, "summary")}`,
+      replyTarget: () => "owner", // [sunshine:reply-guard]
+    },
     execute: async ({ question, summary, amountUsd }, ctx) => {
       const approval = approvals.create({
         conversationKey: ctx.conversationKey,
@@ -227,7 +233,12 @@ function ownerTools({ approvals, config, outbox, audit }: CoreToolDeps): Registe
     label: "Notify owner",
     description: "Send the owner a short text message. Use it to pass along a message from someone else or to flag something they should know.",
     parameters: Type.Object({ text: Type.String() }),
-    meta: { capabilities: ["owner.relay"], group: "owner", describe: (a) => `notify owner: ${argText(a, "text")}` },
+    meta: {
+      capabilities: ["owner.relay"],
+      group: "owner",
+      describe: (a) => `notify owner: ${argText(a, "text")}`,
+      replyTarget: () => "owner", // [sunshine:reply-guard]
+    },
     execute: async ({ text }, ctx) => {
       const prefix = ctx.principal.kind === "owner" ? "" : `${ctx.principal.displayName} via ${config.agent.name}: `;
       const sent = await sendOwner(`${prefix}${text}`, ctx);

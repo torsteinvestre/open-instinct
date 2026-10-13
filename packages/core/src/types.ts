@@ -276,4 +276,14 @@ export interface ToolMeta {
   amountUsd?: (args: unknown) => number | undefined;
   /** Short human description for the audit log. */
   describe?: (args: unknown) => string;
+  /**
+   * [sunshine:reply-guard] Who a successful call sends a text to: "current" for the conversation
+   * being answered, "owner" for the owner's phone, undefined for anyone else or for no text at
+   * all. When a call reached the run's own audience, the runtime does not also send its final
+   * reply. Any tool that can text the owner or the current conversation must declare this.
+   */
+  replyTarget?: (args: unknown) => ReplyTarget | undefined;
 }
+
+/** [sunshine:reply-guard] See ToolMeta.replyTarget. */
+export type ReplyTarget = "current" | "owner";

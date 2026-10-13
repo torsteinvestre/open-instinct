@@ -64,6 +64,9 @@ describe("buildSystemPrompt", () => {
     expect(buildSystemPrompt(input({ channel: "email" }))).toContain("normal prose");
     expect(buildSystemPrompt(input({ channel: "a2a" }))).toContain("agent-to-agent");
     expect(buildSystemPrompt(input({ channel: "scheduled" }))).toContain("started by a schedule");
+    // [sunshine:reply-guard]
+    expect(buildSystemPrompt(input({ channel: "scheduled" }))).toContain("that text is the message and your reply is not sent");
+    expect(buildSystemPrompt(input({ channel: "imessage" }))).toContain("Your reply is sent to this thread by itself");
   });
 
   it("omits empty memory and skills, includes them when present", () => {

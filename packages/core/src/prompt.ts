@@ -214,6 +214,10 @@ function channelSection(channel: Channel): string {
       lines.push(
         "This is a text thread. Keep replies short, like a capable friend texting. No markdown, no headings, no bullet lists, no bold. One idea per message. Use plain line breaks when you must list things. Ask one question at a time.",
       );
+      // [sunshine:reply-guard] A tool text to this thread replaces the reply, so a progress note would be all they get.
+      lines.push(
+        "Your reply is sent to this thread by itself. Do not also send it with send_message, and do not send progress notes like \"on it\" with a tool; they see a typing indicator while you work.",
+      );
       break;
     case "email":
       lines.push("This is email. Write normal prose with a greeting and a short sign-off as your agent name. Plain text, no markdown.");
@@ -226,6 +230,8 @@ function channelSection(channel: Channel): string {
       break;
     case "scheduled":
       lines.push("This run was started by a schedule, not a person. Do the job. If there is something worth telling your owner, write it as a short text message; otherwise reply with nothing.");
+      // [sunshine:reply-guard]
+      lines.push("If you text your owner with a tool, that text is the message and your reply is not sent, so do not repeat it or report on it there.");
       break;
     case "system":
       lines.push("This is an internal system prompt. Reply tersely.");

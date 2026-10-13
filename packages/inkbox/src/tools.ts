@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Type } from "typebox";
 import { defineTool, normalizeHandle, normalizePhone, phoneCountryOf, textResult } from "@open-instinct/core";
-import type { Contact, ContactStore, InstinctConfig, OutboundMessage, RegisteredTool, ToolContext, ToolResultLike } from "@open-instinct/core";
+import type { Contact, ContactStore, InstinctConfig, OutboundMessage, RegisteredTool, ReplyTarget, ToolContext, ToolResultLike } from "@open-instinct/core";
 import type { FileSend, InkboxChannel } from "./channel.js";
 import { parseConversationKey } from "./channel.js";
 
@@ -212,6 +212,23 @@ const reactParams = Type.Object({
   reaction: Type.String({ description: "love, like, dislike, laugh, emphasize or question." }),
 });
 
+/**
+ * [sunshine:reply-guard] Who send_message texts. No `to` is the conversation being answered; the
+ * owner by name or by their own phone is the owner's phone. Email, even to the owner, is another
+ * place ("email me the summary", then a reply saying it went), so it reports nothing.
+ */
+export function sendMessageReplyTarget(args: unknown, config: InstinctConfig): ReplyTarget | undefined {
+  const a = args as { to?: string; channel?: string };
+  const to = a.to?.trim();
+  if (!to) return "current";
+  if (a.channel === "email") return undefined;
+  if (to.toLowerCase() === "owner") return config.owner.phones.length > 0 ? "owner" : undefined;
+  if (!looksLikePhone(to)) return undefined;
+  const country = phoneCountryOf(config);
+  const phone = normalizePhone(to, country);
+  return config.owner.phones.some((p) => normalizePhone(p, country) === phone) ? "owner" : undefined;
+}
+
 export function messagingTools(deps: MessagingDeps): RegisteredTool[] {
   const sendMessage = defineTool({
     name: "send_message",
@@ -226,6 +243,7 @@ export function messagingTools(deps: MessagingDeps): RegisteredTool[] {
         const a = args as { to?: string; text?: string };
         return `send_message to ${a.to ?? "current conversation"}: ${(a.text ?? "").slice(0, 80)}`;
       },
+      replyTarget: (args) => sendMessageReplyTarget(args, deps.config), // [sunshine:reply-guard]
     },
     execute: async (args, ctx) => {
       const text = args.text.trim();

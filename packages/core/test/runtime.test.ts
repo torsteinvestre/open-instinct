@@ -1108,3 +1108,111 @@ describe("runScheduled", () => {
     expect(h.sent).toHaveLength(0);
   });
 });
+
+// [sunshine:reply-guard] One reply per run: a text the model sends with a tool to the run's own
+// audience is the reply, and its final text is not sent as well. Seen live: a reminder arrived
+// twice ("TIMER!!!" by notify_owner, then the same final text) or with a report after it
+// ("I sent Torstein the reminder ...").
+describe("[sunshine:reply-guard] one reply per run", () => {
+  /** A stand-in for send_message: texts the current conversation, or someone else with `to`. */
+  const sendTool = (sent: () => Outbox) =>
+    defineTool({
+      name: "send_text",
+      label: "Send text",
+      description: "send a text",
+      parameters: Type.Object({ text: Type.String(), to: Type.Optional(Type.String()) }),
+      meta: {
+        capabilities: ["converse"],
+        group: "messaging",
+        replyTarget: (a) => ((a as { to?: string }).to ? undefined : "current"),
+      },
+      execute: async (args, ctx) => {
+        const a = args as { text: string; to?: string };
+        await sent().send(a.to ? { channel: "imessage", to: a.to, text: a.text } : { channel: "imessage", conversationKey: ctx.deliveryKey ?? ctx.conversationKey, text: a.text }, { principal: ctx.principal, conversationKey: ctx.conversationKey });
+        return textResult("sent");
+      },
+    });
+
+  function withSendTool(): Harness {
+    let outbox: Outbox | undefined;
+    const h = harness({ withCoreTools: true, extraTools: [sendTool(() => outbox!)] });
+    outbox = h.deps.outbox;
+    return h;
+  }
+
+  const job = (h: Harness, prompt: string) => h.deps.scheduler.create({ name: "job", prompt, enabled: true, nextRunAt: new Date(Date.now() + 60_000).toISOString() });
+  const skipped = (h: Harness) => h.deps.audit.read({ kinds: ["policy"] }).filter((e) => e.detail.replyGuard);
+
+  it("a scheduled job that texts the owner with notify_owner sends one message, not the copy after it", async () => {
+    const h = harness({ withCoreTools: true });
+    h.faux.setResponses([toolTurn("notify_owner", { text: "TIMER!!!" }), textTurn("TIMER!!!")]);
+    await h.runtime.runScheduled(job(h, "Text the owner: TIMER!!!"));
+    expect(h.sent.map((s) => s.msg.text)).toEqual(["TIMER!!!"]);
+    expect(skipped(h)).toHaveLength(1);
+    expect(skipped(h)[0]!.detail.preview).toBe("TIMER!!!");
+  });
+
+  it("a scheduled job does not send its report about the reminder it already sent", async () => {
+    const h = harness({ withCoreTools: true });
+    h.faux.setResponses([toolTurn("notify_owner", { text: "Reminder: time to workout." }), textTurn('I sent Torstein the reminder: "Reminder: time to workout."')]);
+    await h.runtime.runScheduled(job(h, "Remind the owner to work out"));
+    expect(h.sent.map((s) => s.msg.text)).toEqual(["Reminder: time to workout."]);
+  });
+
+  it("a scheduled job's approval question is its one message", async () => {
+    const h = harness({ withCoreTools: true });
+    h.faux.setResponses([toolTurn("ask_owner", { question: "The flight dropped to $90. Book it? Reply YES or NO", summary: "book the $90 flight" }), textTurn("Asked about the flight.")]);
+    await h.runtime.runScheduled(job(h, "Watch the flight price"));
+    expect(h.sent).toHaveLength(1);
+    expect(h.sent[0]!.msg.text).toContain("Book it?");
+  });
+
+  it("a scheduled job that only replies still sends its reply, and texting someone else does not count", async () => {
+    const h = withSendTool();
+    h.faux.setResponses([toolTurn("send_text", { text: "Football at 6, Sam!", to: SAM_PHONE }), textTurn("Reminded Sam about football.")]);
+    await h.runtime.runScheduled(job(h, "Remind Sam about football and tell me"));
+    expect(h.sent.map((s) => s.msg.text)).toEqual(["Football at 6, Sam!", "Reminded Sam about football."]);
+    expect(skipped(h)).toHaveLength(0);
+  });
+
+  it("in the owner's text thread, a tool text to the thread is the reply", async () => {
+    const h = withSendTool();
+    h.faux.setResponses([toolTurn("send_text", { text: "Lock in." }), textTurn("Lock in. I also checked your reminders.")]);
+    await h.runtime.handleInbound(inbound({ channel: "imessage", from: OWNER_PHONE, conversationKey: "imessage:owner", text: "text me to lock in" }));
+    expect(h.sent.map((s) => s.msg.text)).toEqual(["Lock in."]);
+    expect(skipped(h)).toHaveLength(1);
+  });
+
+  it("in the owner's own text thread, notify_owner reaches that thread, so the final text is not sent too", async () => {
+    const h = harness({ withCoreTools: true });
+    h.faux.setResponses([toolTurn("notify_owner", { text: "Heads up: rain at 4." }), textTurn("Heads up: rain at 4.")]);
+    await h.runtime.handleInbound(inbound({ channel: "imessage", from: OWNER_PHONE, conversationKey: "imessage:owner", text: "tell me if it rains" }));
+    expect(h.sent.map((s) => s.msg.text)).toEqual(["Heads up: rain at 4."]);
+  });
+
+  it("in a contact's thread, relaying to the owner is not the reply: the contact still gets one", async () => {
+    const h = harness({ withCoreTools: true });
+    h.deps.contacts.upsert({ name: "Sam Lee", tier: "friend", phones: [SAM_PHONE] });
+    h.faux.setResponses([toolTurn("notify_owner", { text: "Sam says the game moved to 7." }), textTurn("I'll let Maria know.")]);
+    await h.runtime.handleInbound(inbound({ channel: "imessage", from: SAM_PHONE, conversationKey: "imessage:sam", text: "tell Maria the game moved to 7" }));
+    expect(h.sent.some((s) => s.msg.to === OWNER_PHONE)).toBe(true);
+    expect(h.sent.some((s) => s.msg.conversationKey === "imessage:sam" && s.msg.text === "I'll let Maria know.")).toBe(true);
+    expect(skipped(h)).toHaveLength(0);
+  });
+
+  it("in the dashboard chat, notify_owner goes to the phone and the chat still gets its reply", async () => {
+    const h = harness({ withCoreTools: true });
+    h.faux.setResponses([toolTurn("notify_owner", { text: "Test ping" }), textTurn("Sent you a test ping.")]);
+    const result = await h.runtime.handleInbound(inbound({ channel: "chat", from: "owner", conversationKey: "chat:main", text: "ping my phone" }));
+    expect(result.reply).toBe("Sent you a test ping.");
+    expect(skipped(h)).toHaveLength(0);
+  });
+
+  it("the flag is per run: the next message is answered normally", async () => {
+    const h = withSendTool();
+    h.faux.setResponses([toolTurn("send_text", { text: "Lock in." }), textTurn("Lock in."), textTurn("You asked me to text you.")]);
+    await h.runtime.handleInbound(inbound({ channel: "imessage", from: OWNER_PHONE, conversationKey: "imessage:owner", text: "text me to lock in", id: "m1" }));
+    await h.runtime.handleInbound(inbound({ channel: "imessage", from: OWNER_PHONE, conversationKey: "imessage:owner", text: "what did I ask?", id: "m2" }));
+    expect(h.sent.map((s) => s.msg.text)).toEqual(["Lock in.", "You asked me to text you."]);
+  });
+});

@@ -4,7 +4,7 @@ import { basename, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ContactStore, StateDir, defaultConfig, type InstinctConfig, type OutboundMessage, type Principal, type ToolContext } from "@open-instinct/core";
 import type { FileSend, InkboxChannel } from "../src/channel.js";
-import { messagingTools, resolveTarget, sendFileTool, type MessagingDeps } from "../src/tools.js";
+import { messagingTools, resolveTarget, sendFileTool, sendMessageReplyTarget, type MessagingDeps } from "../src/tools.js";
 
 let dir: string;
 let contacts: ContactStore;
@@ -66,6 +66,21 @@ describe("resolveTarget", () => {
     const norwegian = { contacts, config: { ...config, owner: { ...config.owner, phones: ["+4745775184"] } } };
     expect(resolveTarget("912 34 567", norwegian)).toEqual({ channel: "imessage", to: "+4791234567", label: "+4791234567" });
     expect(resolveTarget("+46 70 123 45 67", norwegian)).toEqual({ channel: "imessage", to: "+46701234567", label: "+46701234567" });
+  });
+
+  // [sunshine:reply-guard]
+  it("send_message says who it texts, so the runtime does not send the final reply on top", () => {
+    expect(sendMessageReplyTarget({ text: "hi" }, config)).toBe("current");
+    expect(sendMessageReplyTarget({ to: "owner", text: "hi" }, config)).toBe("owner");
+    expect(sendMessageReplyTarget({ to: "(415) 555-0000", text: "hi" }, config)).toBe("owner");
+    expect(sendMessageReplyTarget({ to: "owner", channel: "email", text: "hi" }, config)).toBeUndefined();
+    expect(sendMessageReplyTarget({ to: "sam-lee", text: "hi" }, config)).toBeUndefined();
+    expect(sendMessageReplyTarget({ to: "+1 650 555 0001", text: "hi" }, config)).toBeUndefined();
+    expect(sendMessageReplyTarget({ to: "owner", text: "hi" }, { ...config, owner: { ...config.owner, phones: [] } })).toBeUndefined();
+    // Every messaging tool that can text a person declares it; the rest send no text.
+    const tools = messagingTools({ channel, contacts, config });
+    expect(tools.find((t) => t.spec.name === "send_message")?.spec.meta.replyTarget).toBeDefined();
+    expect(tools.filter((t) => t.spec.meta.replyTarget).map((t) => t.spec.name)).toEqual(["send_message"]);
   });
 
   it("refuses ambiguous names, unknown people and missing addresses", () => {

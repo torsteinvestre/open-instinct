@@ -41,12 +41,30 @@ export const TEXT_MAX_CHARS = 1200;
  */
 export const SAME_HEADLINE_OVERLAP = 0.7;
 
-/** The first JSON object in a reply, tolerating prose or code fences around it. */
+/**
+ * The first complete JSON object in a reply, tolerating prose, code fences, or a second object
+ * after it (seen live: Sonnet occasionally appends a remark or a corrected copy). Braces inside
+ * strings do not count.
+ */
 export function extractJson(text: string): unknown {
   const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start < 0 || end <= start) throw new Error("no JSON object in the reply");
-  return JSON.parse(text.slice(start, end + 1));
+  if (start < 0) throw new Error("no JSON object in the reply");
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "{") depth++;
+    else if (ch === "}" && --depth === 0) return JSON.parse(text.slice(start, i + 1));
+  }
+  throw new Error("the JSON object in the reply is not complete");
 }
 
 const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "");

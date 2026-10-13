@@ -11,8 +11,9 @@ const which = (process.argv[3] ?? "sonnet,haiku").split(",");
 const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
 if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set");
 const MODELS = {
-  sonnet: modelCall(resolveWatcherModel("anthropic/claude-sonnet-5-5"), { apiKey, reasoning: "medium" }),
-  haiku: modelCall(resolveWatcherModel("anthropic/claude-haiku-5-5"), { apiKey, reasoning: "low" }),
+  // SONNET_EFFORT / HAIKU_EFFORT try other reasoning levels; the defaults match boot.ts.
+  sonnet: modelCall(resolveWatcherModel("anthropic/claude-sonnet-5-5"), { apiKey, reasoning: process.env.SONNET_EFFORT ?? "medium" }),
+  haiku: modelCall(resolveWatcherModel("anthropic/claude-haiku-5-5"), { apiKey, reasoning: process.env.HAIKU_EFFORT ?? "low" }),
 };
 const now = "Tuesday 13 October 2026 at 14:00 (Europe/Oslo)";
 

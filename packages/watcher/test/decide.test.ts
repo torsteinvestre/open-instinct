@@ -6,6 +6,10 @@ describe("reading the models' answers", () => {
   it("finds the JSON even with prose or a code fence around it", () => {
     expect(extractJson('Here you go:\n```json\n{"pass": [1]}\n```')).toEqual({ pass: [1] });
     expect(() => extractJson("no json here")).toThrow(/no JSON/);
+    // Seen live: a second object or a remark after the answer; braces inside strings do not count.
+    expect(extractJson('{"note": "a {curly} remark", "keep": []}\n{"note": "corrected"}')).toEqual({ note: "a {curly} remark", keep: [] });
+    expect(extractJson('{"text": "say \\"hi\\" }"} trailing')).toEqual({ text: 'say "hi" }' });
+    expect(() => extractJson('{"text": "cut off')).toThrow(/not complete/);
   });
 
   it("keeps only real headline numbers from the screen", () => {

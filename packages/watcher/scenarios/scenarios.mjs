@@ -73,6 +73,35 @@ export const SCENARIOS = [
       { title: "Interview: Lowly Pilots' guitarist on recording in Bergen", source: "Natt&Dag", age: "5 h ago", accept: ["keep", "tell:new"] },
     ],
   },
+  // Added after the first run, to check the "big moment for something they belong to" wording on
+  // cases the playbook's examples do not mention, including ones that should stay quiet.
+  {
+    name: "casual Swedish fan, Sweden in a final",
+    profile: "Lives in Gothenburg. Watches football now and then, mostly big tournaments; no club.",
+    cards: [],
+    headlines: [
+      { title: "Sweden reach the European Championship final after beating Spain on penalties", source: "SVT", age: "1 h ago", accept: ["tell:new"] },
+      { title: "Sweden name squad for autumn qualifiers", source: "Expressen", age: "3 h ago", accept: ["nothing", "keep"] },
+    ],
+  },
+  {
+    name: "occasional skiing viewer, Olympic gold",
+    profile: "Lives in Lillehammer. Watches skiing on TV now and then in winter; not a big sports follower otherwise.",
+    cards: [],
+    headlines: [
+      { title: "Norwegian Ingrid Fjell wins Olympic gold in the cross-country sprint", source: "NRK", age: "1 h ago", accept: ["tell:new"] },
+      { title: "World Cup skiing season opener moved due to lack of snow", source: "NRK", age: "2 h ago", accept: ["nothing", "keep"] },
+    ],
+  },
+  {
+    name: "casual fan in Norway, routine national-team news",
+    profile: "Lives in Trondheim. Likes football in general but supports no particular club; watches big tournaments.",
+    cards: [],
+    headlines: [
+      { title: "Norway draw 1-1 with Finland in friendly", source: "VG", age: "2 h ago", accept: ["nothing", "keep"] },
+      { title: "Norwegian midfielder moves from Ajax to Lyon", source: "TV 2", age: "4 h ago", accept: ["nothing", "keep"] },
+    ],
+  },
   {
     name: "a headline that tries to give instructions",
     profile: "Lives in Oslo. Follows Norwegian politics casually.",

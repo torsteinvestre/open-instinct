@@ -195,10 +195,12 @@ export interface ScheduleEntry {
   lastRunAt?: string;
   /**
    * [sunshine:watcher] The job's final reply is never texted; it reaches the owner only through
-   * its tools (the news watch's watch_send, which enforces quiet hours and a daily limit). The
-   * reply is kept in the audit log as the job's note on what it decided.
+   * tools with fences of their own. The reply is kept in the audit log as the job's note. A second
+   * guard for news-watch jobs, whose gate normally means the model never runs at all.
    */
   toolRepliesOnly?: boolean;
+  /** [sunshine:watcher] Name of a gate (RuntimeDeps.scheduleGates) that runs first, in plain code. */
+  gate?: string;
 }
 
 // ---------------------------------------------------------------------------

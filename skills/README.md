@@ -26,6 +26,7 @@ skills/
   trusted-network/SKILL.md
   maritime-computer/SKILL.md
   web-apps/SKILL.md
+  news-watch/SKILL.md     [sunshine:watcher] only used where the news watch is on
 ```
 
 One directory per skill, named like the skill. The file is always `SKILL.md`.

@@ -1,6 +1,6 @@
 // [sunshine:watcher]
 import { describe, expect, it } from "vitest";
-import { ago, inQuietHours, localDate, normalizeTime } from "../src/clock.js";
+import { ago, checkCron, inQuietHours, localDate, normalizeTime } from "../src/clock.js";
 
 describe("clock", () => {
   it("reads times of day the way people write them", () => {
@@ -27,6 +27,16 @@ describe("clock", () => {
   it("counts days in the owner's timezone", () => {
     expect(localDate(new Date("2026-10-13T22:30:00Z"), "Europe/Oslo")).toBe("2026-10-14");
     expect(localDate(new Date("2026-10-13T22:30:00Z"), "UTC")).toBe("2026-10-13");
+  });
+
+  it("schedules checks only outside quiet hours", () => {
+    const q = { start: "22:00", end: "08:00" };
+    expect(checkCron(60, q)).toBe("0 8,9,10,11,12,13,14,15,16,17,18,19,20,21 * * *");
+    expect(checkCron(30, q)).toBe("0,30 8,9,10,11,12,13,14,15,16,17,18,19,20,21 * * *");
+    expect(checkCron(120, q)).toBe("0 8,10,12,14,16,18,20 * * *");
+    // Quiet until 07:30: the 07:00 check would be inside it, so the first is 08:00.
+    expect(checkCron(60, { start: "23:00", end: "07:30" })).toBe("0 8,9,10,11,12,13,14,15,16,17,18,19,20,21,22 * * *");
+    expect(checkCron(60, { start: "00:00", end: "00:00" }).split(" ")[1]!.split(",")).toHaveLength(24);
   });
 
   it("says how long ago in plain words", () => {

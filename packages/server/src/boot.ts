@@ -34,7 +34,8 @@ import { ComposioApps, DEFAULT_TOOLKITS, OPENAI_COMPLETIONS_TOOL_LIMIT, appsGuid
 import { ampleTools, type AmpleCredentials } from "@open-instinct/ample";
 import { contextTools } from "@open-instinct/context";
 import { networkTools } from "@open-instinct/network";
-import { watcherTools } from "@open-instinct/watcher"; // [sunshine:watcher]
+// [sunshine:watcher]
+import { DEFAULT_DECIDE_MODEL, DEFAULT_SCREEN_MODEL, WATCH_GATE, createWatcher, modelCall, resolveWatcherModel, stepModelSpec, type Watcher } from "@open-instinct/watcher";
 import { ChatAwareOutbox, ConsoleOutbox, type ChatReplyBuffer } from "./console-outbox.js";
 import { fileTools, resolveInsideWorkspace } from "./file-tools.js";
 import { describeDataPart, promptExtraFor } from "./hooks.js";
@@ -286,21 +287,36 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
     }),
   );
 
-  // [sunshine:watcher] The news watch, only where the operator turned it on. Each owner then
-  // switches their own checks on; without a TypeSafe key the checks run without the Jev filter.
+  // [sunshine:watcher] The news watch, only where the operator turned it on (INSTINCT_WATCHER=1).
+  // Checks run in code through a schedule gate and never wake the agent; the two model steps are
+  // settings (WATCHER_SCREEN_MODEL, WATCHER_DECIDE_MODEL, "off" switches one off).
+  let watcher: Watcher | undefined;
   if (env.INSTINCT_WATCHER === "1") {
-    registry.registerMany(
-      watcherTools({
+    watcher = await safely(log, "watcher", () => {
+      const step = (value: string | undefined, fallback: string, reasoning: "low" | "medium") => {
+        const spec = stepModelSpec(value, fallback);
+        if (!spec) return undefined;
+        const model = resolveWatcherModel(spec, env);
+        const apiKey = apiKeyFor(model.provider, env);
+        return modelCall(model, { reasoning, ...(apiKey ? { apiKey } : {}) });
+      };
+      const screen = step(env.WATCHER_SCREEN_MODEL, DEFAULT_SCREEN_MODEL, "low");
+      const decide = step(env.WATCHER_DECIDE_MODEL, DEFAULT_DECIDE_MODEL, "medium");
+      const w = createWatcher({
         state,
         config,
         outbox,
         audit,
         scheduler,
         ...(env.TYPESAFE_API_KEY?.trim() ? { typesafeApiKey: env.TYPESAFE_API_KEY.trim() } : {}),
+        ...(screen ? { screen } : {}),
+        ...(decide ? { decide } : {}),
         ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
-      }),
-    );
-    log(`watcher: on (${env.TYPESAFE_API_KEY?.trim() ? "Jev filter" : "no TYPESAFE_API_KEY, so no filter"})`);
+      });
+      registry.registerMany(w.tools);
+      log(`watcher: on (${env.TYPESAFE_API_KEY?.trim() ? "Jev filter" : "no TYPESAFE_API_KEY, so no filter"}; screen ${screen ? stepModelSpec(env.WATCHER_SCREEN_MODEL, DEFAULT_SCREEN_MODEL) : "off"}, decide ${decide ? stepModelSpec(env.WATCHER_DECIDE_MODEL, DEFAULT_DECIDE_MODEL) : "off"})`);
+      return w;
+    });
   }
 
   // Payments: a Stripe Link agent wallet, when the Link OAuth client and Stripe key are set.
@@ -366,7 +382,9 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
         wallet: wallet ? { connected: wallet.isConnected() } : undefined,
       }),
     ...(env.INSTINCT_REPLY_BUDGET_MS ? { replyBudgetMs: Number(env.INSTINCT_REPLY_BUDGET_MS) } : {}),
+    ...(watcher ? { scheduleGates: { [WATCH_GATE]: watcher.gate } } : {}), // [sunshine:watcher]
   });
+  watcher?.ensureStarted(); // [sunshine:watcher] before the scheduler and the Maritime push read the jobs
 
   const stopScheduler = scheduler.start((entry) => runtime.runScheduled(entry));
 

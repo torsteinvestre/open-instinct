@@ -324,6 +324,9 @@ importers:
 
   packages/watcher:
     dependencies:
+      '@earendil-works/pi-ai':
+        specifier: ^1.0.1
+        version: 1.0.1(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.10.2)(ws@8.22.0)(zod@4.6.5)
       '@open-instinct/core':
         specifier: workspace:*
         version: link:../core

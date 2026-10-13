@@ -74,6 +74,12 @@ export interface RuntimeDeps {
   setupSummary?: () => string | undefined;
   a2aStore?: A2AStore;
   loadA2ATask?: (taskId: string) => Promise<unknown>;
+  /**
+   * [sunshine:watcher] Gates for scheduled jobs that name one (`ScheduleEntry.gate`). A gate is
+   * plain code that runs first and says whether the model is needed at all; the news watch does
+   * its whole check there and never wakes the agent.
+   */
+  scheduleGates?: Record<string, (entry: ScheduleEntry) => Promise<boolean>>;
 }
 
 export interface HandleResult {
@@ -499,6 +505,23 @@ export class AgentRuntime {
   async runScheduled(entry: ScheduleEntry): Promise<void> {
     const principal = this.ownerPrincipal();
     const key = `scheduled:${entry.id}`;
+    // [sunshine:watcher] A gated job asks its gate first. No gate registered (the feature was
+    // switched off) means the job does nothing, rather than reaching the model unprepared.
+    if (entry.gate) {
+      const gate = this.deps.scheduleGates?.[entry.gate];
+      if (!gate) {
+        this.deps.audit.append({ kind: "policy", conversationKey: key, principal: principal.id, detail: { gate: entry.gate, skipped: "no such gate registered" } });
+        return;
+      }
+      let wake = false;
+      try {
+        wake = await gate(entry);
+      } catch (error) {
+        this.auditError(key, principal, error);
+        return;
+      }
+      if (!wake) return;
+    }
     const conv = this.conversation(key, principal);
     this.deps.audit.append({ kind: "schedule", conversationKey: key, principal: principal.id, detail: { id: entry.id, name: entry.name, fired: true } });
     let text = "";

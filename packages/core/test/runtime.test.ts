@@ -1313,6 +1313,45 @@ describe("[sunshine:silent-reply] the stay-quiet word", () => {
   });
 });
 
+// [sunshine:watcher] A gated job runs its gate (plain code) first; the model runs only if the gate says so.
+describe("[sunshine:watcher] gated scheduled jobs", () => {
+  const gated = (h: Harness, gate: string) =>
+    h.deps.scheduler.create({ name: "news watch", prompt: "News watch check", cron: "0 9 * * *", tz: "Europe/Oslo", enabled: true, gate, toolRepliesOnly: true });
+
+  it("does not wake the model when the gate says no", async () => {
+    const calls: string[] = [];
+    const h = harness({ deps: { scheduleGates: { watcher: async (e) => (calls.push(e.id), false) } } });
+    h.faux.setResponses([textTurn("should never be asked")]);
+    const job = gated(h, "watcher");
+    await h.runtime.runScheduled(job);
+    expect(calls).toEqual([job.id]);
+    expect(h.sent).toHaveLength(0);
+    expect(h.deps.audit.read({ kinds: ["schedule"] })).toHaveLength(0);
+  });
+
+  it("runs the job as usual when the gate says yes", async () => {
+    const h = harness({ deps: { scheduleGates: { watcher: async () => true } } });
+    h.faux.setResponses([textTurn("note for the log")]);
+    await h.runtime.runScheduled(gated(h, "watcher"));
+    expect(h.deps.audit.read({ kinds: ["schedule"] })).toHaveLength(1);
+    expect(h.sent).toHaveLength(0); // toolRepliesOnly: the reply is a note, not a text
+  });
+
+  it("does nothing when the feature that owns the gate is switched off, and says why", async () => {
+    const h = harness();
+    h.faux.setResponses([textTurn("should never be asked")]);
+    await h.runtime.runScheduled(gated(h, "watcher"));
+    expect(h.sent).toHaveLength(0);
+    expect(h.deps.audit.read({ kinds: ["policy"] }).some((e) => e.detail.skipped === "no such gate registered")).toBe(true);
+  });
+
+  it("logs a gate that fails and goes on", async () => {
+    const h = harness({ deps: { scheduleGates: { watcher: async () => { throw new Error("feed down"); } } } });
+    await h.runtime.runScheduled(gated(h, "watcher"));
+    expect(h.deps.audit.read({ kinds: ["error"] }).some((e) => String(e.detail.message).includes("feed down"))).toBe(true);
+  });
+});
+
 // [sunshine:watcher] A news-watch job texts only through its tools (watch_send enforces quiet hours
 // and a daily limit), so its final reply must never reach the owner, whatever the model writes.
 describe("[sunshine:watcher] jobs that text only through their tools", () => {

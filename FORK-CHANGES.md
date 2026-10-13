@@ -68,34 +68,59 @@ block. Scheduled runs then fall back to upstream's empty reply.
 
 **The coming watcher** relies on this: most of its checks should end in `NO_REPLY`.
 
-### `[sunshine:watcher]`: the news watch (in progress, off by default)
+### `[sunshine:watcher]`: the news watch (built, off by default)
 
-**Goal.** Sunshine texts its owner when something genuinely worth knowing happens in their
-interests, and otherwise stays silent. Plan: `~/sunshine-ops/WATCHER-PLAN.md` (private notes).
-Principle: code for facts and fences, reasoning for taste.
+**Goal.** Sunshine texts its owner soon after something genuinely worth knowing happens in their
+interests, and otherwise stays silent. Plan and reasoning: `~/sunshine-ops/WATCHER-PLAN.md`
+(private notes). Principle: code for facts and fences, reasoning for taste.
 
-**What is built (stage 1, code only).**
+**How a check works.** Every hour outside the owner's quiet hours (one scheduled job carrying
+`gate: "watcher"`), entirely in code, never waking the agent:
 
-- `packages/watcher` (new package): a written picture of the owner's interests plus searches
-  (`watcher.json` in the data dir); Google News RSS per search (last day, repeats skipped by link
-  and wording); a relevance sieve on Jev (`TYPESAFE_API_KEY`, one yes/no question per headline,
-  generous on purpose, never judges importance; without a key or when Jev fails the newest few go
-  through unsieved); seven owner-only tools: `watch_profile`, `watch_profile_update`, `watch_scan`,
-  `watch_send`, `watch_keep`, `watch_later`, `watch_settings`.
-- `watch_send` is the only door: quiet hours (the owner's own, default 22:00-08:00, in their
-  timezone), a hidden limit of 6 a day, never the same link twice. Refusals are logged.
-- `watch_settings` turns the checks on (default 09:00 and 18:00, owner's timezone) as ordinary
-  schedules marked `toolRepliesOnly`.
-- Core: `ScheduleEntry.toolRepliesOnly`. Such a job's final reply is never texted; it is logged as
-  the job's note on what it decided (`runtime.ts`, `runScheduled`).
-- Server: the tools are registered only when `INSTINCT_WATCHER=1` (`boot.ts`). Unset, nothing changes.
-- Both Dockerfiles copy the new package's manifest (the gateway image installs the server package).
+1. Fences: off, quiet hours, a daily model-call budget.
+2. Collect: Google News RSS per search, last day only, headlines already seen skipped (by link
+   and wording); Jev (`TYPESAFE_API_KEY`) removes the clearly off-topic, one yes/no per headline.
+3. Screen (step 1, Claude Haiku 5.5): removes clear noise, generous on purpose.
+4. Decide (step 2, Claude Sonnet 5.5): the playbook. Tell now / keep for later / nothing, plus the
+   text and a story card per story ("new", or an update to an existing card with what changed).
+5. The door (code): refuses an article already told, an update with nothing changed, or a "new"
+   story that reads almost like a told one (unless the model says how it differs); one retry with
+   the reason, else nothing is sent. Then quiet hours and a hidden limit of 6 texts a day.
 
-**Not built yet.** The `news-watch` skill (the playbook the scheduled runs follow), the one-time
-interest question in onboarding, and the gateway passing `TYPESAFE_API_KEY` and `INSTINCT_WATCHER`.
+No new headline means no model call. A failed step 2 sends nothing and its headlines wait for the
+next check. Each check leaves one `policy` audit entry (`watcher: "check"`) with counts, outcome,
+note and cost. In conversation the agent has five owner-only tools: `watch_profile`,
+`watch_profile_update`, `watch_check` (answers "anything new?" in its own reply), `watch_later`,
+`watch_settings`.
 
-**To remove.** Delete `packages/watcher`, and every block tagged `[sunshine:watcher]` (`boot.ts`,
-`server/package.json`, `types.ts`, `runtime.ts`, both Dockerfiles, tests), then `pnpm install`.
+**Where to change what.**
+
+| To change | Where |
+|---|---|
+| How the decision is made, examples, text style | `packages/watcher/src/prompts.ts` (`DECIDE_SYSTEM`; the screen's `SCREEN_SYSTEM` next to it) |
+| Which models, or one step off | env `WATCHER_SCREEN_MODEL`, `WATCHER_DECIDE_MODEL` (`off` disables a step) |
+| Haiku 5.5 description (Pi 1.0.1 lacks it) | `resolveWatcherModel` in `packages/watcher/src/models.ts` |
+| How often, quiet hours (per owner) | by text to Sunshine (`watch_settings`); defaults in `store.ts` / `clock.ts` |
+| Text limit, model budget, ask-after hours | constants at the top of `packages/watcher/src/check.ts` |
+| Jev threshold, how many headlines per search | `DEFAULTS` in `packages/watcher/src/scan.ts` |
+| "Reads almost like a told story" threshold | `SAME_HEADLINE_OVERLAP` in `packages/watcher/src/decide.ts` |
+| How Sunshine keeps the picture, reacts to feedback | `skills/news-watch/SKILL.md` |
+| The interest question in the welcome chat | `skills/onboarding/SKILL.md` (tagged step 3) |
+| Test scenarios (real models, costs cents) | `packages/watcher/scenarios/` |
+
+**Core and server pieces.** `ScheduleEntry.gate` and `RuntimeDeps.scheduleGates` (a gated job
+runs plain code first; a gate that is not registered makes the job do nothing),
+`ScheduleEntry.toolRepliesOnly` (a second guard: such a job's final reply is never texted),
+both in `core/src/types.ts` and `runtime.ts`. `server/src/boot.ts` creates the watcher only when
+`INSTINCT_WATCHER=1`; unset, the agent is unchanged. On first boot with the switch on, the
+owner's checks start by themselves; with no interests after a day, it asks once.
+
+**Not done yet.** The gateway passing `INSTINCT_WATCHER` and `TYPESAFE_API_KEY` to new agents.
+The "second look" (opening the article): Google News links lead to a consent page in Europe.
+
+**To remove.** Delete `packages/watcher` and `skills/news-watch`, and every block tagged
+`[sunshine:watcher]` (`boot.ts`, `server/package.json`, `types.ts`, `runtime.ts`, both
+Dockerfiles, `skills/onboarding/SKILL.md`, `skills/README.md`, tests), then `pnpm install`.
 
 ### `[sunshine:timezone]`: agents get the owner's timezone
 

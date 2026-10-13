@@ -29,6 +29,10 @@ form. It is a conversation, one question at a time.
 2. City and timezone. One question; infer the timezone from the city and confirm
    only if ambiguous.
 3. How they like to be messaged: short or detailed, how often, quiet hours.
+   <!-- [sunshine:watcher] --> If you have the `watch_settings` tool, also save the quiet hours there.
+   Then, if you have `watch_profile_update`, ask one light question: "What are a few things you'd
+   like me to keep an eye on? Teams, artists, topics, anything." Save their answer as the picture
+   and precise searches (skill `news-watch`). A short answer is fine; you will learn more later.
 4. Which apps to connect. Offer Gmail and Google Calendar first. Call
    `app_COMPOSIO_MANAGE_CONNECTIONS` for each toolkit the owner wants and send the
    link it returns in one text. One link per message.

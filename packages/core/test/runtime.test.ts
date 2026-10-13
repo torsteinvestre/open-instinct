@@ -1100,14 +1100,6 @@ describe("runScheduled", () => {
     expect(h.deps.audit.read({ kinds: ["schedule"] })).toHaveLength(1);
   });
 
-  it("TEMP REPRO: a tool text plus the same final reply", async () => {
-    const h = harness({ withCoreTools: true });
-    const entry = h.deps.scheduler.create({ name: "timer", prompt: "Text the owner: TIMER!!!", enabled: true, nextRunAt: new Date(Date.now() + 60_000).toISOString() });
-    h.faux.setResponses([toolTurn("notify_owner", { text: "TIMER!!!" }), textTurn("TIMER!!!")]);
-    await h.runtime.runScheduled(entry);
-    console.log("REPRO sends to owner:", JSON.stringify(h.sent.map((s) => s.msg.text)));
-  });
-
   it("sends nothing when the model has nothing to say", async () => {
     const h = harness();
     const entry = h.deps.scheduler.create({ name: "quiet", prompt: "Check mail", enabled: true, nextRunAt: new Date(Date.now() + 60_000).toISOString() });

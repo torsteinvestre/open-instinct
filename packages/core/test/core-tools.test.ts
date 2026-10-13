@@ -122,6 +122,26 @@ describe("schedule tools", () => {
     expect(text(await run("schedule_delete", { id }))).toContain("No schedule");
     expect(text(await run("schedule_list", {}))).not.toContain("No schedules");
   });
+
+  it("lists a one-time reminder that already fired as done, so it is not scheduled again", async () => {
+    const { run, text, deps } = setup();
+    await run("schedule_create", { name: "timer", prompt: "Text me TIMER", at: "2026-10-04T18:00:00Z" });
+    await run("schedule_create", { name: "briefing", prompt: "Summarise my day", cron: "0 8 * * 1-5" });
+    const waiting = text(await run("schedule_list", {}));
+    expect(waiting).toMatch(/timer \| one-time \| waiting, next 2026-10-04T18:00:00\.000Z/);
+    expect(waiting).not.toContain("done");
+
+    const timer = deps.scheduler.list().find((e) => e.name === "timer")!;
+    const briefing = deps.scheduler.list().find((e) => e.name === "briefing")!;
+    deps.scheduler.markRan(timer.id, new Date("2026-10-04T18:00:05Z"));
+    deps.scheduler.markRan(briefing.id, new Date("2026-10-05T08:00:02Z"));
+
+    const after = text(await run("schedule_list", {}));
+    expect(after).toMatch(/timer \| one-time \| done, already sent at 2026-10-04T18:00:05\.000Z/);
+    expect(after).toMatch(/briefing \| cron 0 8 \* \* 1-5 America\/New_York \| waiting, next \S+, last sent 2026-10-05T08:00:02\.000Z/);
+    expect(after).toContain("They need no action");
+    expect(after).not.toContain("once at ?");
+  });
 });
 
 describe("owner relay tools", () => {

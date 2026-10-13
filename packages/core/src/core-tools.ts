@@ -14,7 +14,7 @@ import { wrapUntrusted } from "./prompt.js";
 import type { Outbox } from "./runtime.js";
 import type { Scheduler } from "./scheduler.js";
 import { defineTool, textResult, type RegisteredTool, type ToolContext, type ToolResultLike } from "./tools.js";
-import type { AuditKind, InstinctConfig } from "./types.js";
+import type { AuditKind, InstinctConfig, ScheduleEntry } from "./types.js";
 
 export interface CoreToolDeps {
   memory: MemoryStore;
@@ -139,15 +139,26 @@ function scheduleTools({ scheduler, config }: CoreToolDeps): RegisteredTool[] {
   const list = defineTool({
     name: "schedule_list",
     label: "List schedules",
-    description: "List scheduled jobs with ids, cron or next run, and enabled state.",
+    description: "List scheduled jobs with ids, cron or next run, and whether they are waiting, repeating or already done.",
     parameters: Type.Object({}),
     meta: { capabilities: ["schedule.manage"], group: "schedule" },
     execute: async () => {
       const entries = scheduler.list();
       if (entries.length === 0) return textResult("No schedules.");
-      const lines = entries.map(
-        (e) => `${e.id}: ${e.name ?? "(unnamed)"} | ${e.cron ? `cron ${e.cron} ${e.tz ?? ""}`.trim() : `once at ${e.nextRunAt ?? "?"}`} | next ${e.nextRunAt ?? "-"} | ${e.enabled ? "on" : "off"}`,
-      );
+      // A one-shot that has fired loses its next run and is switched off. Listed as "once at ? | off"
+      // it read as broken, and the model "fixed" it by scheduling it again; so say plainly it is done.
+      const done = (e: ScheduleEntry) => !e.cron && !e.enabled && e.lastRunAt !== undefined;
+      const lines = entries.map((e) => {
+        const kind = e.cron ? `cron ${e.cron} ${e.tz ?? ""}`.trim() : "one-time";
+        const last = e.lastRunAt ? `, last sent ${e.lastRunAt}` : "";
+        const state = done(e)
+          ? `done, already sent at ${e.lastRunAt}`
+          : e.enabled
+            ? `waiting, next ${e.nextRunAt ?? "-"}${last}`
+            : `off${last}`;
+        return `${e.id}: ${e.name ?? "(unnamed)"} | ${kind} | ${state}`;
+      });
+      if (entries.some(done)) lines.push("Entries marked done already went out. They need no action; delete them only if the owner asks.");
       return textResult(lines.join("\n"));
     },
   });

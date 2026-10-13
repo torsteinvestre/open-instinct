@@ -23,6 +23,7 @@ export interface ProvisionInput {
   phone: string;
   email?: string;
   handle: string;
+  timezone?: string; // [sunshine:timezone]
 }
 
 export interface MaritimeProvisionOptions {
@@ -117,6 +118,8 @@ export function agentEnvFor(user: UserRecord, deps: AgentEnvDeps): EnvVarInput[]
   ];
   if (deps.inkboxBaseUrl) env.push({ key: "INKBOX_BASE_URL", value: deps.inkboxBaseUrl, isSecret: false });
   if (user.email) env.push({ key: "INSTINCT_OWNER_EMAIL", value: user.email, isSecret: false });
+  // [sunshine:timezone] Without it the agent takes the server's zone (UTC), as `instinct deploy` already avoids.
+  if (user.timezone) env.push({ key: "INSTINCT_OWNER_TIMEZONE", value: user.timezone, isSecret: false });
   // Only a brand names the agent; without one, core's default name stays.
   if (deps.brand) env.push({ key: "INSTINCT_AGENT_NAME", value: deps.brand.agent, isSecret: false });
   if (deps.anthropicApiKey) env.push({ key: "ANTHROPIC_API_KEY", value: deps.anthropicApiKey, isSecret: true });
@@ -247,6 +250,7 @@ function blankRecord(input: ProvisionInput, id: string): UserRecord {
     status: "provisioning",
   };
   if (input.email) rec.email = input.email;
+  if (input.timezone) rec.timezone = input.timezone; // [sunshine:timezone]
   return rec;
 }
 

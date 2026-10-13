@@ -225,7 +225,7 @@ function channelSection(channel: Channel): string {
         "Your reply is sent to this thread by itself. Do not also send it with send_message, and do not send progress notes like \"on it\" with a tool; they see a typing indicator while you work.",
       );
       // [sunshine:reply-guard] A captioned file is the reply too, so anything said after it is not sent.
-      lines.push("A file you send here with send_file and a caption is your reply: put what you want to say in the caption.");
+      lines.push("A file you send here with send_file and a caption is your reply: put everything you want to say in the caption, including any question or offer.");
       break;
     case "email":
       lines.push("This is email. Write normal prose with a greeting and a short sign-off as your agent name. Plain text, no markdown.");

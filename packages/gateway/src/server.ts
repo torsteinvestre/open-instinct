@@ -326,6 +326,7 @@ export function createGateway(opts: GatewayOptions): GatewayServer {
       phone: value.phone,
       ...(value.email ? { email: value.email } : {}),
       handle: value.handle,
+      ...(value.timezone ? { timezone: value.timezone } : {}), // [sunshine:timezone]
       identityId: "",
       identityApiKey: "",
       signingKey: "",

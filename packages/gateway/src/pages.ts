@@ -119,6 +119,12 @@ export interface LandingOptions extends PageOptions {
   autoHandle?: boolean;
 }
 
+/**
+ * [sunshine:timezone] Fills the hidden field with the browser's zone, so the agent's clock matches the
+ * person's. Without JavaScript the field stays empty and the gateway falls back to the country's zone.
+ */
+const TIMEZONE_SCRIPT = `try{var tz=document.getElementById("timezone");if(tz&&!tz.value)tz.value=Intl.DateTimeFormat().resolvedOptions().timeZone||""}catch(e){}`;
+
 function countryOptions(picked: string): string {
   const options = SIGNUP_COUNTRIES.map(
     (c) => `<option value="${c.code}"${c.code === picked ? " selected" : ""}>${c.flag} ${escapeHtml(c.name)} (${c.dial})</option>`,
@@ -162,8 +168,10 @@ export function renderLanding(opts: LandingOptions): string {
   ${err("email")}
   ${handleField}
   ${inviteField}
+  <input type="hidden" id="timezone" name="timezone" value="${v("timezone")}">
   <button class="btn" type="submit">Create my ${escapeHtml(brand.agent)}</button>
-</form>`
+</form>
+<script>${TIMEZONE_SCRIPT}</script>`
     : `<div class="card"><p class="muted" style="margin:0">Signups are closed here.</p></div>`;
 
   return layout(brand.product, `<h1>Your own personal agent.</h1>\n${form}`, { brand: opts.brand, enter: true });

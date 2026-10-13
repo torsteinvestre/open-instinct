@@ -68,6 +68,32 @@ block. Scheduled runs then fall back to upstream's empty reply.
 
 **The coming watcher** relies on this: most of its checks should end in `NO_REPLY`.
 
+### `[sunshine:timezone]`: agents get the owner's timezone
+
+**Problem.** Agents created by the gateway ran in UTC: the gateway never passed
+`INSTINCT_OWNER_TIMEZONE`, so core fell back to the server's zone. Relative timers were right, but
+times in texts were 2 hours off in Norway and clock-time reminders ("every day at 8") fired late.
+Upstream's own `instinct deploy` already passes the timezone; only the gateway missed it.
+
+**What the fork adds.**
+
+- The signup form has a hidden `timezone` field that the browser fills
+  (`Intl.DateTimeFormat().resolvedOptions().timeZone`). Nothing visible changes.
+- The gateway keeps it only if it is a real IANA zone. `UTC` and `Etc/*` count as unknown, since
+  privacy modes report UTC. Otherwise it falls back to the picked country's single zone (NO, SE, GB).
+  The US and "Other" get no fallback. A bad value never fails a signup.
+- The zone is saved on the user record and sent to the new agent as `INSTINCT_OWNER_TIMEZONE`.
+
+**Existing agents are not changed by this.** Core reads the env var only on first boot; after that,
+`/data/config.json` wins. Change `owner.timezone` there and restart the agent.
+
+**Files.** `packages/gateway/src/validate.ts` (`placeTimezone`, `signupTimezone`, country zones),
+`pages.ts` (hidden field and script), `server.ts`, `store.ts`, `provision.ts`, and tests in
+`packages/gateway/test`.
+
+**To remove.** Revert its commit (`git log --grep "timezone"`), or delete every tagged block. New
+agents then run in UTC again.
+
 ## Earlier changes (not tagged; find them by commit)
 
 Ordered from most to least likely to cause trouble. `git show <commit>` shows a change in full;
@@ -127,5 +153,4 @@ Ordered from most to least likely to cause trouble. `git show <commit>` shows a 
 
 ## Known upstream issues not fixed here yet
 
-- Cloud agents run in UTC: the gateway never passes the owner's timezone.
 - `instinct dev --tunnel` logs a harmless "409 already delivers" when restarted.

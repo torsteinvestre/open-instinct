@@ -245,6 +245,10 @@ describe("gateway http", () => {
     expect(user.phone).toBe("+4745775184");
     expect(user.handle).toMatch(/^sunshine-bjorn-[a-z0-9]{4}$/);
     expect((mar.calls.find((c) => c.method === "POST")?.body as Record<string, unknown>)["desktop"]).toBe(false);
+    // [sunshine:timezone] No browser zone sent, so Norway's own zone reaches the new agent.
+    expect(user.timezone).toBe("Europe/Oslo");
+    const created = mar.calls.find((c) => c.method === "POST")?.body as { initialEnvVars: Array<{ key: string; value: string }> };
+    expect(created.initialEnvVars.find((e) => e.key === "INSTINCT_OWNER_TIMEZONE")?.value).toBe("Europe/Oslo");
     const connect = await (await fetch(`${base}/connect/${userId}`)).text();
     expect(connect).toContain(`connect @${user.handle}`);
     expect(connect).toContain("Connect to Sunshine");

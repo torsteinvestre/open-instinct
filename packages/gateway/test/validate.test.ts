@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { renderLanding } from "../src/pages.js";
-import { HANDLE_RE, autoHandle, normalizeHandle, normalizePhone, secretMatches, validateSignup } from "../src/validate.js";
+import { HANDLE_RE, autoHandle, normalizeHandle, normalizePhone, placeTimezone, secretMatches, signupTimezone, validateSignup } from "../src/validate.js";
 
 describe("validateSignup", () => {
   it("normalizes and accepts a good signup", () => {
@@ -84,6 +84,48 @@ describe("validateSignup", () => {
   it("uses the gateway's default country when the signup names none", () => {
     const r = validateSignup({ name: "S", handle: "sam", phone: "457 75 184" }, { defaultCountry: "NO" });
     expect(r.ok && r.value.phone).toBe("+4745775184");
+  });
+});
+
+// [sunshine:timezone] Agents ran in UTC because signup never said where the person lives.
+describe("[sunshine:timezone] signup timezone", () => {
+  it("accepts real zones in their canonical spelling and refuses the rest", () => {
+    expect(placeTimezone("Europe/Oslo")).toBe("Europe/Oslo");
+    expect(placeTimezone(" America/Los_Angeles ")).toBe("America/Los_Angeles");
+    expect(placeTimezone("europe/oslo")).toBe("Europe/Oslo");
+    for (const bad of ["", "Mars/Olympus", "Europe/Oslo<script>", "x".repeat(65), undefined]) expect(placeTimezone(bad), String(bad)).toBeUndefined();
+  });
+
+  it("treats UTC as unknown, since privacy modes report it whatever the place", () => {
+    for (const zone of ["UTC", "Etc/UTC", "Etc/GMT+2"]) expect(placeTimezone(zone), zone).toBeUndefined();
+  });
+
+  it("prefers the browser, then the picked country's single zone", () => {
+    expect(signupTimezone("America/New_York", "NO")).toBe("America/New_York");
+    expect(signupTimezone("", "NO")).toBe("Europe/Oslo");
+    expect(signupTimezone("UTC", "SE")).toBe("Europe/Stockholm");
+    expect(signupTimezone(undefined, "GB")).toBe("Europe/London");
+    expect(signupTimezone(undefined, "US")).toBeUndefined();
+  });
+
+  it("puts the zone on the signup and never fails a signup over it", () => {
+    const browser = validateSignup({ name: "S", handle: "sam", country: "NO", phone: "912 34 567", timezone: "Europe/Oslo" });
+    expect(browser.ok && browser.value.timezone).toBe("Europe/Oslo");
+    const fallback = validateSignup({ name: "S", handle: "sam", country: "SE", phone: "070-123 45 67", timezone: "garbage" });
+    expect(fallback.ok && fallback.value.timezone).toBe("Europe/Stockholm");
+    const other = validateSignup({ name: "S", handle: "sam", country: "other", phone: "+351 912 345 678" });
+    expect(other.ok).toBe(true);
+    expect(other.ok && other.value.timezone).toBeUndefined();
+    const us = validateSignup({ name: "S", handle: "sam", country: "US", phone: "(415) 555-0123" });
+    expect(us.ok && "timezone" in us.value).toBe(false);
+  });
+
+  it("the form carries a hidden timezone field the browser fills, kept after an error", () => {
+    const page = renderLanding({ signupEnabled: true, requireInvite: false });
+    expect(page).toContain('<input type="hidden" id="timezone" name="timezone" value="">');
+    expect(page).toContain("resolvedOptions().timeZone");
+    const again = renderLanding({ signupEnabled: true, requireInvite: false, values: { timezone: "Europe/Oslo" } });
+    expect(again).toContain('name="timezone" value="Europe/Oslo"');
   });
 });
 

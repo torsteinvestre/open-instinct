@@ -130,6 +130,12 @@ describe("provisionUser", () => {
     expect(env.find((e) => e.key === "INSTINCT_AGENT_NAME")?.value).toBe("Sunshine");
   });
 
+  // [sunshine:timezone]
+  it("seeds the agent's clock with the signup's timezone", () => {
+    const env = agentEnvFor(readyUser({ timezone: "Europe/Oslo" }), { maritime: { apiKey: "k", agentImage: "img" } });
+    expect(env.find((e) => e.key === "INSTINCT_OWNER_TIMEZONE")).toEqual({ key: "INSTINCT_OWNER_TIMEZONE", value: "Europe/Oslo", isSecret: false });
+  });
+
   it("omits optional env when not configured", () => {
     const env = agentEnvFor(readyUser({ email: undefined }), { maritime: { apiKey: "k", agentImage: "img" } });
     const keys = env.map((e) => e.key);
@@ -140,6 +146,7 @@ describe("provisionUser", () => {
     expect(keys).not.toContain("INSTINCT_MODEL");
     expect(keys).not.toContain("LINK_CLIENT_ID");
     expect(keys).not.toContain("INSTINCT_AGENT_NAME");
+    expect(keys).not.toContain("INSTINCT_OWNER_TIMEZONE"); // [sunshine:timezone]
     expect(maritimeCreateBody(readyUser(), { maritime: { apiKey: "k", agentImage: "img", idleTtlSeconds: 60 } })["idleTtlSeconds"]).toBe(60);
     expect(webhookUrlFor("https://gw.example.com///", "usr x")).toBe("https://gw.example.com/webhooks/inkbox/usr%20x");
   });

@@ -8,6 +8,8 @@ export interface UserRecord {
   phone: string;
   email?: string;
   handle: string;
+  /** [sunshine:timezone] IANA zone from signup; seeds the agent's clock on first boot. */
+  timezone?: string;
   identityId: string;
   identityApiKey: string;
   signingKey: string;

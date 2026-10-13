@@ -4,11 +4,14 @@ import { isReservedHandle, normalizePhone as normalizeCorePhone, parsePhone, typ
 export const HANDLE_RE = /^[a-z0-9-]{3,40}$/;
 export const E164_RE = /^\+[1-9]\d{6,14}$/;
 
-/** The form's country list. A number written with + or 00 keeps its own country whatever is picked. */
-export const SIGNUP_COUNTRIES: ReadonlyArray<{ code: PhoneCountry; flag: string; name: string; dial: string; example: string }> = [
-  { code: "NO", flag: "🇳🇴", name: "Norway", dial: "+47", example: "912 34 567" },
-  { code: "SE", flag: "🇸🇪", name: "Sweden", dial: "+46", example: "070-123 45 67" },
-  { code: "GB", flag: "🇬🇧", name: "United Kingdom", dial: "+44", example: "07400 123456" },
+/**
+ * The form's country list. A number written with + or 00 keeps its own country whatever is picked.
+ * [sunshine:timezone] `timezone` is the fallback when the browser does not say; a country with several has none.
+ */
+export const SIGNUP_COUNTRIES: ReadonlyArray<{ code: PhoneCountry; flag: string; name: string; dial: string; example: string; timezone?: string }> = [
+  { code: "NO", flag: "🇳🇴", name: "Norway", dial: "+47", example: "912 34 567", timezone: "Europe/Oslo" },
+  { code: "SE", flag: "🇸🇪", name: "Sweden", dial: "+46", example: "070-123 45 67", timezone: "Europe/Stockholm" },
+  { code: "GB", flag: "🇬🇧", name: "United Kingdom", dial: "+44", example: "07400 123456", timezone: "Europe/London" },
   { code: "US", flag: "🇺🇸", name: "United States", dial: "+1", example: "(415) 555-0123" },
 ];
 
@@ -28,6 +31,8 @@ export interface SignupValue {
   phone: string;
   email?: string;
   handle: string;
+  /** [sunshine:timezone] IANA zone for the agent's clock; absent leaves core's default (the server's, UTC on Maritime). */
+  timezone?: string;
 }
 
 export type SignupValidation =
@@ -81,6 +86,27 @@ function str(v: unknown): string {
   return typeof v === "string" ? v.trim() : "";
 }
 
+/**
+ * [sunshine:timezone] A real IANA zone in its canonical spelling, or undefined. UTC and Etc/* say
+ * nothing about where someone lives (privacy modes report UTC), so they count as unknown.
+ */
+export function placeTimezone(raw: string | undefined): string | undefined {
+  const s = (raw ?? "").trim();
+  if (!s || s.length > 64 || !/^[A-Za-z0-9_+\-/]+$/.test(s)) return undefined;
+  let zone: string;
+  try {
+    zone = new Intl.DateTimeFormat("en-US", { timeZone: s }).resolvedOptions().timeZone;
+  } catch {
+    return undefined;
+  }
+  return zone === "UTC" || zone.startsWith("Etc/") ? undefined : zone;
+}
+
+/** [sunshine:timezone] The browser's zone when it names a place, else the picked country's single zone. */
+export function signupTimezone(browser: string | undefined, country: PhoneCountry | undefined): string | undefined {
+  return placeTimezone(browser) ?? SIGNUP_COUNTRIES.find((c) => c.code === country)?.timezone;
+}
+
 export interface SignupRules {
   signupSecret?: string;
   defaultCountry?: PhoneCountry;
@@ -122,5 +148,8 @@ export function validateSignup(input: Record<string, unknown>, opts: SignupRules
   if (Object.keys(errors).length > 0) return { ok: false, errors };
   const value: SignupValue = { name, phone, handle: opts.autoHandle ? "" : handle };
   if (emailRaw) value.email = emailRaw;
+  // [sunshine:timezone] Never an error: the field is hidden, so a bad value just falls back.
+  const timezone = signupTimezone(str(input["timezone"]), other ? undefined : country);
+  if (timezone) value.timezone = timezone;
   return { ok: true, value };
 }

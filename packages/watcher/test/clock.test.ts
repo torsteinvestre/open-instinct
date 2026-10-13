@@ -1,0 +1,39 @@
+// [sunshine:watcher]
+import { describe, expect, it } from "vitest";
+import { ago, inQuietHours, localDate, normalizeTime } from "../src/clock.js";
+
+describe("clock", () => {
+  it("reads times of day the way people write them", () => {
+    expect(normalizeTime("9")).toBe("09:00");
+    expect(normalizeTime(" 9:30 ")).toBe("09:30");
+    expect(normalizeTime("21.05")).toBe("21:05");
+    for (const bad of ["24:00", "9:60", "abc", "", "9pm"]) expect(normalizeTime(bad), bad).toBeUndefined();
+  });
+
+  it("knows quiet hours in the owner's timezone, across midnight", () => {
+    const q = { start: "22:00", end: "08:00" };
+    expect(inQuietHours(new Date("2026-10-13T21:30:00Z"), "Europe/Oslo", q)).toBe(true); // 23:30 Oslo
+    expect(inQuietHours(new Date("2026-10-13T05:30:00Z"), "Europe/Oslo", q)).toBe(true); // 07:30 Oslo
+    expect(inQuietHours(new Date("2026-10-13T06:00:00Z"), "Europe/Oslo", q)).toBe(false); // 08:00 Oslo
+    expect(inQuietHours(new Date("2026-10-13T10:00:00Z"), "Europe/Oslo", q)).toBe(false); // 12:00 Oslo
+  });
+
+  it("treats equal start and end as no quiet hours, and a daytime window as daytime", () => {
+    expect(inQuietHours(new Date("2026-10-13T21:30:00Z"), "Europe/Oslo", { start: "00:00", end: "00:00" })).toBe(false);
+    expect(inQuietHours(new Date("2026-10-13T12:00:00Z"), "Europe/Oslo", { start: "13:00", end: "15:00" })).toBe(true); // 14:00 Oslo
+    expect(inQuietHours(new Date("2026-10-13T14:00:00Z"), "Europe/Oslo", { start: "13:00", end: "15:00" })).toBe(false); // 16:00 Oslo
+  });
+
+  it("counts days in the owner's timezone", () => {
+    expect(localDate(new Date("2026-10-13T22:30:00Z"), "Europe/Oslo")).toBe("2026-10-14");
+    expect(localDate(new Date("2026-10-13T22:30:00Z"), "UTC")).toBe("2026-10-13");
+  });
+
+  it("says how long ago in plain words", () => {
+    const now = new Date("2026-10-13T10:00:00Z");
+    expect(ago("2026-10-13T09:15:00Z", now)).toBe("45 min ago");
+    expect(ago("2026-10-13T07:00:00Z", now)).toBe("3 h ago");
+    expect(ago("2026-10-10T10:00:00Z", now)).toBe("3 days ago");
+    expect(ago(undefined, now)).toBe("time unknown");
+  });
+});

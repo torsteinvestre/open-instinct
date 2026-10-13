@@ -39,7 +39,8 @@
     "@open-instinct/core": "workspace:*",
     "@open-instinct/inkbox": "workspace:*",
     "@open-instinct/network": "workspace:*",
-    "@open-instinct/payments": "workspace:*"
+    "@open-instinct/payments": "workspace:*",
+    "@open-instinct/watcher": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

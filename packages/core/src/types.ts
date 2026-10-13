@@ -193,6 +193,12 @@ export interface ScheduleEntry {
   prompt: string;
   createdAt: string;
   lastRunAt?: string;
+  /**
+   * [sunshine:watcher] The job's final reply is never texted; it reaches the owner only through
+   * its tools (the news watch's watch_send, which enforces quiet hours and a daily limit). The
+   * reply is kept in the audit log as the job's note on what it decided.
+   */
+  toolRepliesOnly?: boolean;
 }
 
 // ---------------------------------------------------------------------------

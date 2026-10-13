@@ -22,6 +22,8 @@ COPY packages/network/package.json packages/network/
 COPY packages/payments/package.json packages/payments/
 COPY packages/ample/package.json packages/ample/
 COPY packages/server/package.json packages/server/
+# [sunshine:watcher]
+COPY packages/watcher/package.json packages/watcher/
 COPY packages/gateway/package.json packages/gateway/
 COPY packages/cli/package.json packages/cli/
 RUN pnpm install --frozen-lockfile

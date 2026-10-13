@@ -514,6 +514,11 @@ export class AgentRuntime {
       this.recordSilentReply(key, principal);
       return;
     }
+    // [sunshine:watcher] This job texts only through its tools' fences; its reply is a note for the log.
+    if (entry.toolRepliesOnly) {
+      this.deps.audit.append({ kind: "policy", conversationKey: key, principal: principal.id, detail: { toolRepliesOnly: "final reply not sent: this job texts only through its tools", chars: text.length, note: text.slice(0, 1000) } });
+      return;
+    }
     // [sunshine:reply-guard] The job already texted the owner with a tool; send nothing more.
     if (conv.repliedViaTool) {
       this.recordSkippedReply(key, principal, text);

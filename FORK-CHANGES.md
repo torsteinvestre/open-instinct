@@ -68,6 +68,35 @@ block. Scheduled runs then fall back to upstream's empty reply.
 
 **The coming watcher** relies on this: most of its checks should end in `NO_REPLY`.
 
+### `[sunshine:watcher]`: the news watch (in progress, off by default)
+
+**Goal.** Sunshine texts its owner when something genuinely worth knowing happens in their
+interests, and otherwise stays silent. Plan: `~/sunshine-ops/WATCHER-PLAN.md` (private notes).
+Principle: code for facts and fences, reasoning for taste.
+
+**What is built (stage 1, code only).**
+
+- `packages/watcher` (new package): a written picture of the owner's interests plus searches
+  (`watcher.json` in the data dir); Google News RSS per search (last day, repeats skipped by link
+  and wording); a relevance sieve on Jev (`TYPESAFE_API_KEY`, one yes/no question per headline,
+  generous on purpose, never judges importance; without a key or when Jev fails the newest few go
+  through unsieved); seven owner-only tools: `watch_profile`, `watch_profile_update`, `watch_scan`,
+  `watch_send`, `watch_keep`, `watch_later`, `watch_settings`.
+- `watch_send` is the only door: quiet hours (the owner's own, default 22:00-08:00, in their
+  timezone), a hidden limit of 6 a day, never the same link twice. Refusals are logged.
+- `watch_settings` turns the checks on (default 09:00 and 18:00, owner's timezone) as ordinary
+  schedules marked `toolRepliesOnly`.
+- Core: `ScheduleEntry.toolRepliesOnly`. Such a job's final reply is never texted; it is logged as
+  the job's note on what it decided (`runtime.ts`, `runScheduled`).
+- Server: the tools are registered only when `INSTINCT_WATCHER=1` (`boot.ts`). Unset, nothing changes.
+- Both Dockerfiles copy the new package's manifest (the gateway image installs the server package).
+
+**Not built yet.** The `news-watch` skill (the playbook the scheduled runs follow), the one-time
+interest question in onboarding, and the gateway passing `TYPESAFE_API_KEY` and `INSTINCT_WATCHER`.
+
+**To remove.** Delete `packages/watcher`, and every block tagged `[sunshine:watcher]` (`boot.ts`,
+`server/package.json`, `types.ts`, `runtime.ts`, both Dockerfiles, tests), then `pnpm install`.
+
 ### `[sunshine:timezone]`: agents get the owner's timezone
 
 **Problem.** Agents created by the gateway ran in UTC: the gateway never passed

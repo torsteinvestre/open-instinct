@@ -1312,3 +1312,36 @@ describe("[sunshine:silent-reply] the stay-quiet word", () => {
     expect(silenced(h)).toHaveLength(0);
   });
 });
+
+// [sunshine:watcher] A news-watch job texts only through its tools (watch_send enforces quiet hours
+// and a daily limit), so its final reply must never reach the owner, whatever the model writes.
+describe("[sunshine:watcher] jobs that text only through their tools", () => {
+  const watchJob = (h: Harness) =>
+    h.deps.scheduler.create({ name: "news watch 09:00", prompt: "Run the news-watch skill for the owner.", cron: "0 9 * * *", tz: "Europe/Oslo", enabled: true, toolRepliesOnly: true });
+  const notes = (h: Harness) => h.deps.audit.read({ kinds: ["policy"] }).filter((e) => e.detail.toolRepliesOnly);
+
+  it("keeps the final reply as a note in the log instead of texting it", async () => {
+    const h = harness();
+    h.faux.setResponses([textTurn("Checked 40 headlines; nothing worth a text. Kept one Brann friendly for later.")]);
+    await h.runtime.runScheduled(watchJob(h));
+    expect(h.sent).toHaveLength(0);
+    expect(notes(h)).toHaveLength(1);
+    expect(notes(h)[0]!.detail.note).toContain("nothing worth a text");
+  });
+
+  it("still sends what a tool texts", async () => {
+    const h = harness({ withCoreTools: true });
+    h.faux.setResponses([toolTurn("notify_owner", { text: "Taylor Swift added an Oslo date." }), textTurn("Told them about the Oslo date.")]);
+    await h.runtime.runScheduled(watchJob(h));
+    expect(h.sent.map((s) => s.msg.text)).toEqual(["Taylor Swift added an Oslo date."]);
+  });
+
+  it("NO_REPLY stays a silent reply, and ordinary jobs are unchanged", async () => {
+    const h = harness();
+    h.faux.setResponses([textTurn("NO_REPLY"), textTurn("Your reminder: stretch.")]);
+    await h.runtime.runScheduled(watchJob(h));
+    expect(notes(h)).toHaveLength(0);
+    await h.runtime.runScheduled(h.deps.scheduler.create({ name: "stretch", prompt: "Remind me to stretch", enabled: true, nextRunAt: new Date(Date.now() + 60_000).toISOString() }));
+    expect(h.sent.map((s) => s.msg.text)).toEqual(["Your reminder: stretch."]);
+  });
+});

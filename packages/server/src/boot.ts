@@ -34,6 +34,7 @@ import { ComposioApps, DEFAULT_TOOLKITS, OPENAI_COMPLETIONS_TOOL_LIMIT, appsGuid
 import { ampleTools, type AmpleCredentials } from "@open-instinct/ample";
 import { contextTools } from "@open-instinct/context";
 import { networkTools } from "@open-instinct/network";
+import { watcherTools } from "@open-instinct/watcher"; // [sunshine:watcher]
 import { ChatAwareOutbox, ConsoleOutbox, type ChatReplyBuffer } from "./console-outbox.js";
 import { fileTools, resolveInsideWorkspace } from "./file-tools.js";
 import { describeDataPart, promptExtraFor } from "./hooks.js";
@@ -284,6 +285,23 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
         : {}),
     }),
   );
+
+  // [sunshine:watcher] The news watch, only where the operator turned it on. Each owner then
+  // switches their own checks on; without a TypeSafe key the checks run without the Jev filter.
+  if (env.INSTINCT_WATCHER === "1") {
+    registry.registerMany(
+      watcherTools({
+        state,
+        config,
+        outbox,
+        audit,
+        scheduler,
+        ...(env.TYPESAFE_API_KEY?.trim() ? { typesafeApiKey: env.TYPESAFE_API_KEY.trim() } : {}),
+        ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
+      }),
+    );
+    log(`watcher: on (${env.TYPESAFE_API_KEY?.trim() ? "Jev filter" : "no TYPESAFE_API_KEY, so no filter"})`);
+  }
 
   // Payments: a Stripe Link agent wallet, when the Link OAuth client and Stripe key are set.
   let wallet: LinkWalletLike | undefined;

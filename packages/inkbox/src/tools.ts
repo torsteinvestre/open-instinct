@@ -207,9 +207,15 @@ const sendMessageParams = Type.Object({
   subject: Type.Optional(Type.String({ description: "Email subject when starting a new email thread." })),
 });
 
+/**
+ * [sunshine:reactions] Upstream's tool asked for a message id the model never sees, so it could not
+ * be used. The target is now always the message being answered, only the three tapbacks friends
+ * use for acknowledgment are allowed, and `alone` says whether the reaction is the whole reply.
+ */
+export const REACTIONS = ["like", "love"] as const; // laugh left out on purpose: easy to misuse (Torstein, 2026-10-14)
 const reactParams = Type.Object({
-  messageId: Type.String({ description: "The iMessage id to react to (from the conversation)." }),
-  reaction: Type.String({ description: "love, like, dislike, laugh, emphasize or question." }),
+  reaction: Type.Union(REACTIONS.map((r) => Type.Literal(r)), { description: "like: ok, got it, sounds good. love: thanks, warmth, good news, a compliment." }),
+  alone: Type.Boolean({ description: "true when this reaction is your whole reply and you send no text; false when you also answer in words." }),
 });
 
 /**
@@ -306,22 +312,40 @@ export function messagingTools(deps: MessagingDeps): RegisteredTool[] {
     },
   });
 
+  // [sunshine:reactions] One tapback per message, at most.
+  const reacted = new Set<string>();
   const react = defineTool({
     name: "react",
     label: "Tapback",
-    description: "Add an iMessage tapback (love, like, dislike, laugh, emphasize, question) to a message in the current conversation.",
+    description:
+      "Put an iMessage tapback on the owner's message you are answering, in their own one-to-one thread. Alone (alone: true) when they close a task and no text is needed; with a few words (alone: false) for a social moment or with your answer to big news. Never as the only reply to a question or a request.",
     parameters: reactParams,
     meta: {
       capabilities: ["converse"],
       group: "messaging",
       describe: (args) => {
-        const a = args as { reaction?: string; messageId?: string };
-        return `react ${a.reaction ?? ""} on ${a.messageId ?? ""}`;
+        const a = args as { reaction?: string; alone?: boolean };
+        return `react ${a.reaction ?? ""}${a.alone ? " (as the whole reply)" : ""}`;
       },
+      // [sunshine:reactions] A reaction that is the whole reply means no text follows it.
+      replyTarget: (args) => ((args as { alone?: unknown }).alone === true ? "current" : undefined),
     },
     execute: async (args, ctx) => {
-      await deps.channel.react(ctx.deliveryKey ?? ctx.conversationKey, args.messageId, args.reaction);
-      return textResult(`Reacted ${args.reaction}.`);
+      // [sunshine:reactions] Fences: the owner's private thread, three tapbacks, once per message.
+      const privateThread = !ctx.deliveryKey || ctx.deliveryKey === ctx.conversationKey;
+      if (ctx.principal.kind !== "owner" || !privateThread) {
+        return { content: [{ type: "text", text: "Reactions are only for the owner's own one-to-one thread. Answer in words." }], isError: true };
+      }
+      if (!(REACTIONS as readonly string[]).includes(args.reaction)) {
+        return { content: [{ type: "text", text: `Use one of: ${REACTIONS.join(", ")}.` }], isError: true };
+      }
+      const target = ctx.replyRef?.messageId;
+      if (!target) return { content: [{ type: "text", text: "There is no message to react to here. Answer in words." }], isError: true };
+      if (reacted.has(target)) return { content: [{ type: "text", text: "You already reacted to this message." }], isError: true };
+      await deps.channel.react(ctx.deliveryKey ?? ctx.conversationKey, target, args.reaction);
+      reacted.add(target);
+      if (reacted.size > 500) reacted.delete(reacted.values().next().value!); // only recent messages matter
+      return textResult(args.alone ? `Reacted ${args.reaction}. That is your whole reply: send no text.` : `Reacted ${args.reaction}. Now answer in words.`);
     },
   });
 

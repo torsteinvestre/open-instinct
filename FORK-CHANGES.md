@@ -68,6 +68,30 @@ block. Scheduled runs then fall back to upstream's empty reply.
 
 **The coming watcher** relies on this: most of its checks should end in `NO_REPLY`.
 
+### `[sunshine:reactions]`: tapbacks that replace a message, never add one
+
+**Problem.** Upstream's `react` tool asked for a message id the model never sees, so it was never
+used. Sunshine answered "thanks" with "You're welcome!", a message that adds nothing.
+
+**What the fork adds.**
+
+- `react` (`packages/inkbox/src/tools.ts`) always targets the message being answered
+  (`ctx.replyRef.messageId`); only `like` and `love` (no laugh, question, dislike: easy to misuse);
+  at most one per message; only in the owner's own one-to-one thread.
+- `alone: true` declares the tapback the whole reply (`replyTarget: "current"`), so the reply guard
+  drops any text the model writes after it (seen in tests: "I've already reacted…" in about half the
+  cases, all dropped). `alone: false` lets the words through.
+- A ladder in the iMessage prompt (`packages/core/src/prompt.ts`): a question or request gets words
+  only; big news with a request gets love plus the answer; closing a task gets a tapback alone; a
+  social moment gets love plus a few warm words (a natural question is fine, an offer is not); their
+  own tapbacks get no reply; in doubt, none.
+- Scenario test with the real model: `packages/server/scenarios/reactions.mjs` (20 conversations;
+  last full run: questions 21/21 words only, closing 15/15, their tapbacks 6/6 no reply; social
+  15/18, the misses all one case where it offers help with an earlier problem).
+
+**To remove.** Revert its commit (`git log --grep "sunshine:reactions"`), or delete the tagged blocks
+in `inkbox/src/tools.ts`, `core/src/prompt.ts` and the tests. Upstream's tool comes back unusable as before.
+
 ### `[sunshine:watcher]`: the news watch (built, off by default)
 
 **Goal.** Sunshine texts its owner soon after something genuinely worth knowing happens in their

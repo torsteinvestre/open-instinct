@@ -68,6 +68,9 @@ describe("buildSystemPrompt", () => {
     expect(buildSystemPrompt(input({ channel: "scheduled" }))).toContain("that text is the message and your reply is not sent");
     expect(buildSystemPrompt(input({ channel: "imessage" }))).toContain("Your reply is sent to this thread by itself");
     expect(buildSystemPrompt(input({ channel: "imessage" }))).toContain("send_file and a caption is your reply");
+    // [sunshine:reactions] The tapback ladder is iMessage-only: SMS has no tapbacks.
+    expect(buildSystemPrompt(input({ channel: "imessage" }))).toContain("A tapback alone would leave them wondering whether you got it.");
+    expect(buildSystemPrompt(input({ channel: "sms" }))).not.toContain("Tapbacks");
   });
 
   // [sunshine:silent-reply] As in OpenClaw: only runs where silence is normal learn the word.

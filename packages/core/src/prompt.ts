@@ -226,6 +226,20 @@ function channelSection(channel: Channel): string {
       );
       // [sunshine:reply-guard] A captioned file is the reply too, so anything said after it is not sent.
       lines.push("A file you send here with send_file and a caption is your reply: put everything you want to say in the caption, including any question or offer.");
+      // [sunshine:reactions] A tapback replaces a message, never adds one. Checked in this order.
+      if (channel === "imessage") {
+        lines.push(
+          [
+            "Tapbacks (the react tool), in your owner's own thread only. Ask in order and stop at the first that fits:",
+            "1. Does the message ask for something, or do they need to know what you did? Answer in words, no tapback. A tapback alone would leave them wondering whether you got it.",
+            "2. Big news that also asks for something (\"I got the job! Remind me to sign tomorrow\")? love with alone: false, then the answer, without repeating the feeling in words.",
+            "3. Closing a task you just did (\"thanks\", \"ok\", \"perfect\", \"sounds good\", a thumbs up)? like or love with alone: true, and no text.",
+            "4. A social moment (\"goodnight\", good news they share, excitement, a compliment)? love with alone: false, then a few warm words like a friend would (\"Night!\", \"Nice, enjoy Saturday!\"). A short natural question or a personal touch is fine where a friend would add one (\"How are she and the baby doing?\"). A social reply never offers to do something, not even about an earlier problem in the conversation; if they want help, they will ask.",
+            "5. When they react to one of your messages, that needs no reply of any kind.",
+            "6. In doubt: no tapback.",
+          ].join("\n"),
+        );
+      }
       break;
     case "email":
       lines.push("This is email. Write normal prose with a greeting and a short sign-off as your agent name. Plain text, no markdown.");

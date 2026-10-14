@@ -1313,6 +1313,43 @@ describe("[sunshine:silent-reply] the stay-quiet word", () => {
   });
 });
 
+// [sunshine:reactions] A tapback that is the whole reply means no text follows it; one with an
+// answer lets the answer through. Uses a stand-in for inkbox's react tool and its replyTarget.
+describe("[sunshine:reactions] a tapback as the reply", () => {
+  function withTapback(): Harness & { reactions: string[] } {
+    const reactions: string[] = [];
+    const tapback = defineTool({
+      name: "tapback",
+      label: "Tapback",
+      description: "react",
+      parameters: Type.Object({ reaction: Type.String(), alone: Type.Boolean() }),
+      meta: { capabilities: ["converse"], group: "messaging", replyTarget: (a) => ((a as { alone?: boolean }).alone ? "current" : undefined) },
+      execute: async (args) => {
+        reactions.push((args as { reaction: string }).reaction);
+        return textResult("reacted");
+      },
+    });
+    return Object.assign(harness({ extraTools: [tapback] }), { reactions });
+  }
+  const skippedReplies = (h: Harness) => h.deps.audit.read({ kinds: ["policy"] }).filter((e) => e.detail.replyGuard);
+
+  it("'thanks' gets a tapback and no 'You're welcome!' text, even if the model writes one", async () => {
+    const h = withTapback();
+    h.faux.setResponses([toolTurn("tapback", { reaction: "love", alone: true }), textTurn("You're welcome!")]);
+    await h.runtime.handleInbound(inbound({ channel: "imessage", from: OWNER_PHONE, conversationKey: "imessage:owner", text: "thanks!" }));
+    expect(h.reactions).toEqual(["love"]);
+    expect(h.sent).toHaveLength(0);
+    expect(skippedReplies(h)[0]?.detail.preview).toBe("You're welcome!");
+  });
+
+  it("a tapback with an answer lets the answer through", async () => {
+    const h = withTapback();
+    h.faux.setResponses([toolTurn("tapback", { reaction: "love", alone: false }), textTurn("Done, I'll remind you tomorrow at 9.")]);
+    await h.runtime.handleInbound(inbound({ channel: "imessage", from: OWNER_PHONE, conversationKey: "imessage:owner", text: "I got the job! Remind me to sign tomorrow at 9" }));
+    expect(h.sent.map((s) => s.msg.text)).toEqual(["Done, I'll remind you tomorrow at 9."]);
+  });
+});
+
 // [sunshine:watcher] A gated job runs its gate (plain code) first; the model runs only if the gate says so.
 describe("[sunshine:watcher] gated scheduled jobs", () => {
   const gated = (h: Harness, gate: string) =>

@@ -80,7 +80,7 @@ describe("resolveTarget", () => {
     // Every messaging tool that can text a person declares it; the rest send no text.
     const tools = messagingTools({ channel, contacts, config });
     expect(tools.find((t) => t.spec.name === "send_message")?.spec.meta.replyTarget).toBeDefined();
-    expect(tools.filter((t) => t.spec.meta.replyTarget).map((t) => t.spec.name)).toEqual(["send_message", "send_file"]);
+    expect(tools.filter((t) => t.spec.meta.replyTarget).map((t) => t.spec.name)).toEqual(["send_message", "react", "send_file"]);
   });
 
   // [sunshine:reply-guard]
@@ -126,12 +126,14 @@ describe("send_message", () => {
     expect(sent[1]?.msg.replyRef).toEqual(replyRef);
   });
 
-  it("uses the wire conversation for typing and reactions in group sessions", async () => {
-    const ctx = { ...ctxFor(owner, "imessage:group_1:owner"), deliveryKey: "imessage:group_1" };
+  it("uses the wire conversation for typing in group sessions, and does not react there", async () => {
+    const ctx = { ...ctxFor(owner, "imessage:group_1:owner"), deliveryKey: "imessage:group_1", replyRef: { messageId: "message_1" } };
     await tool("send_typing").execute({}, ctx);
-    await tool("react").execute({ messageId: "message_1", reaction: "like" }, ctx);
     expect(channel.typing).toHaveBeenCalledWith("imessage:group_1");
-    expect(channel.react).toHaveBeenCalledWith("imessage:group_1", "message_1", "like");
+    // [sunshine:reactions] Tapbacks only in the owner's own one-to-one thread.
+    const r = await tool("react").execute({ reaction: "like", alone: true }, ctx);
+    expect(JSON.stringify(r)).toMatch(/only for the owner's own one-to-one thread/);
+    expect(channel.react).not.toHaveBeenCalled();
   });
 
   it("lets the owner message a contact, a number, or an email with a subject", async () => {
@@ -179,8 +181,36 @@ describe("send_typing and react", () => {
   it("forward to the channel with the current conversation", async () => {
     await tool("send_typing").execute({}, ctxFor(owner, "imessage:conv_1"));
     expect(channel.typing).toHaveBeenCalledWith("imessage:conv_1");
-    await tool("react").execute({ messageId: "msg_1", reaction: "love" }, ctxFor(friend, "imessage:conv_1"));
+    await tool("react").execute({ reaction: "love", alone: true }, { ...ctxFor(owner, "imessage:conv_1"), replyRef: { messageId: "msg_1" } });
     expect(channel.react).toHaveBeenCalledWith("imessage:conv_1", "msg_1", "love");
+  });
+});
+
+// [sunshine:reactions] Upstream's tool needed a message id the model never sees; it was never used.
+describe("[sunshine:reactions] react", () => {
+  const own = (messageId?: string) => ({ ...ctxFor(owner, "imessage:conv_1"), ...(messageId ? { replyRef: { messageId } } : {}) });
+
+  it("reacts to the message being answered, without being told which", async () => {
+    const r = await tool("react").execute({ reaction: "like", alone: true }, own("msg_now"));
+    expect(channel.react).toHaveBeenCalledWith("imessage:conv_1", "msg_now", "like");
+    expect(JSON.stringify(r)).toContain("That is your whole reply: send no text.");
+  });
+
+  it("counts as the reply only when it stands alone, so no text follows a lone tapback", () => {
+    const meta = tool("react").meta;
+    expect(meta.replyTarget?.({ reaction: "like", alone: true })).toBe("current");
+    expect(meta.replyTarget?.({ reaction: "love", alone: false })).toBeUndefined();
+  });
+
+  it("allows only like and love, once per message, and only for the owner", async () => {
+    const react = tool("react"); // one instance, as at boot, so it remembers what it reacted to
+    expect(JSON.stringify(await react.execute({ reaction: "question", alone: true } as never, own("m1")))).toMatch(/Use one of: like, love\./);
+    expect(JSON.stringify(await react.execute({ reaction: "laugh", alone: true } as never, own("m1")))).toMatch(/Use one of: like, love\./);
+    await react.execute({ reaction: "like", alone: true }, own("m2"));
+    expect(JSON.stringify(await react.execute({ reaction: "love", alone: true }, own("m2")))).toMatch(/already reacted/);
+    expect(JSON.stringify(await react.execute({ reaction: "like", alone: true }, { ...ctxFor(friend, "imessage:conv_2"), replyRef: { messageId: "m3" } }))).toMatch(/only for the owner/);
+    expect(JSON.stringify(await react.execute({ reaction: "like", alone: true }, own()))).toMatch(/no message to react to/);
+    expect(channel.react).toHaveBeenCalledTimes(1);
   });
 });
 

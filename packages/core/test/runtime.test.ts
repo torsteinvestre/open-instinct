@@ -450,12 +450,12 @@ describe("AgentRuntime.handleInbound", () => {
       const tail = texts(thread(h)).slice(-3);
       expect(tail[0]).toBe("assistant: Done, at 15:01.");
       // A note with the time and the source, then the text itself as Sunshine's message.
-      expect(tail[1]).toMatch(/^user: \[.* America\/New_York, UTC-04:00\]\n\[Not a message from Maria: a note that you texted them the next message from a scheduled job\. No reply is needed to it\.\]$/);
+      expect(tail[1]).toMatch(/^user: \[.* America\/New_York, UTC-04:00\]\n\[Not a message from Maria: a note that you texted them the next message when something they set up with you came due\. No reply is needed to it\.\]$/);
       expect(tail[2]).toBe("assistant: Time to stretch.");
       expect(texts(onDisk(h)).filter((t) => t.includes("Time to stretch."))).toHaveLength(1);
     });
 
-    it("names the source: the news watch, a scheduled job by name, a person's conversation", async () => {
+    it("says how it came about, in words without machinery: the news, a reminder by name, a person", async () => {
       const h = harness();
       h.faux.setResponses([textTurn("ok")]);
       await ownerSays(h, "hi", "m1");
@@ -464,9 +464,10 @@ describe("AgentRuntime.handleInbound", () => {
       h.runtime.mirrorToOwner({ channel: "imessage", to: OWNER_PHONE, text: "Time to stretch." }, { conversationKey: `scheduled:${job.id}` });
       h.runtime.mirrorToOwner({ channel: "imessage", to: OWNER_PHONE, text: "Approve?" }, { conversationKey: "imessage:unknown" });
       const notes = texts(thread(h)).filter((t) => t.startsWith("user:") && t.includes("Not a message from"));
-      expect(notes[0]).toContain("from your news watch");
-      expect(notes[1]).toContain('from the scheduled job "stretch"');
+      expect(notes[0]).toContain("on your own, after reading the news for them");
+      expect(notes[1]).toContain('when "stretch", which they set up with you, came due');
       expect(notes[2]).toContain("from another conversation");
+      for (const n of notes) expect(n).not.toMatch(/news watch|scheduled job|watcher/i);
     });
 
     it("copies nothing said in the thread itself, sent to someone else, empty, or with the switch off", async () => {

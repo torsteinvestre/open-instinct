@@ -2,9 +2,12 @@
 // model's outcome is one a thoughtful friend would accept. Costs real money (well under $1).
 // Usage (from packages/watcher, after `pnpm build`, with ANTHROPIC_API_KEY set):
 //   node scenarios/run.mjs [rounds=2] [models=sonnet,haiku]
-import { writeFileSync } from "node:fs";
-import { DECIDE_SYSTEM, SCREEN_SYSTEM, checkDecision, decideUser, modelCall, parseDecision, parseScreen, resolveWatcherModel, screenUser } from "../dist/index.js";
+import { readFileSync, writeFileSync } from "node:fs";
+import { DECIDE_SYSTEM as BUILT_DECIDE, SCREEN_SYSTEM, checkDecision, decideUser, modelCall, parseDecision, parseScreen, resolveWatcherModel, screenUser } from "../dist/index.js";
 import { SCENARIOS } from "./scenarios.mjs";
+
+// DECIDE_FILE=path runs an earlier decide prompt, to compare wording changes on the same scenarios.
+const DECIDE_SYSTEM = process.env.DECIDE_FILE ? readFileSync(process.env.DECIDE_FILE, "utf8") : BUILT_DECIDE;
 
 const rounds = Number(process.argv[2] ?? 2);
 const which = (process.argv[3] ?? "sonnet,haiku").split(",");

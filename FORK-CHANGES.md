@@ -129,6 +129,27 @@ interests, and otherwise stays silent. Plan and reasoning: `~/sunshine-ops/WATCH
 5. The door (code): refuses an article already told, an update with nothing changed, or a "new"
    story that reads almost like a told one (unless the model says how it differs); one retry with
    the reason, else nothing is sent. Then quiet hours and a hidden limit of 6 texts a day.
+6. Write (step 3, Claude Sonnet 5.5, scheduled texts only): the chosen stories are written as
+   Sunshine would text them, with its persona, its memory of the owner, the last 10 messages of
+   their thread and one web search per story (the agent's own `web_search`). It introduces unknown
+   names from the search, adds a personal line only where one is real, says how something is doing
+   but never advises (buy/sell/hold), and tells every story it was given. It may hold the text back
+   only for re-posted old news (the search clearly shows the event is over a week old) or a bad
+   moment, with a reason in the journal (`stage: "write"`) and the audit (`writerHeld`). A failed
+   search writes from the headline; a failed or unusable writer sends step 2's own text.
+
+**Why the writer.** Step 2 wrote from the headline alone, in its own voice: "Since you follow XRP:",
+names nobody could place, and a "news watch" the agent then disowned. Tested on real headlines
+(`packages/server/scenarios/writer.mjs`): the writer's texts read like a friend's; Sonnet beat Haiku
+(Haiku explained itself and forced links); of 15 test stories, 7 old ones were held back and 8
+fresh ones sent, after one fix (it had second-guessed whether a story was worth telling, and held
+back one search could not confirm). About 0.4-0.6 cents per text sent.
+
+**Speaking as itself.** The skill and the tools' descriptions and results say what Sunshine does
+("keeping up with the news for them", "what you looked at"), never "the news watch", so it says "I
+saw…" rather than "my news watch checks headlines" (tested with `packages/server/scenarios/voice.mjs`:
+machinery talk in 3 of 4 answers before, 1 of 4 after). Step 2's own text no longer opens with
+"Since you follow X" (`packages/watcher/scenarios/wording.mjs`, old vs new on the same headlines).
 
 No new headline means no model call. A failed step 2 sends nothing and its headlines wait for the
 next check. Each check leaves one `policy` audit entry (`watcher: "check"`) with counts, outcome,
@@ -141,8 +162,10 @@ new?" in its own reply), `watch_journal` ("what did you skip?"), `watch_later`, 
 
 | To change | Where |
 |---|---|
-| How the decision is made, examples, text style | `packages/watcher/src/prompts.ts` (`DECIDE_SYSTEM`; the screen's `SCREEN_SYSTEM` next to it) |
-| Which models, or one step off | env `WATCHER_SCREEN_MODEL`, `WATCHER_DECIDE_MODEL` (`off` disables a step) |
+| How the decision is made, examples | `packages/watcher/src/prompts.ts` (`DECIDE_SYSTEM`; the screen's `SCREEN_SYSTEM` next to it) |
+| How a news text reads, when the writer holds back | `writeSystem` in `packages/watcher/src/prompts.ts` |
+| What the writer is given (persona, memory, thread, search) | `packages/server/src/watcher-writer.ts` (`WRITER_THREAD_MESSAGES`); `RESEARCH_MAX_CHARS` in `packages/watcher/src/check.ts` |
+| Which models, or one step off | env `WATCHER_SCREEN_MODEL`, `WATCHER_DECIDE_MODEL`, `WATCHER_WRITE_MODEL` (`off` disables a step; the writer off sends step 2's text) |
 | Haiku 5.5 description (Pi 1.0.1 lacks it) | `resolveWatcherModel` in `packages/watcher/src/models.ts` |
 | How often, quiet hours (per owner) | by text to Sunshine (`watch_settings`); defaults in `store.ts` / `clock.ts` |
 | Text limit, model budget, ask-after hours | constants at the top of `packages/watcher/src/check.ts` |
@@ -163,11 +186,13 @@ both in `core/src/types.ts` and `runtime.ts`. `server/src/boot.ts` creates the w
 owner's checks start by themselves; with no interests after a day, it asks once.
 
 **Not done yet.** The gateway passing `INSTINCT_WATCHER` and `TYPESAFE_API_KEY` to new agents.
-The "second look" (opening the article): Google News links lead to a consent page in Europe.
+Opening the article itself: Google News links lead to a consent page in Europe, so the writer
+uses a web search instead.
 
 **To remove.** Delete `packages/watcher` and `skills/news-watch`, and every block tagged
-`[sunshine:watcher]` (`boot.ts`, `server/package.json`, `types.ts`, `runtime.ts`, both
-Dockerfiles, `skills/onboarding/SKILL.md`, `skills/README.md`, tests), then `pnpm install`.
+`[sunshine:watcher]` (`boot.ts`, `server/src/watcher-writer.ts`, `server/package.json`, `types.ts`,
+`runtime.ts`, both Dockerfiles, `skills/onboarding/SKILL.md`, `skills/README.md`, tests), then
+`pnpm install`.
 
 ### `[sunshine:timezone]`: agents get the owner's timezone
 
@@ -283,7 +308,8 @@ Sunshine dig through its logs (live, 2026-10-14).
 - `AgentRuntime.mirrorToOwner` (`packages/core/src/runtime.ts`): if the text reached the owner's own
   thread (`ownerLast`) from a different conversation, two messages are added to that thread: a note
   (time stamp, "Not a message from <owner>: a note that you texted them the next message from <the
-  news watch / the scheduled job "stretch" / your conversation with Sam>") and the text itself as
+  news ("on your own, after reading the news for them") / a reminder ("when "stretch", which they
+  set up with you, came due") / your conversation with Sam, in words without machinery>") and the text itself as
   Sunshine's message. Once: the same text to the same thread within two minutes is skipped. If the
   thread is mid-run, the copy is added when the run ends; if it is not loaded, it goes into the saved
   session file. Failures are logged, never retried or fatal.

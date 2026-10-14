@@ -44,6 +44,10 @@ export interface WatcherDeps {
   /** Step 1 (screen) and step 2 (decide). Either may be undefined: that step is switched off. */
   screen?: ModelCall;
   decide?: ModelCall;
+  /** Step 3, the writer, and what it needs from the host. See CheckDeps. */
+  write?: ModelCall;
+  writerContext?: CheckDeps["writerContext"];
+  research?: CheckDeps["research"];
   fetchImpl?: typeof fetch;
   lookup?: Lookup;
   now?: () => Date;
@@ -66,7 +70,7 @@ function fail(text: string): ToolResultLike {
 }
 
 function ownerOnly(ctx: ToolContext): ToolResultLike | undefined {
-  return ctx.principal.kind === "owner" ? undefined : fail("The news watch belongs to the owner; only the owner's own conversations can use it.");
+  return ctx.principal.kind === "owner" ? undefined : fail("Keeping up with the news belongs to the owner; only the owner's own conversations can use it.");
 }
 
 export function createWatcher(deps: WatcherDeps): Watcher {
@@ -83,6 +87,9 @@ export function createWatcher(deps: WatcherDeps): Watcher {
     ...(sieve ? { sieve } : {}),
     ...(deps.screen ? { screen: deps.screen } : {}),
     ...(deps.decide ? { decide: deps.decide } : {}),
+    ...(deps.write ? { write: deps.write } : {}),
+    ...(deps.writerContext ? { writerContext: deps.writerContext } : {}),
+    ...(deps.research ? { research: deps.research } : {}),
     ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
     ...(deps.lookup ? { lookup: deps.lookup } : {}),
     ...(deps.dailyTextLimit !== undefined ? { dailyTextLimit: deps.dailyTextLimit } : {}),
@@ -112,7 +119,8 @@ export function createWatcher(deps: WatcherDeps): Watcher {
     const costToday = s.calls.filter((c) => localDate(new Date(c.at), tz()) === today).reduce((a, c) => a + c.costUsd, 0);
     const cost30 = s.calls.reduce((a, c) => a + c.costUsd, 0);
     const lines = [
-      `News watch: ${s.on ? `on, checking every ${s.everyMinutes} minutes outside quiet hours (${tz()})` : "off"}. Quiet hours ${s.quiet.start}-${s.quiet.end}.`,
+      // [sunshine:watcher] Words for the model to repeat: it is Sunshine keeping up with the news, not a "news watch".
+      `Keeping up with the news for them: ${s.on ? `on, every ${s.everyMinutes} minutes outside quiet hours (${tz()})` : "off"}. Quiet hours ${s.quiet.start}-${s.quiet.end}.`,
       `Asked about interests: ${s.askedInterests ? "yes" : "not yet"}. Model cost: $${costToday.toFixed(3)} today, $${cost30.toFixed(2)} in the last 30 days.`,
       "",
       "What you know about their interests:",
@@ -126,7 +134,7 @@ export function createWatcher(deps: WatcherDeps): Watcher {
     ];
     if (s.lastCheck) {
       const c = s.lastCheck;
-      lines.push("", `Last check ${ago(c.at, at)}: ${c.fetched} headlines, ${c.fresh} new, ${c.passed} past the relevance filter${c.errors.length ? `; problems: ${c.errors.join("; ")}` : ""}.`);
+      lines.push("", `Last look at the news ${ago(c.at, at)}: ${c.fetched} headlines, ${c.fresh} new, ${c.passed} on their topics${c.errors.length ? `; problems: ${c.errors.join("; ")}` : ""}.`);
     }
     if (s.later.length) lines.push(`Kept for later, not told yet: ${s.later.length} (watch_later lists them).`);
     return lines.join("\n");
@@ -136,7 +144,7 @@ export function createWatcher(deps: WatcherDeps): Watcher {
     name: "watch_profile",
     label: "News watch: profile",
     description:
-      "Read the news watch: your written picture of the owner's interests, the searches, settings, the news you texted them in the last two weeks, the last check and its cost. Use it when they ask what you watch for them, and when they react to a news text (\"not interesting\", \"already knew\", \"more like this\") so you know which text they mean.",
+      "Read what you keep track of for the owner's news: your written picture of their interests, the searches, settings, the news you texted them in the last two weeks, and your last look at the news and its cost. Use it when they ask what you keep an eye on for them, and when they react to a news text (\"not interesting\", \"already knew\", \"more like this\") so you know which text they mean.",
     parameters: Type.Object({}),
     meta: { capabilities: ["memory.write"], group: "memory", describe: () => "watch_profile" },
     execute: async (_args, ctx) => ownerOnly(ctx) ?? textResult(describeState(store.read(), ctx.now())),
@@ -196,10 +204,10 @@ export function createWatcher(deps: WatcherDeps): Watcher {
       const outcome = await runCheck(checkDeps(), "asked", signal);
       const s = store.read();
       const parts: string[] = [];
-      if (outcome.status === "to tell" && outcome.text) parts.push("Worth telling them (say it in your reply, in your own words):", wrapUntrusted(outcome.text, "news watch findings"));
+      if (outcome.status === "to tell" && outcome.text) parts.push("Worth telling them (say it in your reply, in your own words):", wrapUntrusted(outcome.text, "news findings"));
       else if (outcome.status === "no searches") parts.push("There are no searches yet: ask what they would like you to keep an eye on.");
-      else if (outcome.status === "budget") parts.push("The news watch reached its daily limit of model calls; try again tomorrow or search the web directly.");
-      else if (outcome.status === "model failed" || outcome.status === "no model") parts.push("The news check could not reach its models right now.");
+      else if (outcome.status === "budget") parts.push("You have reached today's limit for looking at the news; try again tomorrow or search the web directly.");
+      else if (outcome.status === "model failed" || outcome.status === "no model") parts.push("Looking at the news did not work right now.");
       else parts.push("Nothing new worth telling since the last check.");
       if (s.later.length) parts.push(`Also kept for later: ${s.later.length} smaller stories (watch_later lists them).`);
       return textResult(parts.join("\n"));
@@ -210,7 +218,7 @@ export function createWatcher(deps: WatcherDeps): Watcher {
     name: "watch_journal",
     label: "News watch: what it looked at",
     description:
-      "What the news watch looked at recently and what it did with each headline: told them, kept for later, judged not worth a text, or filtered out early. Use it when the owner asks what you skipped, whether you saw a story, or why you did not text about something.",
+      "What you looked at in the news recently and what you did with each headline: told them, kept for later, judged not worth a text, or set aside early. Use it when the owner asks what you skipped, whether you saw a story, or why you did not text about something.",
     parameters: Type.Object({ hours: Type.Optional(Type.Number({ description: "How far back, default 24, at most 168" })) }),
     meta: { capabilities: ["memory.write"], group: "memory", describe: (a) => `watch_journal ${(a as { hours?: number }).hours ?? 24}h` },
     execute: async ({ hours }, ctx) => {
@@ -238,7 +246,7 @@ export function createWatcher(deps: WatcherDeps): Watcher {
       ].join("\n");
       const notes = entries.filter((e) => e.note).slice(-6).map((e) => `- ${ago(e.at, ctx.now())}: ${e.note}`);
       return textResult(
-        [`Last ${h} hours: ${entries.length} checks with news, model cost $${cost.toFixed(3)}.`, wrapUntrusted(body, "news headlines"), ...(notes.length ? ["", "Your notes from those checks:", ...notes] : [])].join("\n"),
+        [`Last ${h} hours: you looked at the news ${entries.length} times, model cost $${cost.toFixed(3)}.`, wrapUntrusted(body, "news headlines"), ...(notes.length ? ["", "Your notes from those times:", ...notes] : [])].join("\n"),
       );
     },
   });
@@ -266,7 +274,7 @@ export function createWatcher(deps: WatcherDeps): Watcher {
     name: "watch_settings",
     label: "News watch: settings",
     description:
-      `Turn the news watch on or off, change how often it checks (${CHECK_INTERVALS.join(", ")} minutes), the owner's quiet hours (nothing unprompted is sent then, e.g. 22:00 to 08:00), or record that you asked about their interests.`,
+      `Turn keeping up with the news on or off, change how often you look (${CHECK_INTERVALS.join(", ")} minutes), the owner's quiet hours (nothing unprompted is sent then, e.g. 22:00 to 08:00), or record that you asked about their interests.`,
     parameters: Type.Object({
       on: Type.Optional(Type.Boolean()),
       everyMinutes: Type.Optional(Type.Number()),

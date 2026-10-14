@@ -35,7 +35,8 @@ import { ampleTools, type AmpleCredentials } from "@open-instinct/ample";
 import { contextTools } from "@open-instinct/context";
 import { networkTools } from "@open-instinct/network";
 // [sunshine:watcher]
-import { DEFAULT_DECIDE_MODEL, DEFAULT_SCREEN_MODEL, WATCH_GATE, createWatcher, modelCall, resolveWatcherModel, stepModelSpec, type Watcher } from "@open-instinct/watcher";
+import { DEFAULT_DECIDE_MODEL, DEFAULT_SCREEN_MODEL, DEFAULT_WRITE_MODEL, WATCH_GATE, createWatcher, modelCall, resolveWatcherModel, stepModelSpec, type Watcher } from "@open-instinct/watcher";
+import { researchWith, writerContextFor } from "./watcher-writer.js";
 import { ChatAwareOutbox, ConsoleOutbox, type ChatReplyBuffer } from "./console-outbox.js";
 import { fileTools, resolveInsideWorkspace } from "./file-tools.js";
 import { describeDataPart, promptExtraFor } from "./hooks.js";
@@ -302,6 +303,10 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
       };
       const screen = step(env.WATCHER_SCREEN_MODEL, DEFAULT_SCREEN_MODEL, "low");
       const decide = step(env.WATCHER_DECIDE_MODEL, DEFAULT_DECIDE_MODEL, "medium");
+      // Step 3: the text is written as the agent, with its persona, memory, the end of the owner's
+      // thread and its own web search (WATCHER_WRITE_MODEL, "off" sends the decision's text).
+      const write = step(env.WATCHER_WRITE_MODEL, DEFAULT_WRITE_MODEL, "low");
+      const research = researchWith(registry, config);
       const w = createWatcher({
         state,
         config,
@@ -311,10 +316,12 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
         ...(env.TYPESAFE_API_KEY?.trim() ? { typesafeApiKey: env.TYPESAFE_API_KEY.trim() } : {}),
         ...(screen ? { screen } : {}),
         ...(decide ? { decide } : {}),
+        ...(write ? { write, writerContext: writerContextFor({ state, memory, config }) } : {}),
+        ...(research ? { research } : {}),
         ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
       });
       registry.registerMany(w.tools);
-      log(`watcher: on (${env.TYPESAFE_API_KEY?.trim() ? "Jev filter" : "no TYPESAFE_API_KEY, so no filter"}; screen ${screen ? stepModelSpec(env.WATCHER_SCREEN_MODEL, DEFAULT_SCREEN_MODEL) : "off"}, decide ${decide ? stepModelSpec(env.WATCHER_DECIDE_MODEL, DEFAULT_DECIDE_MODEL) : "off"})`);
+      log(`watcher: on (${env.TYPESAFE_API_KEY?.trim() ? "Jev filter" : "no TYPESAFE_API_KEY, so no filter"}; screen ${screen ? stepModelSpec(env.WATCHER_SCREEN_MODEL, DEFAULT_SCREEN_MODEL) : "off"}, decide ${decide ? stepModelSpec(env.WATCHER_DECIDE_MODEL, DEFAULT_DECIDE_MODEL) : "off"}, write ${write ? stepModelSpec(env.WATCHER_WRITE_MODEL, DEFAULT_WRITE_MODEL) : "off"}${research ? " with web search" : ""})`);
       return w;
     });
   }

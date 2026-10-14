@@ -10,6 +10,12 @@ import { resolveModel } from "@open-instinct/core";
 
 export const DEFAULT_SCREEN_MODEL = "anthropic/claude-haiku-5-5";
 export const DEFAULT_DECIDE_MODEL = "anthropic/claude-sonnet-5-5";
+/**
+ * Step 3, the writer: the text as the agent itself. Sonnet, tested against Haiku: Haiku explained
+ * itself ("this is what he wanted flagged"), forced links and hedged; about 0.4 cents per text sent.
+ * WATCHER_WRITE_MODEL=off sends the decision's own text, as before.
+ */
+export const DEFAULT_WRITE_MODEL = "anthropic/claude-sonnet-5-5";
 
 export interface ModelReply {
   text: string;

@@ -220,6 +220,72 @@ describe("a news check", () => {
     });
   });
 
+  // [sunshine:watcher] Step 3: the text is written as the agent, with what it knows and a search.
+  describe("the writer", () => {
+    const draft = { message: { text: "Since you follow Brann: they signed Ola Nordmann.", stories: [{ headline: 1, card: "new", subject: "SK Brann", event: "signing Ola Nordmann", status: "official" }] }, keep: [], note: "Told the signing." };
+    const context = () => ({ persona: "Dry wit. Short sentences.", memory: "Plays five-a-side on Thursdays.", thread: "[Tue 13 Oct, 11:00] Maria: off to the match tonight!" });
+    const research = async (q: string) => `1. Brann confirm striker signing\n   Nordmann, 24, joins from Molde on a three-year deal. (query: ${q})`;
+
+    it("sends the text it writes, having seen the persona, memory, thread, story and search", async () => {
+      const write = fakeModel("writer", ["Brann just signed Ola Nordmann, a 24-year-old striker from Molde, on a three-year deal."], 0.004);
+      const out = await runCheck(deps([signing], { screen: fakeModel("haiku", [{ pass: [1] }]), decide: fakeModel("sonnet", [draft]), write, writerContext: context, research }), "scheduled");
+      expect(out.status).toBe("sent");
+      expect(f.sent.map((m) => m.text)).toEqual(["Brann just signed Ola Nordmann, a 24-year-old striker from Molde, on a three-year deal."]);
+      expect(write.asked[0]!.system).toContain("Dry wit. Short sentences.");
+      expect(write.asked[0]!.system).toContain("Plays five-a-side on Thursdays.");
+      expect(write.asked[0]!.system).toContain("Lifelong SK Brann supporter"); // the news picture
+      expect(write.asked[0]!.user).toContain("off to the match tonight!");
+      expect(write.asked[0]!.user).toContain("1. Brann signs striker Ola Nordmann from Molde (BT)");
+      expect(write.asked[0]!.user).toContain("three-year deal. (query: Brann signs striker Ola Nordmann from Molde BT)");
+      expect(store.read().calls.map((c) => c.step)).toEqual(["screen", "decide", "write"]); // counts towards the budget
+      expect(store.read().stories).toHaveLength(1);
+    });
+
+    it("tells the writer when a story is an update, and what was told before", async () => {
+      store.update((s) => void s.stories.push({ id: "c_aaaaaa", subject: "SK Brann", event: "talks with Ola Nordmann", status: "rumour", titles: ["t"], links: ["https://n/talks"], firstTold: NOON.toISOString(), lastTold: NOON.toISOString(), updates: 0 }));
+      const update = { message: { text: "It's official.", stories: [{ headline: 1, card: "c_aaaaaa", changed: "official now", status: "official" }] }, keep: [], note: "x" };
+      const write = fakeModel("writer", ["The Nordmann move is official now."]);
+      await runCheck(deps([signing], { screen: fakeModel("haiku", [{ pass: [1] }]), decide: fakeModel("sonnet", [update]), write, writerContext: context }), "scheduled");
+      expect(write.asked[0]!.user).toContain("An update: you already told them that SK Brann: talks with Ola Nordmann (rumour); say what changed.");
+    });
+
+    it("holds the text back when the writer says so, logs the reason, and tells nothing", async () => {
+      const write = fakeModel("writer", ["NO_TEXT: the search shows this signing was announced on 15 September; old news re-posted."]);
+      const out = await runCheck(deps([signing], { screen: fakeModel("haiku", [{ pass: [1] }]), decide: fakeModel("sonnet", [draft]), write, writerContext: context, research }), "scheduled");
+      expect(out.status).toBe("writer held");
+      expect(f.sent).toHaveLength(0);
+      expect(store.read().stories).toHaveLength(0);
+      expect(store.read().notes.at(-1)?.text).toMatch(/held it back while writing: the search shows this signing was announced on 15 September/);
+      expect(checks().at(-1)?.detail).toMatchObject({ outcome: "writer held", writerHeld: "the search shows this signing was announced on 15 September; old news re-posted." });
+      expect(store.readJournal(0)[0]!.items[0]).toMatchObject({ stage: "write", result: "dropped" });
+    });
+
+    it("falls back to the decision's own text when the writer fails or answers unusably, so nothing is lost", async () => {
+      const failing = fakeModel("writer", [new Error("overloaded")]);
+      const out = await runCheck(deps([signing], { screen: fakeModel("haiku", [{ pass: [1] }]), decide: fakeModel("sonnet", [draft]), write: failing, writerContext: context, research }), "scheduled");
+      expect(out.status).toBe("sent");
+      expect(f.sent.map((m) => m.text)).toEqual([draft.message.text]);
+      expect(checks().at(-1)?.detail.writerFailed).toMatch(/overloaded/);
+      const empty = fakeModel("writer", ["   "]);
+      await runCheck(deps([{ title: "Brann won 3-0 against Viking", link: "https://n/w2" }], { screen: fakeModel("haiku", [{ pass: [1] }]), decide: fakeModel("sonnet", [{ ...draft, message: { ...draft.message, text: "Brann beat Viking 3-0." } }]), write: empty, writerContext: context }), "scheduled");
+      expect(f.sent.at(-1)?.text).toBe("Brann beat Viking 3-0.");
+    });
+
+    it("writes from the headline when the search fails", async () => {
+      const write = fakeModel("writer", ["Brann signed Ola Nordmann from Molde."]);
+      await runCheck(deps([signing], { screen: fakeModel("haiku", [{ pass: [1] }]), decide: fakeModel("sonnet", [draft]), write, writerContext: context, research: async () => { throw new Error("blocked"); } }), "scheduled");
+      expect(write.asked[0]!.user).toContain('The search for "Brann signs striker Ola Nordmann from Molde" failed; write from the headline.');
+      expect(f.sent.map((m) => m.text)).toEqual(["Brann signed Ola Nordmann from Molde."]);
+    });
+
+    it("is not used when the owner asks for news in conversation: the agent says it in its own reply", async () => {
+      const write = fakeModel("writer", []);
+      const out = await runCheck(deps([signing], { screen: fakeModel("haiku", [{ pass: [1] }]), decide: fakeModel("sonnet", [draft]), write, writerContext: context }), "asked");
+      expect(out).toMatchObject({ status: "to tell", text: draft.message.text });
+      expect(write.asked).toHaveLength(0);
+    });
+  });
+
   it("answers in conversation without texting, and still counts the story as told", async () => {
     const decide = fakeModel("sonnet", [{ message: { text: "Brann signed Ola Nordmann.", stories: [{ headline: 1, card: "new", subject: "SK Brann", event: "signing Nordmann", status: "official" }] }, keep: [], note: "x" }]);
     const out = await runCheck(deps([signing], { screen: fakeModel("haiku", [{ pass: [1] }]), decide }, new Date("2026-10-13T21:30:00Z")), "asked");

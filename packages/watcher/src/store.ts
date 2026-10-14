@@ -68,7 +68,7 @@ export interface DecisionNote {
 
 export interface ModelCallRecord {
   at: string;
-  step: "screen" | "decide";
+  step: "screen" | "decide" | "write";
   costUsd: number;
 }
 
@@ -126,7 +126,8 @@ export interface JournalItem {
   topic: string;
   link: string;
   /** Where its path ended: the Jev sieve, the screen (step 1) or the decision (step 2). */
-  stage: "sieve" | "screen" | "decide";
+  /** "write": chosen, then held back while writing (old news, or a bad moment). */
+  stage: "sieve" | "screen" | "decide" | "write";
   /** "undecided": step 2 never ran (it failed, or its answer was refused). */
   result: "dropped" | "told" | "kept" | "nothing" | "undecided";
   /** The sieve's probability that it is on topic. */

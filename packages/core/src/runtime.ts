@@ -978,7 +978,7 @@ export class AgentRuntime {
       const owner = this.deps.config.owner;
       const stamp = timeStamp(new Date(now), owner.timezone || "UTC");
       const notes = [
-        userMessage(`${stamp}\n[Not a message from ${owner.name}: a note that you texted them the next message from ${this.mirrorSource(origin.conversationKey)}. No reply is needed to it.]`, new Date(now)),
+        userMessage(`${stamp}\n[Not a message from ${owner.name}: a note that you texted them the next message ${this.mirrorSource(origin.conversationKey)}. No reply is needed to it.]`, new Date(now)),
         mirroredMessage(text, this.deps.model, now),
       ];
       const live = this.conversations.get(route.conversationKey);
@@ -996,15 +996,18 @@ export class AgentRuntime {
 
   private readonly mirrored = new Map<string, number>(); // [sunshine:delivery-mirror] recent copies, for once-only
 
-  /** [sunshine:delivery-mirror] Where a copied text came from, in words the model can use. */
+  /**
+   * [sunshine:delivery-mirror] How a copied text came about, in words the model can repeat to the
+   * owner: no machinery ("news watch", "scheduled job"), since it speaks of these as itself.
+   */
   private mirrorSource(originKey: string): string {
-    if (originKey === "scheduled:watcher") return "your news watch (headlines it checked on its own)";
+    if (originKey === "scheduled:watcher") return "on your own, after reading the news for them";
     if (originKey.startsWith("scheduled:")) {
       const entry = this.deps.scheduler.list().find((e) => `scheduled:${e.id}` === originKey);
-      return entry?.name ? `the scheduled job "${entry.name}"` : "a scheduled job";
+      return entry?.name ? `when "${entry.name}", which they set up with you, came due` : "when something they set up with you came due";
     }
     const who = this.recallRecord(originKey)?.principal.displayName;
-    return who ? `your conversation with ${who}` : "another conversation";
+    return who ? `from your conversation with ${who}` : "from another conversation";
   }
 
   private isOwnerPhone(to: string | string[] | undefined): boolean {

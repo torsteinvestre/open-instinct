@@ -4,6 +4,7 @@
  *   2. collect: Google News per search, last day, nothing seen before, Jev sieve  (scan.ts)
  *   3. screen: a cheap model drops clear noise                                    (step 1)
  *   4. decide: a stronger model applies the playbook                              (step 2)
+ *   4b. write: the text as the agent itself, with what it knows and a web search   (step 3)
  *   5. the door: checks the decision against the facts, then texts, keeps, remembers
  * No headline means no model call. Nothing is texted without step 2's decision passing the door.
  * Every check leaves one "check" entry in the audit log with what happened and what it cost.
@@ -13,7 +14,7 @@ import { ago, inQuietHours, localDate } from "./clock.js";
 import { checkDecision, parseDecision, parseScreen, type Decision, type NewStory, type StoryUpdate } from "./decide.js";
 import type { RelevanceSieve } from "./jev.js";
 import type { ModelCall } from "./models.js";
-import { DECIDE_SYSTEM, INTERESTS_QUESTION, SCREEN_SYSTEM, decideUser, screenUser, type PromptHeadline } from "./prompts.js";
+import { DECIDE_SYSTEM, INTERESTS_QUESTION, SCREEN_SYSTEM, decideUser, parseWritten, screenUser, writeSystem, writeUser, type PromptHeadline, type WriteStory, type WriterContext } from "./prompts.js";
 import { headlineKeys, runScan, type Candidate } from "./scan.js";
 import { JOURNAL_SIEVE_MAX, newCardId, type JournalItem, type StoryCard, type WatchState, type WatchStore } from "./store.js";
 
@@ -28,6 +29,8 @@ export const DAILY_MODEL_CALL_LIMIT = 40;
 export const DECIDE_MAX = 25;
 /** Hours the watch runs without interests before it asks for them once. */
 export const ASK_AFTER_HOURS = 24;
+/** [sunshine:watcher] Characters of one story's search results the writer sees. */
+export const RESEARCH_MAX_CHARS = 2500;
 
 export interface CheckDeps {
   store: WatchStore;
@@ -42,6 +45,12 @@ export interface CheckDeps {
   screen?: ModelCall;
   /** Step 2. Undefined: switched off, and step 1's model decides instead. */
   decide?: ModelCall;
+  /** [sunshine:watcher] Step 3, the writer. Undefined: the decision's own text is sent, as before. */
+  write?: ModelCall;
+  /** What the agent knows, for the writer (persona, memory, the end of the owner's thread). */
+  writerContext?: () => WriterContext;
+  /** One web search for the writer, results as text. Undefined or failing: it writes from the headline. */
+  research?: (query: string, signal?: AbortSignal) => Promise<string>;
   dailyTextLimit?: number;
   dailyModelCallLimit?: number;
   askAfterHours?: number;
@@ -54,7 +63,8 @@ export type CheckMode =
   | "asked";
 
 export interface CheckOutcome {
-  status: "off" | "quiet" | "no searches" | "asked interests" | "budget" | "nothing new" | "screened out" | "no model" | "model failed" | "refused" | "nothing to tell" | "sent" | "held" | "to tell";
+  /** "writer held": chosen, then held back by the writer (old news re-posted, or a bad moment). */
+  status: "off" | "quiet" | "no searches" | "asked interests" | "budget" | "nothing new" | "screened out" | "no model" | "model failed" | "refused" | "nothing to tell" | "sent" | "held" | "writer held" | "to tell";
   /** The message: sent (scheduled) or for the agent to say (asked). */
   text?: string;
   note?: string;
@@ -133,7 +143,7 @@ export async function runCheck(deps: CheckDeps, mode: CheckMode, signal?: AbortS
   }
   const numbered = (list: Candidate[]): PromptHeadline[] => list.map((c, i) => ({ n: i + 1, topic: c.topic, title: c.title, ...(c.source ? { source: c.source } : {}), age: ago(c.publishedAt, at) }));
   let cost = 0;
-  const record = (step: "screen" | "decide", costUsd: number) => {
+  const record = (step: "screen" | "decide" | "write", costUsd: number) => {
     cost += costUsd;
     deps.store.update((st) => void st.calls.push({ at: at.toISOString(), step, costUsd }));
   };
@@ -221,15 +231,37 @@ export async function runCheck(deps: CheckDeps, mode: CheckMode, signal?: AbortS
   const distinct = stories.filter(({ st }) => st.card === "new" && (st as NewStory).distinct);
   if (distinct.length) log["distinctClaims"] = distinct.map(({ st }) => (st as NewStory).distinct);
   const links = stories.map(({ c }) => c.link);
+
+  // 4b. Write (step 3): a scheduled text is written as the agent itself. Asked news goes into the
+  // agent's own reply anyway. A failure here never loses the story: the decision's text goes out.
+  let text = decision.message.text;
+  if (mode === "scheduled" && deps.write) {
+    const written = await writeText(deps, s, at, tz, stories, record, signal);
+    log["costUsd"] = round(cost);
+    if ("held" in written) {
+      for (const { c } of stories) {
+        const it = fate.get(c)!;
+        it.stage = "write";
+        it.result = "dropped";
+      }
+      const note = `Chose to tell ${stories.map(({ c }) => `"${c.title}"`).join(" and ")}, then held it back while writing: ${written.held}`;
+      remember(deps, at, note);
+      log["writerHeld"] = written.held;
+      return finish({ status: "writer held", note, kept: kept.length });
+    }
+    if ("text" in written) text = written.text;
+    else log["writerFailed"] = written.failed;
+  }
+
   if (mode === "scheduled") {
-    const sent = await door(deps, s, at, tz, decision.message.text, links, "news");
+    const sent = await door(deps, s, at, tz, text, links, "news");
     if (!sent) {
       // Held by a fence: worth telling, so it waits as kept-for-later rather than being lost.
       deps.store.update((st) => {
         for (const { c } of stories) if (!st.later.some((l) => l.link === c.link)) st.later.push({ at: at.toISOString(), title: c.title, link: c.link, topic: c.topic, why: "held by quiet hours or the daily limit" });
       });
       for (const { c } of stories) fate.get(c)!.result = "kept";
-      return finish({ status: "held", text: decision.message.text, note: decision.note });
+      return finish({ status: "held", text, note: decision.note });
     }
   }
   const cardOf = tell(deps, at, stories);
@@ -239,7 +271,50 @@ export async function runCheck(deps: CheckDeps, mode: CheckMode, signal?: AbortS
     const id = cardOf.get(c.link);
     if (id) it.card = id;
   }
-  return finish({ status: mode === "scheduled" ? "sent" : "to tell", text: decision.message.text, note: decision.note, kept: kept.length });
+  return finish({ status: mode === "scheduled" ? "sent" : "to tell", text, note: decision.note, kept: kept.length });
+}
+
+/**
+ * [sunshine:watcher] Step 3: write the chosen stories as the agent would text them, with what it
+ * knows and one web search per story. Returns the text, a hold-back with its reason, or a failure
+ * (the caller then sends the decision's own text). Never throws.
+ */
+async function writeText(
+  deps: CheckDeps,
+  s: WatchState,
+  at: Date,
+  tz: string,
+  stories: Array<{ st: NewStory | StoryUpdate; c: Candidate }>,
+  record: (step: "write", costUsd: number) => void,
+  signal?: AbortSignal,
+): Promise<{ text: string } | { held: string } | { failed: string }> {
+  try {
+    const context: WriterContext = deps.writerContext?.() ?? { persona: "", memory: "", thread: "" };
+    const found = await Promise.all(
+      stories.map(async ({ c }) => {
+        if (!deps.research) return "";
+        try {
+          const results = await deps.research(`${c.title} ${c.source ?? ""}`.trim(), signal);
+          return `Search for "${c.title}":\n${results.slice(0, RESEARCH_MAX_CHARS)}`;
+        } catch {
+          return `The search for "${c.title}" failed; write from the headline.`;
+        }
+      }),
+    );
+    const told: WriteStory[] = stories.map(({ st, c }) => {
+      const card = st.card === "new" ? undefined : s.stories.find((x) => x.id === st.card);
+      return { title: c.title, ...(c.source ? { source: c.source } : {}), ...(card ? { update: { subject: card.subject, event: card.event, status: card.status } } : {}) };
+    });
+    const reply = await deps.write!({
+      system: writeSystem({ agentName: deps.config.agent.name, ownerName: deps.config.owner.name, persona: context.persona, memory: context.memory, profile: s.profile }),
+      user: writeUser({ now: nowText(at, tz), thread: context.thread, stories: told, found }),
+      ...(signal ? { signal } : {}),
+    });
+    record("write", reply.costUsd);
+    return parseWritten(reply.text) ?? { failed: "the writer's reply was empty or too long" };
+  } catch (err) {
+    return { failed: String(err instanceof Error ? err.message : err) };
+  }
 }
 
 /** Text the owner, inside the fences. Returns false when a fence held it. */

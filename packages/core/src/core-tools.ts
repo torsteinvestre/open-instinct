@@ -107,32 +107,59 @@ function memoryTools({ memory }: CoreToolDeps): RegisteredTool[] {
 // Schedules
 // ---------------------------------------------------------------------------
 
+/** [sunshine:relative-time] Longest "in N minutes" accepted: a year. */
+export const MAX_IN_MINUTES = 366 * 24 * 60;
+
+/** [sunshine:relative-time] A run time as the owner reads it, e.g. "Wed 14 Oct, 11:32 Europe/Oslo". */
+export function localTime(iso: string, tz: string): string {
+  try {
+    const text = new Intl.DateTimeFormat("en-GB", { timeZone: tz, weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(iso));
+    return `${text} ${tz}`;
+  } catch {
+    return iso;
+  }
+}
+
 function scheduleTools({ scheduler, config }: CoreToolDeps): RegisteredTool[] {
   const create = defineTool({
     name: "schedule_create",
     label: "Create schedule",
     description:
-      "Schedule a prompt to run later. Give cron (5 fields, in tz) for repeating jobs or at (ISO timestamp) for one-shot. The prompt runs as the owner and the result is texted to them.",
+      // [sunshine:relative-time] inMinutes added: "in N minutes" is computed here, not by the model.
+      "Schedule a prompt to run later. Give cron (5 fields, in tz) for repeating jobs; inMinutes for a one-shot \"in N minutes/hours\" (the time is computed for you); or at (ISO timestamp) for a one-shot at a clock time or date. The prompt runs as the owner and the result is texted to them.",
     parameters: Type.Object({
       name: Type.String({ description: "Short name, e.g. \"morning briefing\"" }),
       prompt: Type.String({ description: "What to do when it fires" }),
       cron: Type.Optional(Type.String({ description: "minute hour day-of-month month day-of-week" })),
       tz: Type.Optional(Type.String({ description: "IANA timezone; defaults to the owner's" })),
-      at: Type.Optional(Type.String({ description: "ISO timestamp for a one-shot run" })),
+      // [sunshine:relative-time] The zone is asked for: a bare time is read in the server's zone.
+      at: Type.Optional(Type.String({ description: "ISO timestamp with its zone (Z or an offset like +02:00) for a one-shot run at a clock time or date" })),
+      // [sunshine:relative-time] Asked at 11:27 for "in 5 minutes", the model once set 11:36 doing the sum itself.
+      inMinutes: Type.Optional(Type.Number({ description: "Minutes from now for a one-shot run: \"in 5 minutes\" = 5, \"in 2 hours\" = 120. The time is computed from the real clock." })),
     }),
     meta: { capabilities: ["schedule.manage"], group: "schedule", describe: (a) => `schedule ${argText(a, "name")}` },
-    execute: async ({ name, prompt, cron, tz, at }) => {
-      if (!cron && !at) return { content: [{ type: "text", text: "Give either cron or at." }], isError: true };
-      if (at && Number.isNaN(Date.parse(at))) return { content: [{ type: "text", text: `Invalid timestamp: ${at}` }], isError: true };
+    execute: async ({ name, prompt, cron, tz, at, inMinutes }, ctx) => {
+      // [sunshine:relative-time] "In N minutes" becomes a timestamp here, from the real clock.
+      if (inMinutes !== undefined) {
+        if (cron || at) return { content: [{ type: "text", text: "Give inMinutes alone, without cron or at." }], isError: true };
+        if (!Number.isFinite(inMinutes) || inMinutes <= 0 || inMinutes > MAX_IN_MINUTES) {
+          return { content: [{ type: "text", text: `inMinutes must be more than 0 and at most ${MAX_IN_MINUTES} (a year).` }], isError: true };
+        }
+      }
+      const when = inMinutes !== undefined ? new Date(ctx.now().getTime() + inMinutes * 60_000).toISOString() : at;
+      if (!cron && !when) return { content: [{ type: "text", text: "Give cron, at or inMinutes." }], isError: true };
+      if (when && Number.isNaN(Date.parse(when))) return { content: [{ type: "text", text: `Invalid timestamp: ${when}` }], isError: true };
       const entry = scheduler.create({
         name,
         prompt,
         enabled: true,
         ...(cron ? { cron } : {}),
         tz: tz ?? config.owner.timezone,
-        ...(at ? { nextRunAt: new Date(at).toISOString() } : {}),
+        ...(when ? { nextRunAt: new Date(when).toISOString() } : {}),
       });
-      return textResult(`Scheduled "${entry.name ?? entry.id}" (id ${entry.id}). Next run: ${entry.nextRunAt ?? "unknown"}.`);
+      // [sunshine:relative-time] The owner's clock time too, so the model never converts zones itself.
+      const local = entry.nextRunAt ? ` (${localTime(entry.nextRunAt, entry.tz ?? config.owner.timezone)})` : "";
+      return textResult(`Scheduled "${entry.name ?? entry.id}" (id ${entry.id}). Next run: ${entry.nextRunAt ?? "unknown"}${local}.`);
     },
   });
 

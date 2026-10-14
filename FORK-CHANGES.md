@@ -191,6 +191,35 @@ Upstream's own `instinct deploy` already passes the timezone; only the gateway m
 **To remove.** Revert its commit (`git log --grep "timezone"`), or delete every tagged block. New
 agents then run in UTC again.
 
+### `[sunshine:relative-time]`: "in N minutes" is computed by the code
+
+**Problem.** `schedule_create` only took an exact ISO time, so for "remind me in 5 minutes" the model
+did the sum itself. Usually right (it often checked the clock with `date` first), but not always:
+asked at 11:27 in a long thread, it set 11:36. OpenClaw's agent tool has the same gap; only its
+command line (`parseAt`, "20m") computes relative times in code.
+
+**What the fork adds** (`packages/core/src/core-tools.ts`).
+
+- An `inMinutes` option: "in 5 minutes" = 5, "in 2 hours" = 120. The tool adds it to the real clock
+  (`ctx.now()`). It must stand alone (not with `at` or `cron`), above 0 and at most a year.
+- The result also gives the owner's clock time ("Next run: 2026-10-14T09:32:00.000Z (Wed 14 Oct,
+  11:32 Europe/Oslo)"), so the model never converts zones itself. Correct across the change to
+  winter time (tested for Oslo, 25 October).
+- The `at` description asks for the zone (Z or an offset). A time without one is read in the
+  server's zone (UTC on Maritime); the model's past calls all had one, so this stays a description,
+  not a code change.
+
+**Tested with the real model** (`packages/server/scenarios/reminders.mjs`, 14 ways of asking, 2
+rounds, about $0.24 with the old tool for comparison): new 28/28 at the right time, every relative
+request used `inMinutes`, every clock time had the right offset (+01:00 after 25 October), and no
+reply stated a wrong time (all in 24-hour form). The old tool: 27/28 in that short, clean thread
+(today's 11:36 slip did not recur there), up to a minute early in half the relative cases (seconds
+dropped), "in 2 days" once set to 09:00, and some replies in 12-hour form ("2:11 PM").
+
+**To remove.** Revert its commit (`git log --grep "relative-time"`), or delete the tagged blocks in
+`core-tools.ts`, its tests in `packages/core/test/core-tools.test.ts`, and the scenario. Reminders
+then work as before, with the model doing the sum.
+
 ## Earlier changes (not tagged; find them by commit)
 
 Ordered from most to least likely to cause trouble. `git show <commit>` shows a change in full;

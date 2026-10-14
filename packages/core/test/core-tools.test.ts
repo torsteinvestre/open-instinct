@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ApprovalStore } from "../src/approvals.js";
 import { AuditLog } from "../src/audit.js";
-import { WEB_BODY_CAP_BYTES, coreTools, fetchPublic, htmlToText, parseDuckDuckGoHtml, type CoreToolDeps } from "../src/core-tools.js";
+import { WEB_BODY_CAP_BYTES, coreTools, fetchPublic, htmlToText, localTime, parseDuckDuckGoHtml, type CoreToolDeps } from "../src/core-tools.js";
 import { checkPublicTarget, isPublicAddress } from "../src/net-guard.js";
 import { MemoryStore } from "../src/memory.js";
 import type { Outbox } from "../src/runtime.js";
@@ -125,6 +125,43 @@ describe("schedule tools", () => {
     expect(text(await run("schedule_delete", { id }))).toContain("Deleted");
     expect(text(await run("schedule_delete", { id }))).toContain("No schedule");
     expect(text(await run("schedule_list", {}))).not.toContain("No schedules");
+  });
+
+  // [sunshine:relative-time] "In N minutes" is computed from the real clock, not by the model.
+  it("turns inMinutes into a time from the real clock and reports it in the owner's zone", async () => {
+    const { run, text, deps } = setup();
+    const five = text(await run("schedule_create", { name: "water", prompt: "Drink water", inMinutes: 5 }));
+    expect(five).toContain("Next run: 2026-10-03T15:05:00.000Z (Sat 3 Oct, 11:05 America/New_York).");
+    const two = text(await run("schedule_create", { name: "stretch", prompt: "Stretch", inMinutes: 120 }));
+    expect(two).toContain("2026-10-03T17:00:00.000Z (Sat 3 Oct, 13:00 America/New_York)");
+    expect(deps.scheduler.list().map((e) => [e.name, e.nextRunAt, e.cron])).toEqual([
+      ["water", "2026-10-03T15:05:00.000Z", undefined],
+      ["stretch", "2026-10-03T17:00:00.000Z", undefined],
+    ]);
+    // An exact time still works the same, now with the owner's clock time beside it.
+    expect(text(await run("schedule_create", { name: "call", prompt: "Call mom", at: "2026-10-04T18:00:00Z" }))).toContain("2026-10-04T18:00:00.000Z (Sun 4 Oct, 14:00 America/New_York)");
+  });
+
+  it("refuses an inMinutes it cannot use, and creates nothing", async () => {
+    const { run, deps } = setup();
+    for (const args of [
+      { inMinutes: 5, at: "2026-10-04T18:00:00Z" },
+      { inMinutes: 5, cron: "0 8 * * *" },
+      { inMinutes: 0 },
+      { inMinutes: -5 },
+      { inMinutes: Number.NaN },
+      { inMinutes: 366 * 24 * 60 + 1 },
+    ]) {
+      const r = await run("schedule_create", { name: "x", prompt: "y", ...args });
+      expect(typeof r !== "string" && r.isError, JSON.stringify(args)).toBe(true);
+    }
+    expect(deps.scheduler.list()).toHaveLength(0);
+  });
+
+  it("shows clock times across the change to winter time (Oslo, 25 October 2026)", () => {
+    expect(localTime("2026-10-24T08:00:00Z", "Europe/Oslo")).toBe("Sat 24 Oct, 10:00 Europe/Oslo");
+    expect(localTime("2026-10-26T08:00:00Z", "Europe/Oslo")).toBe("Mon 26 Oct, 09:00 Europe/Oslo");
+    expect(localTime("2026-10-26T08:00:00Z", "Not/AZone")).toBe("2026-10-26T08:00:00Z");
   });
 
   it("lists a one-time reminder that already fired as done, so it is not scheduled again", async () => {

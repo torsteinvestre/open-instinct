@@ -267,6 +267,38 @@ lifetime); a 1-hour cache (`PI_CACHE_RETENTION=long`) is possible but costs twic
 commit (`git log --grep "stable-cache"`) or delete the tagged blocks in `prompt.ts`, `runtime.ts`,
 `types.ts`, the tests and the scenarios.
 
+### `[sunshine:delivery-mirror]`: Sunshine knows what it texted the owner from elsewhere
+
+**Problem.** A reminder, a news-watch text, a relay from a friend or an approval question reaches
+the owner's phone from another conversation (`scheduled:<id>`, `scheduled:watcher`, a friend's
+thread). The owner's own thread never recorded it, so a reply to it had no context: "preciate the
+reminder" got "Did the stretch reminder come through?", and "What's Sanna?" after a news text made
+Sunshine dig through its logs (live, 2026-10-14).
+
+**What the fork adds** (as OpenClaw's "delivery mirror", `src/infra/outbound/deliver-transcript.ts`).
+
+- `InkboxChannel.afterSend` (`packages/inkbox/src/channel.ts`): called after every successful send,
+  never after a failed one; a failing hook never fails the send. Every text passes there: the
+  runtime, the core tools, `send_message`, the news watch, payments. `boot.ts` wires it to the runtime.
+- `AgentRuntime.mirrorToOwner` (`packages/core/src/runtime.ts`): if the text reached the owner's own
+  thread (`ownerLast`) from a different conversation, two messages are added to that thread: a note
+  (time stamp, "Not a message from <owner>: a note that you texted them the next message from <the
+  news watch / the scheduled job "stretch" / your conversation with Sam>") and the text itself as
+  Sunshine's message. Once: the same text to the same thread within two minutes is skipped. If the
+  thread is mid-run, the copy is added when the run ends; if it is not loaded, it goes into the saved
+  session file. Failures are logged, never retried or fatal.
+- Off switch: `config.features.deliveryMirror = false`.
+
+**Why the note.** Tested with the real model: a bare copy made Sunshine disown the news text ("didn't
+come from anything I looked up, and I shouldn't have sent it"). With the note it answered "what's
+Sanna?" from the text it had sent (`packages/server/scenarios/mirror.mjs`, on vs off).
+
+**Not covered yet.** Files sent from elsewhere (`sendFile`) are not mirrored; only text.
+
+**To remove.** Set `features.deliveryMirror` to false, or revert its commit
+(`git log --grep "delivery-mirror"`) or delete the tagged blocks in `channel.ts`, `runtime.ts`,
+`types.ts`, `boot.ts`, the tests and the scenario.
+
 ## Earlier changes (not tagged; find them by commit)
 
 Ordered from most to least likely to cause trouble. `git show <commit>` shows a change in full;

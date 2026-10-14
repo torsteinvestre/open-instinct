@@ -257,6 +257,11 @@ export interface InstinctConfig {
      * false brings back upstream's behaviour on the next restart.
      */
     stableCache?: boolean;
+    /**
+     * [sunshine:delivery-mirror] On unless false: a text that reaches the owner's own thread from
+     * elsewhere (a reminder, the news watch, a relay) is copied into that thread's history.
+     */
+    deliveryMirror?: boolean;
   };
 }
 

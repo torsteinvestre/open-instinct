@@ -169,20 +169,37 @@ export class InkboxChannel implements Outbox {
     this.replyContexts.set(msg.conversationKey, ctx);
   }
 
-  async send(msg: OutboundMessage, _ctx: { principal: Principal; conversationKey: string }): Promise<void> {
+  /**
+   * [sunshine:delivery-mirror] Called after every successful send (not after a failed one), so the
+   * host can copy texts that reached the owner from elsewhere into the owner's thread. Every text
+   * passes here: the runtime, the core tools, send_message, the news watch, payments. A failing
+   * hook never fails the send.
+   */
+  afterSend?: (msg: OutboundMessage, ctx: { principal: Principal; conversationKey: string }) => void;
+
+  async send(msg: OutboundMessage, ctx: { principal: Principal; conversationKey: string }): Promise<void> {
     const key = parseConversationKey(msg.conversationKey);
     const channel = msg.channel ?? key.channel;
     switch (channel) {
       case "imessage":
-        return this.sendIMessage(msg, key);
+        await this.sendIMessage(msg, key);
+        break;
       case "sms":
-        return this.sendSms(msg, key);
+        await this.sendSms(msg, key);
+        break;
       case "email":
-        return this.sendEmail(msg, key);
+        await this.sendEmail(msg, key);
+        break;
       case "a2a":
-        return this.sendA2A(msg, key);
+        await this.sendA2A(msg, key);
+        break;
       default:
         throw new Error(`InkboxChannel cannot deliver on channel "${String(channel)}" (key ${msg.conversationKey ?? "none"})`);
+    }
+    try {
+      this.afterSend?.(msg, ctx);
+    } catch {
+      // Bookkeeping only; the text is already out.
     }
   }
 

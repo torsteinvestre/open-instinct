@@ -11,7 +11,7 @@ import { MemoryStore } from "../src/memory.js";
 import { PolicyEngine, defaultPolicy } from "../src/policy.js";
 import { coreTools } from "../src/core-tools.js";
 import { A2AStore } from "../src/a2a-state.js";
-import { AgentRuntime, FOLD_HIGH_MESSAGES, FOLD_LOW_CHARS, FOLD_LOW_MESSAGES, InboundUncertainError, SESSION_KEEP_MESSAGES, foldInSteps, hashArgs, restoreMessages, runtimeKey, stableJson, type Outbox, type RuntimeDeps } from "../src/runtime.js";
+import { AgentRuntime, FOLD_HIGH_MESSAGES, FOLD_LOW_CHARS, FOLD_LOW_MESSAGES, InboundUncertainError, SESSION_KEEP_MESSAGES, foldInSteps, hashArgs, readSession, restoreMessages, runtimeKey, stableJson, type Outbox, type RuntimeDeps } from "../src/runtime.js";
 import { Scheduler } from "../src/scheduler.js";
 import { ToolRegistry, defineTool, textResult, type RegisteredTool } from "../src/tools.js";
 import type { InboundMessage, OutboundMessage, Policy, Principal } from "../src/types.js";
@@ -429,6 +429,107 @@ describe("AgentRuntime.handleInbound", () => {
       const conv = h.runtime.conversation("chat:main", h.runtime.ownerPrincipal());
       expect(userTexts(conv.agent.state.messages)).toEqual([JSON.stringify([{ type: "text", text: "question 1" }])]);
       expect(conv.agent.state.systemPrompt).toContain("# Now");
+    });
+  });
+
+  // [sunshine:delivery-mirror] Texts that reach the owner from elsewhere land in the owner's thread, once.
+  describe("delivery mirror", () => {
+    const THREAD = "imessage:c1";
+    const ownerSays = (h: Harness, text: string, id: string) => h.runtime.handleInbound(inbound({ channel: "imessage", from: OWNER_PHONE, conversationKey: THREAD, text, id }));
+    const thread = (h: Harness) => h.runtime.conversation(THREAD, h.runtime.ownerPrincipal()).agent.state.messages.filter((m) => m.role !== "system");
+    const texts = (msgs: AgentMessage[]) =>
+      msgs.map((m) => `${m.role}: ${typeof m.content === "string" ? m.content : m.content.map((c) => (c.type === "text" ? c.text : `[${c.type}]`)).join("")}`);
+    const onDisk = (h: Harness) => readSession(`${h.deps.state.path("sessions")}/${encodeURIComponent(THREAD)}.jsonl`);
+
+    it("copies a reminder sent to the owner's phone from a scheduled job, once, and saves it", async () => {
+      const h = harness();
+      h.faux.setResponses([textTurn("Done, at 15:01.")]);
+      await ownerSays(h, "remind me in 3 minutes to stretch", "m1");
+      h.runtime.mirrorToOwner({ channel: "imessage", to: OWNER_PHONE, text: "Time to stretch." }, { conversationKey: "scheduled:s_1" });
+      h.runtime.mirrorToOwner({ channel: "imessage", to: OWNER_PHONE, text: "Time to stretch." }, { conversationKey: "scheduled:s_1" }); // the same send again
+      const tail = texts(thread(h)).slice(-3);
+      expect(tail[0]).toBe("assistant: Done, at 15:01.");
+      // A note with the time and the source, then the text itself as Sunshine's message.
+      expect(tail[1]).toMatch(/^user: \[.* America\/New_York, UTC-04:00\]\n\[Not a message from Maria: a note that you texted them the next message from a scheduled job\. No reply is needed to it\.\]$/);
+      expect(tail[2]).toBe("assistant: Time to stretch.");
+      expect(texts(onDisk(h)).filter((t) => t.includes("Time to stretch."))).toHaveLength(1);
+    });
+
+    it("names the source: the news watch, a scheduled job by name, a person's conversation", async () => {
+      const h = harness();
+      h.faux.setResponses([textTurn("ok")]);
+      await ownerSays(h, "hi", "m1");
+      const job = h.deps.scheduler.create({ name: "stretch", prompt: "Remind the owner to stretch.", enabled: true, nextRunAt: new Date().toISOString() });
+      h.runtime.mirrorToOwner({ channel: "imessage", to: OWNER_PHONE, text: "Sanna raised 30M." }, { conversationKey: "scheduled:watcher" });
+      h.runtime.mirrorToOwner({ channel: "imessage", to: OWNER_PHONE, text: "Time to stretch." }, { conversationKey: `scheduled:${job.id}` });
+      h.runtime.mirrorToOwner({ channel: "imessage", to: OWNER_PHONE, text: "Approve?" }, { conversationKey: "imessage:unknown" });
+      const notes = texts(thread(h)).filter((t) => t.startsWith("user:") && t.includes("Not a message from"));
+      expect(notes[0]).toContain("from your news watch");
+      expect(notes[1]).toContain('from the scheduled job "stretch"');
+      expect(notes[2]).toContain("from another conversation");
+    });
+
+    it("copies nothing said in the thread itself, sent to someone else, empty, or with the switch off", async () => {
+      const h = harness();
+      h.faux.setResponses([textTurn("ok")]);
+      await ownerSays(h, "hi", "m1");
+      const before = texts(thread(h));
+      h.runtime.mirrorToOwner({ channel: "imessage", conversationKey: THREAD, text: "ok" }, { conversationKey: THREAD }); // its own reply
+      h.runtime.mirrorToOwner({ channel: "imessage", to: SAM_PHONE, text: "Hi Sam" }, { conversationKey: "scheduled:s_1" });
+      h.runtime.mirrorToOwner({ channel: "imessage", to: OWNER_PHONE, text: "  " }, { conversationKey: "scheduled:s_1" });
+      expect(texts(thread(h))).toEqual(before);
+      const off = testConfig();
+      off.features = { ...off.features, deliveryMirror: false };
+      const h2 = harness({ deps: { config: off } });
+      h2.faux.setResponses([textTurn("ok")]);
+      await ownerSays(h2, "hi", "m1");
+      h2.runtime.mirrorToOwner({ channel: "imessage", to: OWNER_PHONE, text: "Time to stretch." }, { conversationKey: "scheduled:s_1" });
+      expect(texts(thread(h2)).some((t) => t.includes("stretch"))).toBe(false);
+    });
+
+    it("copies a text addressed to the thread itself from another conversation (a relay)", async () => {
+      const h = harness();
+      h.faux.setResponses([textTurn("ok")]);
+      await ownerSays(h, "hi", "m1");
+      h.runtime.mirrorToOwner({ channel: "imessage", conversationKey: THREAD, text: "From Sam: running late" }, { conversationKey: "imessage:conv_sam" });
+      expect(texts(thread(h)).at(-1)).toBe("assistant: From Sam: running late");
+    });
+
+    it("waits until a run in progress is over, then adds the copy after it", async () => {
+      const h = harness();
+      h.faux.setResponses([toolTurn("slow", {}), textTurn("Here you go.")]);
+      const run = ownerSays(h, "research this", "m1");
+      await vi.waitFor(() => expect(h.calls.some((c) => c.tool === "slow")).toBe(true));
+      h.runtime.mirrorToOwner({ channel: "imessage", to: OWNER_PHONE, text: "Time to stretch." }, { conversationKey: "scheduled:s_1" });
+      expect(texts(thread(h)).some((t) => t.includes("stretch"))).toBe(false); // not in the middle of the run
+      h.gate.open();
+      await run;
+      await vi.waitFor(() => expect(texts(thread(h)).at(-1)).toBe("assistant: Time to stretch."));
+      expect(texts(thread(h)).at(-3)).toBe("assistant: Here you go.");
+      expect(texts(onDisk(h)).filter((t) => t.includes("Time to stretch."))).toHaveLength(1);
+    });
+
+    it("writes the copy to disk when the thread is not loaded, and it is there after a restart", async () => {
+      const h = harness();
+      h.faux.setResponses([textTurn("ok")]);
+      await ownerSays(h, "hi", "m1");
+      const restarted = new AgentRuntime(h.deps); // a new process: nothing loaded, the owner's route is on disk
+      restarted.mirrorToOwner({ channel: "imessage", to: OWNER_PHONE, text: "Since you follow XRP: ..." }, { conversationKey: "scheduled:watcher" });
+      expect(texts(onDisk(h)).at(-1)).toBe("assistant: Since you follow XRP: ...");
+      const loaded = restarted.conversation(THREAD, restarted.ownerPrincipal()).agent.state.messages.filter((m) => m.role !== "system");
+      expect(texts(loaded).at(-1)).toBe("assistant: Since you follow XRP: ...");
+    });
+
+    it("copies what a scheduled job texts the owner with notify_owner, end to end", async () => {
+      const h = harness({ withCoreTools: true });
+      const send = h.deps.outbox.send.bind(h.deps.outbox);
+      h.deps.outbox.send = async (m, c) => { await send(m, c); h.runtime.mirrorToOwner(m, c); }; // as boot wires the channel
+      h.faux.setResponses([textTurn("Done."), toolTurn("notify_owner", { text: "Time to stretch." }), textTurn("NO_REPLY")]);
+      await ownerSays(h, "remind me in 3 minutes to stretch", "m1");
+      const entry = h.deps.scheduler.create({ name: "stretch", prompt: "Remind the owner to stretch.", enabled: true, nextRunAt: new Date().toISOString() });
+      await h.runtime.runScheduled(entry);
+      expect(texts(thread(h)).at(-1)).toBe("assistant: Time to stretch.");
+      expect(texts(thread(h)).filter((t) => t.includes("Time to stretch."))).toHaveLength(1);
     });
   });
 

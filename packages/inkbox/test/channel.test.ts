@@ -53,6 +53,21 @@ describe("InkboxChannel routing", () => {
     expect(posts[1]?.body).toEqual({ conversation_id: "conv_1", text: "Done." });
   });
 
+  // [sunshine:delivery-mirror] The host hears about every text that went out, and only those.
+  it("calls afterSend after a successful send, never after a failed one, and survives a failing hook", async () => {
+    const ch = channel();
+    const seen: Array<{ text: string; origin: string }> = [];
+    ch.afterSend = (msg, c) => seen.push({ text: msg.text, origin: c.conversationKey });
+    await ch.send({ channel: "imessage", to: "+14155550100", text: "Time to stretch." }, ctx("scheduled:s_1"));
+    await expect(ch.send({ channel: "imessage", text: "nowhere to go" }, ctx("scheduled:s_2"))).rejects.toThrow();
+    expect(seen).toEqual([{ text: "Time to stretch.", origin: "scheduled:s_1" }]);
+    ch.afterSend = () => {
+      throw new Error("bookkeeping broke");
+    };
+    await expect(ch.send({ channel: "imessage", to: "+14155550100", text: "still sent" }, ctx("scheduled:s_3"))).resolves.toBeUndefined();
+    expect(sends("/api/v1/imessage/messages")).toHaveLength(2);
+  });
+
   it("starts a new iMessage with `to` when there is no conversation key", async () => {
     await channel().send({ channel: "imessage", to: "+14155550100", text: "Hi Sam", sendStyle: "confetti" }, ctx("chat:cli"));
     expect(sends("/api/v1/imessage/messages")[0]?.body).toEqual({ to: "+14155550100", text: "Hi Sam", send_style: "confetti" });

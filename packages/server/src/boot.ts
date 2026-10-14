@@ -385,6 +385,9 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
     ...(watcher ? { scheduleGates: { [WATCH_GATE]: watcher.gate } } : {}), // [sunshine:watcher]
   });
   watcher?.ensureStarted(); // [sunshine:watcher] before the scheduler and the Maritime push read the jobs
+  // [sunshine:delivery-mirror] Every text goes out through the channel; the runtime copies the ones
+  // that reached the owner from elsewhere (reminders, news, relays) into the owner's thread.
+  if (channel) channel.afterSend = (msg, ctx) => runtime.mirrorToOwner(msg, ctx);
 
   const stopScheduler = scheduler.start((entry) => runtime.runScheduled(entry));
 

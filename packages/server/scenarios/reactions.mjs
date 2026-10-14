@@ -132,6 +132,12 @@ const S = [
   { kind: "words", name: "remind at 5", msg: "remind me to buy iskaffe when i leave work at 5" },
   { kind: "theirs", name: "their ❤️ on a news text", before: [[null, news()]], msg: "[reaction love on message 1bff6a56-684d-4a7f-8de2-5aae84ef5695]" },
   { kind: "theirs", name: "their 👍 on a confirmation", before: [["book a table for two at Pjoltergeist friday at 7", booking()]], msg: "[reaction like on message 2c1a7e90-1111-4a7f-8de2-5aae84ef0000]" },
+  // As tapbacks really reach the shared line (2026-10-14): as text, in the phone's language. A
+  // tapback back lands on a message that is not a bubble on their phone, so it is invisible: fine.
+  { kind: "theirsText", name: "Likte «108» (Norwegian)", before: [["whats 12*9?", "108"]], msg: "Likte «108»" },
+  { kind: "theirsText", name: "Loved “…” (English)", before: [[null, news()]], msg: `Loved “${NEWS}”` },
+  { kind: "signal", name: "Satte spørsmålstegn ved «…»", before: [["yo sunshine", "Yo. What do you need?"]], msg: "Satte spørsmålstegn ved «Yo. What do you need?»" },
+  { kind: "signal", name: "Disliked “…” (English)", before: [[null, news()]], msg: `Disliked “${NEWS}”` },
   { kind: "signal", name: "their ? on an answer", before: [["what's the deal with the XRP patch?", didThen("web_search", { query: "XRP ledger emergency amendment" }, "CoinDesk: XRPL validators fast-tracked an emergency amendment, skipping the usual two-week vote, to fix a ledger bug. Critics call it a centralization risk.", "XRPL validators pushed an emergency amendment without the usual two-week vote; some call it a centralization risk, others say it was needed to fix the ledger bug.")]], msg: "[reaction question on message 3d2b8f01-2222-4a7f-8de2-5aae84ef1111]" },
   { kind: "signal", name: "their 👎 on a news text", before: [[null, news()]], msg: "[reaction dislike on message 1bff6a56-684d-4a7f-8de2-5aae84ef5696]" },
   { kind: "signal", name: "their 😡 on a reminder", before: [["remind me about the dentist on thursday", didThen("schedule_create", { name: "dentist", prompt: "Remind the owner about the dentist.", at: "2026-10-13T06:00:00Z" }, "Scheduled s_3 for 2026-10-13T06:00:00Z.", "Done.")], [null, "Reminder: dentist today."]], msg: "[reaction 😡 on message 4e3c9a12-3333-4a7f-8de2-5aae84ef2222]" },
@@ -139,6 +145,7 @@ const S = [
 const ACCEPT = {
   closing: ["tapback only", "nothing"], approval: ["text only", "tapback + text"], mixed: ["text only", "tapback + text"], words: ["text only"],
   sad: ["text only", "tapback + text"], happy: ["tapback + text", "text only"], theirs: ["nothing"], signal: ["text only", "tapback + text"],
+  theirsText: ["nothing", "tapback only"],
 };
 const WORDS_NEEDED = new Set(["approval", "mixed", "words", "sad"]);
 
@@ -194,7 +201,7 @@ for (const variant of variants) {
   }
 }
 
-const KINDS = ["closing", "approval", "mixed", "happy", "sad", "words", "theirs", "signal"];
+const KINDS = ["closing", "approval", "mixed", "happy", "sad", "words", "theirs", "theirsText", "signal"];
 for (const variant of variants) {
   const rows = results[variant];
   const by = (k) => `${rows.filter((x) => x.kind === k && x.pass).length}/${rows.filter((x) => x.kind === k).length}`;

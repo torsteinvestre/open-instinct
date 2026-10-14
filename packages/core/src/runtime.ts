@@ -105,6 +105,8 @@ export const FOLD_HIGH_MESSAGES = 80;
 export const FOLD_LOW_MESSAGES = 50;
 export const FOLD_HIGH_CHARS = SESSION_KEEP_CHARS;
 export const FOLD_LOW_CHARS = 160_000;
+/** [sunshine:delivery-mirror] The same text to the same thread within this window is copied once. */
+export const MIRROR_REPEAT_MS = 2 * 60 * 1000;
 /** An approved request can be acted on for this long before it lapses. */
 export const APPROVAL_USE_WINDOW_MS = 15 * 60 * 1000;
 const SEEN_IDS_MAX = 500;
@@ -186,6 +188,8 @@ export class Conversation {
   acknowledged = false;
   usedOtherTool = false;
   busy = false;
+  /** [sunshine:delivery-mirror] Copies that arrived while a run was going; added when it ends. */
+  private pendingNotes: AgentMessage[] = [];
   private readonly sessionFile: string;
   private readonly refreshPrompt: () => string;
   private readonly now: () => Date;
@@ -231,7 +235,23 @@ export class Conversation {
       return finalAssistantText(fresh);
     } finally {
       this.busy = false;
+      // [sunshine:delivery-mirror] A text sent elsewhere during the run is added once it is over.
+      if (this.pendingNotes.length > 0) {
+        this.agent.state.messages = [...this.agent.state.messages, ...this.pendingNotes];
+        this.pendingNotes = [];
+        this.persist();
+      }
     }
+  }
+
+  /** [sunshine:delivery-mirror] Add messages to the end of this thread's history, now or after the current run. */
+  addNote(notes: AgentMessage[]): void {
+    if (this.busy) {
+      this.pendingNotes.push(...notes);
+      return;
+    }
+    this.agent.state.messages = [...this.agent.state.messages, ...notes];
+    this.persist();
   }
 
   steer(text: string): void {
@@ -930,6 +950,69 @@ export class AgentRuntime {
     }
   }
 
+  /**
+   * [sunshine:delivery-mirror] A text that reached the owner's own thread from somewhere else (a
+   * reminder, the news watch, a relay, an approval question) is copied into that thread's history
+   * as Sunshine's own message, so a reply to it ("thanks for the reminder", "what's Sanna?") has
+   * context. As OpenClaw's delivery mirror: called by the channel only after a successful send,
+   * written as an assistant message, once (the same text to the same thread within
+   * MIRROR_REPEAT_MS is skipped), and never fatal. Off with config.features.deliveryMirror = false.
+   * A short note with the time and the source goes in front: tested, a bare copy made the model
+   * disown the news text as something it never looked up ("I shouldn't have sent it").
+   */
+  mirrorToOwner(msg: OutboundMessage, origin: { conversationKey: string }): void {
+    try {
+      if (this.deps.config.features?.deliveryMirror === false) return;
+      const route = this.ownerLast;
+      if (!route || route.conversationKey === origin.conversationKey) return; // said in the thread itself: already there
+      const text = msg.text?.trim();
+      if (!text) return;
+      const reachedOwner = msg.conversationKey ? msg.conversationKey === route.conversationKey : msg.channel === route.channel && this.isOwnerPhone(msg.to);
+      if (!reachedOwner) return;
+      const now = this.now().getTime();
+      const key = `${route.conversationKey}\n${text}`;
+      const seen = this.mirrored.get(key);
+      if (seen !== undefined && now - seen < MIRROR_REPEAT_MS) return;
+      this.mirrored.set(key, now);
+      if (this.mirrored.size > 200) this.mirrored.delete(this.mirrored.keys().next().value!);
+      const owner = this.deps.config.owner;
+      const stamp = timeStamp(new Date(now), owner.timezone || "UTC");
+      const notes = [
+        userMessage(`${stamp}\n[Not a message from ${owner.name}: a note that you texted them the next message from ${this.mirrorSource(origin.conversationKey)}. No reply is needed to it.]`, new Date(now)),
+        mirroredMessage(text, this.deps.model, now),
+      ];
+      const live = this.conversations.get(route.conversationKey);
+      if (live) {
+        live.addNote(notes);
+      } else {
+        const file = join(this.sessionsDir, `${encodeURIComponent(route.conversationKey)}.jsonl`);
+        writeSession(file, [...readSession(file), ...notes]);
+      }
+    } catch (error) {
+      // Bookkeeping after a send that already succeeded: log it, never fail or repeat the send.
+      this.deps.audit.append({ kind: "error", conversationKey: origin.conversationKey, principal: "system", detail: { message: `delivery mirror failed: ${errorMessage(error)}` } });
+    }
+  }
+
+  private readonly mirrored = new Map<string, number>(); // [sunshine:delivery-mirror] recent copies, for once-only
+
+  /** [sunshine:delivery-mirror] Where a copied text came from, in words the model can use. */
+  private mirrorSource(originKey: string): string {
+    if (originKey === "scheduled:watcher") return "your news watch (headlines it checked on its own)";
+    if (originKey.startsWith("scheduled:")) {
+      const entry = this.deps.scheduler.list().find((e) => `scheduled:${e.id}` === originKey);
+      return entry?.name ? `the scheduled job "${entry.name}"` : "a scheduled job";
+    }
+    const who = this.recallRecord(originKey)?.principal.displayName;
+    return who ? `your conversation with ${who}` : "another conversation";
+  }
+
+  private isOwnerPhone(to: string | string[] | undefined): boolean {
+    if (typeof to !== "string") return false;
+    const phone = normalizePhone(to);
+    return this.deps.config.owner.phones.some((p) => normalizePhone(p) === phone);
+  }
+
   private replyText(value: { ok: true; reply: string } | { ok: false; error: unknown }, principal: Principal): string {
     if (value.ok) return value.reply;
     if (principal.kind === "owner") return `Something went wrong: ${errorMessage(value.error)}`;
@@ -1289,6 +1372,20 @@ function summarizeMessages(older: AgentMessage[]): string {
 
 function userMessage(text: string, now: Date): AgentMessage {
   return { role: "user", content: [{ type: "text", text }], timestamp: now.getTime() };
+}
+
+/** [sunshine:delivery-mirror] A copy of a text Sunshine sent, as its own message in the owner's thread. */
+function mirroredMessage(text: string, model: Model<any>, at: number): AgentMessage {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text }],
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    stopReason: "stop",
+    timestamp: at,
+  } as AgentMessage;
 }
 
 function finalAssistantText(messages: AgentMessage[]): string {

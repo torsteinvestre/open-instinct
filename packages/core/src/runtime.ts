@@ -169,6 +169,9 @@ export class Conversation {
   replyRef: ReplyRef;
   /** Set when the model answered an A2A task itself during the current run. */
   repliedViaTool = false;
+  /** [sunshine:reactions] A tapback declared the whole reply this run, and whether any other tool ran. */
+  acknowledged = false;
+  usedOtherTool = false;
   busy = false;
   private readonly sessionFile: string;
   private readonly refreshPrompt: () => string;
@@ -191,6 +194,8 @@ export class Conversation {
     if (this.busy) throw new Error(`Conversation ${this.key} is busy; use steer() or followUp()`);
     this.busy = true;
     this.repliedViaTool = false;
+    this.acknowledged = false; // [sunshine:reactions]
+    this.usedOtherTool = false;
     try {
       this.applySystemPrompt();
       // The transcript grows between restarts too, so the fold runs before every turn.
@@ -748,6 +753,13 @@ export class AgentRuntime {
     // [sunshine:reply-guard] Upstream sets this only for A2A. A text sent with a tool to the run's
     // own audience (this thread, or the owner from a scheduled job) is the reply just the same.
     if (!isError && reachesOwnAudience(conv, safeReplyTarget(meta, args))) conv.repliedViaTool = true;
+    // [sunshine:reactions] A lone tapback is the whole reply only if nothing else happened this run.
+    // Any other tool call, failed ones included, means there may be something to report in words.
+    if (safeReplyTarget(meta, args) === "acknowledge") {
+      if (!isError) conv.acknowledged = true;
+    } else {
+      conv.usedOtherTool = true;
+    }
     if (isError) return;
     const amountUsd = meta?.amountUsd?.(args);
     const spends = meta?.capabilities.some((c) => SPEND_CAPABILITIES.has(c)) ?? false;
@@ -826,6 +838,12 @@ export class AgentRuntime {
     // [sunshine:silent-reply] The word is never texted to anyone, as in OpenClaw. A2A still owes a result.
     if (channel !== "a2a" && isSilentReply(text)) {
       this.recordSilentReply(conv.key, conv.principal);
+      return;
+    }
+    // [sunshine:reactions] A tapback was the whole reply and nothing else happened: text after it
+    // ("I've already reacted…") would only be noise.
+    if (conv.acknowledged && !conv.usedOtherTool && channel !== "a2a") {
+      this.recordSkippedReply(conv.key, conv.principal, text);
       return;
     }
     // [sunshine:reply-guard] The model already answered in this thread with a tool; its final text

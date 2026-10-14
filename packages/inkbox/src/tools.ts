@@ -318,7 +318,7 @@ export function messagingTools(deps: MessagingDeps): RegisteredTool[] {
     name: "react",
     label: "Tapback",
     description:
-      "Put an iMessage tapback on the owner's message you are answering, in their own one-to-one thread. Alone (alone: true) when they close a task and no text is needed; with a few words (alone: false) for a social moment or with your answer to big news. Never as the only reply to a question or a request.",
+      "Put an iMessage tapback (like or love) on the owner's message you are answering, in their own one-to-one thread. alone: true when it is your whole reply; alone: false when you also write. Never instead of words they need.",
     parameters: reactParams,
     meta: {
       capabilities: ["converse"],
@@ -327,8 +327,9 @@ export function messagingTools(deps: MessagingDeps): RegisteredTool[] {
         const a = args as { reaction?: string; alone?: boolean };
         return `react ${a.reaction ?? ""}${a.alone ? " (as the whole reply)" : ""}`;
       },
-      // [sunshine:reactions] A reaction that is the whole reply means no text follows it.
-      replyTarget: (args) => ((args as { alone?: unknown }).alone === true ? "current" : undefined),
+      // [sunshine:reactions] A lone tapback is the whole reply, unless the run also did something
+      // (the runtime then still sends the text, so a report is never swallowed).
+      replyTarget: (args) => ((args as { alone?: unknown }).alone === true ? "acknowledge" : undefined),
     },
     execute: async (args, ctx) => {
       // [sunshine:reactions] Fences: the owner's private thread, three tapbacks, once per message.
@@ -345,11 +346,13 @@ export function messagingTools(deps: MessagingDeps): RegisteredTool[] {
       await deps.channel.react(ctx.deliveryKey ?? ctx.conversationKey, target, args.reaction);
       reacted.add(target);
       if (reacted.size > 500) reacted.delete(reacted.values().next().value!); // only recent messages matter
-      return textResult(args.alone ? `Reacted ${args.reaction}. That is your whole reply: send no text.` : `Reacted ${args.reaction}. Now answer in words.`);
+      return textResult(args.alone ? `Reacted ${args.reaction}. No text is needed unless you also did something they should hear about.` : `Reacted ${args.reaction}. Now write your reply.`);
     },
   });
 
-  return [sendMessage, sendTyping, react, sendFileTool(deps)];
+  // [sunshine:reactions] config.features.tapbacks = false is the off switch (upstream's flag, unused until now).
+  const tapbacks = deps.config.features?.tapbacks !== false;
+  return [sendMessage, sendTyping, ...(tapbacks ? [react] : []), sendFileTool(deps)];
 }
 
 /**

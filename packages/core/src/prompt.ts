@@ -70,7 +70,7 @@ export function describePromptLayers(input: PromptInput): PromptLayer[] {
     layer("instructions", PROMPT_SOURCES.instructions, instructionsSection(input.instructions)),
     layer("owner", PROMPT_SOURCES.owner, ownerSection(input)),
     layer("principal", PROMPT_SOURCES.principal, principalSection(input)),
-    layer("channel", PROMPT_SOURCES.channel, channelSection(input.channel)),
+    layer("channel", PROMPT_SOURCES.channel, channelSection(input.channel, input.config.features?.tapbacks !== false)),
     layer("reach", PROMPT_SOURCES.reach, reachSection(input)),
     layer("setup", PROMPT_SOURCES.setup, input.setup?.trim() || undefined),
     layer("rules", PROMPT_SOURCES.rules, rulesSection(input)),
@@ -212,7 +212,7 @@ function tierBlurb(tier: Tier): string {
   }
 }
 
-function channelSection(channel: Channel): string {
+function channelSection(channel: Channel, tapbacks = true): string {
   const lines = [`# Channel: ${channel}`];
   switch (channel) {
     case "imessage":
@@ -226,18 +226,13 @@ function channelSection(channel: Channel): string {
       );
       // [sunshine:reply-guard] A captioned file is the reply too, so anything said after it is not sent.
       lines.push("A file you send here with send_file and a caption is your reply: put everything you want to say in the caption, including any question or offer.");
-      // [sunshine:reactions] A tapback replaces a message, never adds one. Checked in this order.
-      if (channel === "imessage") {
+      // [sunshine:reactions] A principle, not a flowchart: the code fences the rest (react tool, runtime).
+      // The one plain "no" is offers in happy moments: tested, a softer line ("only the obvious next
+      // step") let the model offer celebration dinners. Off with config.features.tapbacks = false,
+      // which also removes the tool.
+      if (channel === "imessage" && tapbacks) {
         lines.push(
-          [
-            "Tapbacks (the react tool), in your owner's own thread only. Ask in order and stop at the first that fits:",
-            "1. Does the message ask for something, or do they need to know what you did? Answer in words, no tapback. A tapback alone would leave them wondering whether you got it.",
-            "2. Big news that also asks for something (\"I got the job! Remind me to sign tomorrow\")? love with alone: false, then the answer, without repeating the feeling in words.",
-            "3. Closing a task you just did (\"thanks\", \"ok\", \"perfect\", \"sounds good\", a thumbs up)? like or love with alone: true, and no text.",
-            "4. A social moment (\"goodnight\", good news they share, excitement, a compliment)? love with alone: false, then a few warm words like a friend would (\"Night!\", \"Nice, enjoy Saturday!\"). A short natural question or a personal touch is fine where a friend would add one (\"How are she and the baby doing?\"). A social reply never offers to do something, not even about an earlier problem in the conversation; if they want help, they will ask.",
-            "5. When they react to one of your messages, that needs no reply of any kind.",
-            "6. In doubt: no tapback.",
-          ].join("\n"),
+          "Tapbacks (the react tool) are how a friend acknowledges a message without adding another one. Use one only where it is the most natural response, and never when they need words: an answer, or to know what you did. When they are simply closing something you just did, the tapback can be your whole reply (alone: true). For happy news or a warm moment, add a few words of your own (alone: false): warmth, maybe a curious question, but no offers, not even about something earlier in the conversation. For bad news, stress or anything sad, answer in words; a tapback alone is never enough there. Their own tapbacks are feedback and most need no reply, but if one shows confusion or displeasure, respond briefly in words. Most messages get no tapback.",
         );
       }
       break;

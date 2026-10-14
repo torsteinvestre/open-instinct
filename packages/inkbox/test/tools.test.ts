@@ -193,13 +193,18 @@ describe("[sunshine:reactions] react", () => {
   it("reacts to the message being answered, without being told which", async () => {
     const r = await tool("react").execute({ reaction: "like", alone: true }, own("msg_now"));
     expect(channel.react).toHaveBeenCalledWith("imessage:conv_1", "msg_now", "like");
-    expect(JSON.stringify(r)).toContain("That is your whole reply: send no text.");
+    expect(JSON.stringify(r)).toContain("No text is needed unless you also did something");
   });
 
-  it("counts as the reply only when it stands alone, so no text follows a lone tapback", () => {
+  it("a lone tapback acknowledges (the runtime decides if that is the whole reply); one with words does not", () => {
     const meta = tool("react").meta;
-    expect(meta.replyTarget?.({ reaction: "like", alone: true })).toBe("current");
+    expect(meta.replyTarget?.({ reaction: "like", alone: true })).toBe("acknowledge");
     expect(meta.replyTarget?.({ reaction: "love", alone: false })).toBeUndefined();
+  });
+
+  it("is switched off, tool and all, with config.features.tapbacks = false", () => {
+    const off = { ...config, features: { ...config.features, tapbacks: false } };
+    expect(messagingTools({ channel, contacts, config: off }).map((t) => t.spec.name)).not.toContain("react");
   });
 
   it("allows only like and love, once per message, and only for the owner", async () => {

@@ -1323,14 +1323,29 @@ describe("[sunshine:reactions] a tapback as the reply", () => {
       label: "Tapback",
       description: "react",
       parameters: Type.Object({ reaction: Type.String(), alone: Type.Boolean() }),
-      meta: { capabilities: ["converse"], group: "messaging", replyTarget: (a) => ((a as { alone?: boolean }).alone ? "current" : undefined) },
+      meta: { capabilities: ["converse"], group: "messaging", replyTarget: (a) => ((a as { alone?: boolean }).alone ? "acknowledge" : undefined) },
       execute: async (args) => {
         reactions.push((args as { reaction: string }).reaction);
         return textResult("reacted");
       },
     });
-    return Object.assign(harness({ extraTools: [tapback] }), { reactions });
+    const move = defineTool({
+      name: "move_booking",
+      label: "Move booking",
+      description: "move",
+      parameters: Type.Object({ to: Type.String() }),
+      meta: { capabilities: ["plans.propose"], group: "system" },
+      execute: async () => textResult("moved"),
+    });
+    return Object.assign(harness({ extraTools: [tapback, move] }), { reactions });
   }
+
+  it("a lone tapback never swallows the report of something it did in the same run", async () => {
+    const h = withTapback();
+    h.faux.setResponses([toolTurn("tapback", { reaction: "like", alone: true }), toolTurn("move_booking", { to: "19:00" }), textTurn("Moved to 19:00.")]);
+    await h.runtime.handleInbound(inbound({ channel: "imessage", from: OWNER_PHONE, conversationKey: "imessage:owner", text: "thanks! and move it to 7pm" }));
+    expect(h.sent.map((s) => s.msg.text)).toEqual(["Moved to 19:00."]);
+  });
   const skippedReplies = (h: Harness) => h.deps.audit.read({ kinds: ["policy"] }).filter((e) => e.detail.replyGuard);
 
   it("'thanks' gets a tapback and no 'You're welcome!' text, even if the model writes one", async () => {

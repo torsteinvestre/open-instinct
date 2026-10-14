@@ -293,5 +293,9 @@ export interface ToolMeta {
   replyTarget?: (args: unknown) => ReplyTarget | undefined;
 }
 
-/** [sunshine:reply-guard] See ToolMeta.replyTarget. */
-export type ReplyTarget = "current" | "owner";
+/**
+ * [sunshine:reply-guard] See ToolMeta.replyTarget. [sunshine:reactions] "acknowledge": a tapback
+ * that stands as the whole reply, but only when the run used no other tool, so a report of
+ * something the agent did (or failed to do) always reaches the owner.
+ */
+export type ReplyTarget = "current" | "owner" | "acknowledge";

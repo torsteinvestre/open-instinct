@@ -6,7 +6,7 @@
 // Usage (from packages/server, after `pnpm build`, ANTHROPIC_API_KEY set):
 //   node scenarios/reactions.mjs [rounds=2] [new|old|both=both] [kinds=all, or e.g. happy,sad]
 import { completeSimple } from "@earendil-works/pi-ai/compat";
-import { ALL_CAPABILITIES, ContactStore, DEFAULT_PERSONA, StateDir, buildSystemPrompt, defaultConfig, resolveModel } from "@open-instinct/core";
+import { ALL_CAPABILITIES, ContactStore, DEFAULT_PERSONA, StateDir, buildSystemPrompt, defaultConfig, resolveModel, timeStamp } from "@open-instinct/core";
 import { messagingTools } from "@open-instinct/inkbox";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -22,17 +22,21 @@ const model = resolveModel("anthropic/claude-sonnet-5-5");
 const config = defaultConfig();
 config.owner = { ...config.owner, name: "Torstein", phones: ["+4790000000"], timezone: "Europe/Oslo" };
 config.agent = { ...config.agent, name: "Sunshine" };
+// [sunshine:stable-cache] STAMPS=off plays the messages as before the change (clock in the prompt, no stamps).
+const STAMPS = process.env.STAMPS !== "off";
+config.features = { ...config.features, stableCache: STAMPS };
 const owner = { kind: "owner", id: "owner", tier: "owner", displayName: "Torstein", phone: "+4790000000" };
 const promptAt = (now) => buildSystemPrompt({
   config, principal: owner, channel: "imessage", now,
   capabilities: [...ALL_CAPABILITIES], toolGroups: ["messaging", "owner", "memory", "schedule", "web", "files"],
   memoryDigest: "Torstein lives in Oslo. Follows XRP and Norwegian startups. Loves Tine iskaffe.", persona: DEFAULT_PERSONA,
 });
-const NEW_SYSTEM = promptAt(new Date("2026-10-13T12:30:00Z")); // a Tuesday, 14:30 in Oslo
+const DEFAULT_NOW = "2026-10-13T12:30:00Z"; // a Tuesday, 14:30 in Oslo
+const NEW_SYSTEM = promptAt(new Date(DEFAULT_NOW));
 // A case can set its own clock ("goodnight" late, "god morgen" early), so the model never has to
-// point out the time instead of answering.
-const NOW_LINE = /# Now\n[^\n]*/;
-const clockAt = (system, iso) => (iso ? system.replace(NOW_LINE, promptAt(new Date(iso)).match(NOW_LINE)[0]) : system);
+// point out the time instead of answering. [sunshine:stable-cache] The clock rides on the message,
+// as the runtime sends it.
+const stampedAt = (iso, text) => (STAMPS ? `${timeStamp(new Date(iso ?? DEFAULT_NOW), "Europe/Oslo")}\n${text}` : text);
 
 // The earlier guidance (commit 631ed59), for comparison on the same messages.
 const OLD_LADDER = [
@@ -71,7 +75,7 @@ const STANDINS = [
   { name: "buy_tickets", description: "Buy event tickets for the owner.", parameters: loose(["event", "quantity"]) },
   { name: "notify_contact", description: "Send a short text to one of the owner's contacts.", parameters: loose(["to", "text"]) },
 ];
-const STANDIN_RESULTS = { schedule_create: "Scheduled.", schedule_list: "s_3 dentist: Thursday 14:00.", schedule_update: "Moved.", watch_profile_update: "Saved.", web_search: "No useful results.", send_file: "Sent packing-list.pdf in the current imessage conversation.", book_table: "Booked: Pjoltergeist, 19:00, 2 guests.", buy_tickets: "Bought 2 tickets, 450 kr.", notify_contact: "Sent." };
+const STANDIN_RESULTS = { schedule_create: "Scheduled.", schedule_list: "s_1: call mom | one-time | waiting, next today 18:00\ns_3: dentist | one-time | waiting, next Thursday 14:00", schedule_update: "Moved.", watch_profile_update: "Saved.", web_search: "No useful results.", send_file: "Sent packing-list.pdf in the current imessage conversation.", book_table: "Booked: Pjoltergeist, 19:00, 2 guests.", buy_tickets: "Bought 2 tickets, 450 kr.", notify_contact: "Sent." };
 
 const asst = (content) => ({ role: "assistant", content: typeof content === "string" ? [{ type: "text", text: content }] : content, api: model.api, provider: model.provider, model: model.id, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop", timestamp: Date.now() });
 const user = (text) => ({ role: "user", content: text, timestamp: Date.now() });
@@ -148,11 +152,11 @@ for (const variant of variants) {
     for (const s of CASES) {
       const messages = [];
       for (const [u, a] of s.before ?? []) { if (u) messages.push(user(u)); if (Array.isArray(a)) messages.push(...a); else messages.push(asst(a)); }
-      messages.push(user(s.msg));
+      messages.push(user(stampedAt(s.at, s.msg)));
       const reactions = [];
-      let reactedOnce = false, otherTool = false, finalText = "";
+      let reactedOnce = false, otherTool = false, finalText = "", loneBlocked = false;
       for (let turn = 0; turn < 5; turn++) {
-        const reply = await completeSimple(model, { systemPrompt: clockAt(v.system, s.at), messages, tools: TOOLS }, { apiKey, reasoning: "medium" });
+        const reply = await completeSimple(model, { systemPrompt: v.system, messages, tools: TOOLS }, { apiKey, reasoning: "medium" });
         cost += reply.usage?.cost?.total ?? 0;
         messages.push(reply);
         const calls = reply.content.filter((c) => c.type === "toolCall");
@@ -160,7 +164,12 @@ for (const variant of variants) {
         if (calls.length === 0) break;
         for (const c of calls) {
           let text;
-          if (c.name === "react") {
+          if (c.name === "react" && s.msg.startsWith("[reaction")) {
+            // [sunshine:reactions] As the real tool: their tapback is never answered with one. Nothing is
+            // sent, but a lone one still counts as the whole reply.
+            text = "No tapback needed: this is their tapback on one of your messages, and nothing was sent. Most tapbacks need no reply at all. Answer in a few words only if theirs shows confusion or displeasure.";
+            if (c.arguments?.alone === true) loneBlocked = true;
+          } else if (c.name === "react") {
             text = reactedOnce ? "You already reacted to this message." : v.result(c.arguments);
             if (!reactedOnce) reactions.push(c.arguments);
             reactedOnce = true;
@@ -171,7 +180,7 @@ for (const variant of variants) {
           messages.push({ role: "toolResult", toolCallId: c.id, toolName: c.name, content: [{ type: "text", text }], isError: text.startsWith("You already"), timestamp: Date.now() });
         }
       }
-      const lone = reactions.some((a) => a.alone === true);
+      const lone = reactions.some((a) => a.alone === true) || loneBlocked;
       const dropped = lone && (v.loneDropsAlways || !otherTool);
       const sent = dropped ? "" : finalText;
       const outcome = reactions.length ? (sent ? "tapback + text" : "tapback only") : sent ? "text only" : "nothing";

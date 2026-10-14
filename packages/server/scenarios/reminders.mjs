@@ -8,7 +8,7 @@
 // Usage (from packages/server, after `pnpm build`, ANTHROPIC_API_KEY set):
 //   node scenarios/reminders.mjs [rounds=2] [new|old|both=both]
 import { completeSimple } from "@earendil-works/pi-ai/compat";
-import { ALL_CAPABILITIES, ApprovalStore, AuditLog, DEFAULT_PERSONA, MemoryStore, Scheduler, StateDir, buildSystemPrompt, coreTools, defaultConfig, resolveModel } from "@open-instinct/core";
+import { ALL_CAPABILITIES, ApprovalStore, AuditLog, DEFAULT_PERSONA, MemoryStore, Scheduler, StateDir, buildSystemPrompt, coreTools, defaultConfig, resolveModel, timeStamp } from "@open-instinct/core";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -99,7 +99,8 @@ for (const variant of Object.keys(results)) {
     const ctx = { principal: owner, conversationKey: "imessage:test", channel: "imessage", now: () => new Date(now) };
     for (const s of S) {
       const expected = s.rel !== undefined ? now + s.rel * 60000 : s.abs(now);
-      const messages = [...HISTORY, user(s.msg)];
+      // [sunshine:stable-cache] The clock rides on the message, as the runtime sends it.
+      const messages = [...HISTORY, user(`${timeStamp(new Date(now), TZ)}\n${s.msg}`)];
       let set, finalText = "";
       const how = [];
       for (let turn = 0; turn < 6; turn++) {

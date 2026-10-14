@@ -109,7 +109,8 @@ function parseIMessageReaction(payload: Dict, data: Dict): InboundMessage | unde
     conversationKey: `imessage:${conversationId}`,
     from: str(reaction.remote_number) ?? "",
     text: `[reaction ${label} on message ${target}]`,
-    replyRef: { conversationId, messageId: target, assignmentId: str(reaction.assignment_id) },
+    // [sunshine:reactions] `tapback` marks this as their tapback, so the react tool never answers one with another.
+    replyRef: { conversationId, messageId: target, assignmentId: str(reaction.assignment_id), tapback: label },
     receivedAt: receivedAt(payload),
     source: "webhook",
     meta: {

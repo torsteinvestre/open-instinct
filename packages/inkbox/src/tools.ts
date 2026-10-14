@@ -340,6 +340,11 @@ export function messagingTools(deps: MessagingDeps): RegisteredTool[] {
       if (!(REACTIONS as readonly string[]).includes(args.reaction)) {
         return { content: [{ type: "text", text: `Use one of: ${REACTIONS.join(", ")}.` }], isError: true };
       }
+      // [sunshine:reactions] Never a tapback on their tapback: it would land on your own message.
+      // Worded as nothing to do, not a failure, so the model does not apologise for it.
+      if (ctx.replyRef?.tapback) {
+        return textResult("No tapback needed: this is their tapback on one of your messages, and nothing was sent. Most tapbacks need no reply at all. Answer in a few words only if theirs shows confusion or displeasure.");
+      }
       const target = ctx.replyRef?.messageId;
       if (!target) return { content: [{ type: "text", text: "There is no message to react to here. Answer in words." }], isError: true };
       if (reacted.has(target)) return { content: [{ type: "text", text: "You already reacted to this message." }], isError: true };

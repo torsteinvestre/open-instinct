@@ -100,6 +100,8 @@ describe("parseInkboxEvent: imessage.reaction_received", () => {
     expect(m.text).toBe("[reaction love on message msg_9]");
     expect(m.from).toBe("+14155550100");
     expect(m.meta?.reaction).toMatchObject({ type: "love", targetMessageId: "msg_9", reactionId: "r_1" });
+    // [sunshine:reactions] Marked as a tapback, so the react tool never answers it with another.
+    expect(m.replyRef).toMatchObject({ messageId: "msg_9", tapback: "love" });
   });
 
   it("shows the emoji for custom reactions", () => {

@@ -331,8 +331,33 @@ function longTaskSection(channel: Channel): string {
 
 function timeSection({ now, config }: PromptInput): string {
   const tz = config.owner.timezone || "UTC";
+  // [sunshine:stable-cache] The clock changed this prompt on every run, so the prompt cache never
+  // held (every message paid for ~50k tokens anew). The time now rides on each message instead,
+  // as in OpenClaw, and this section stays the same all day.
+  if (config.features?.stableCache !== false) {
+    // No example time here: anything taken from `now` would change the prompt again.
+    return `# Time\nThe owner's timezone is ${tz}. Every message you receive starts with the time it was sent, in square brackets: weekday, date, time, timezone and UTC offset. The newest one is the current time. Interpret relative dates in this timezone, and never copy these time stamps into your replies.`;
+  }
   const local = formatLocal(now, tz);
   return `# Now\n${local} (${tz}). ISO: ${now.toISOString()}. Interpret relative dates in this timezone.`;
+}
+
+/**
+ * [sunshine:stable-cache] The time a message was sent, as it is put in front of it:
+ * "[Wed 14 Oct 2026, 12:40 Europe/Oslo, UTC+02:00]". The offset lets the model write exact times.
+ */
+export function timeStamp(now: Date, tz: string): string {
+  try {
+    const parts = Object.fromEntries(
+      new Intl.DateTimeFormat("en-GB", { timeZone: tz, weekday: "short", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZoneName: "longOffset" })
+        .formatToParts(now)
+        .map((p) => [p.type, p.value]),
+    );
+    const offset = parts.timeZoneName === "GMT" ? "UTC+00:00" : String(parts.timeZoneName).replace("GMT", "UTC");
+    return `[${parts.weekday} ${parts.day} ${parts.month} ${parts.year}, ${parts.hour}:${parts.minute} ${tz}, ${offset}]`;
+  } catch {
+    return `[${now.toISOString()}]`;
+  }
 }
 
 function formatLocal(date: Date, tz: string): string {

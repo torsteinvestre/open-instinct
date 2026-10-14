@@ -89,6 +89,10 @@ used. Sunshine answered "thanks" with "You're welcome!", a message that adds not
   show confusion or displeasure; most messages get none.
 - Off switch: `config.features.tapbacks = false` (upstream's flag, unused until now) removes both
   the tool and the guidance.
+- Never a tapback on their tapback (it would land on Sunshine's own message): an incoming tapback is
+  marked (`replyRef.tapback`, `packages/inkbox/src/events.ts`), and the tool then sends nothing and
+  says there is nothing to do, worded so the model does not apologise. Found when the time stamps
+  arrived (`[sunshine:stable-cache]`); after the fence, 6 of 6 of their tapbacks got nothing back.
 
 **Why this wording.** Three versions were compared on the same conversations with the real model.
 A numbered ladder kept happy replies clean but ignored a 👎 ("their tapbacks need no reply").
@@ -219,6 +223,49 @@ dropped), "in 2 days" once set to 09:00, and some replies in 12-hour form ("2:11
 **To remove.** Revert its commit (`git log --grep "relative-time"`), or delete the tagged blocks in
 `core-tools.ts`, its tests in `packages/core/test/core-tools.test.ts`, and the scenario. Reminders
 then work as before, with the model doing the sum.
+
+### `[sunshine:stable-cache]`: the prompt cache holds from one message to the next
+
+**Problem.** Measured on the live agent (2026-10-14): each message cost 13-16 cents, because about
+50,000 tokens (tools, system prompt, history) were paid as a fresh cache write every time. Two things
+changed the start of the request on every run: the clock in the system prompt ("# Now", to the
+millisecond), and the history fold, which moved one message into the summary on every turn once a
+thread passed 60 messages. Anthropic's cache only reuses an identical prefix. OpenClaw keeps the time
+out of its system prompt and compacts only near the limit, for the same reason.
+
+**What the fork adds** (on unless `config.features.stableCache` is false).
+
+- `packages/core/src/prompt.ts`: "# Now" becomes "# Time" (the timezone only, the same all day), and
+  `timeStamp()` builds the line put in front of each message: `[Wed 14 Oct 2026, 12:27 Europe/Oslo,
+  UTC+02:00]`.
+- `packages/core/src/runtime.ts`: `Conversation` stamps every message it runs, steers or follows up
+  (owner, friends, agents, scheduled jobs all pass through it). `foldInSteps()` replaces the sliding
+  fold: nothing changes until 80 messages or the old 240k-character cap, then one fold down to 50
+  messages / 160k characters. Between the model calls of one run only the size cap applies, so a fold
+  happens once, at the start of a message.
+- The off switch brings back upstream's prompt and fold on the next restart.
+
+**Guards.** A test builds the system prompt at different times of day and requires it to be byte for
+byte the same, so anything time-dependent added later fails at once. Tests also check the stamps, that
+the history is only appended to between folds, the one-step fold on count and size, and the switch.
+`packages/server/scenarios/cache.mjs` runs the real runtime against the real model, on and off, and
+prints what each call read from the cache.
+
+**Tested with the real model** (2026-10-14). Cache: with the switch on, each message after the first
+read the whole start from the cache and cost about a tenth of the first; off, every message wrote it
+again. The clock reaches the model ("It's 14:13 in Oslo", right) and no reply copied a stamp.
+Reminders 14/14 at the right time. Tapbacks 37/38, no serious mistakes. One side effect found and
+fenced: with stamps, a tapback of theirs sometimes got one back (2 of 6, 0 of 8 without stamps); see
+`[sunshine:reactions]`. To watch: after "sounds good" the model sometimes sets a reminder nobody asked
+for and says so (2 of 3 runs with stamps, 1 of 6 without, then 0 of 1).
+
+**Known limits.** The memory digest (today's journal) is still in the system prompt: a journal entry
+breaks the cache once. A message after more than 5 minutes of quiet pays full price (the cache's
+lifetime); a 1-hour cache (`PI_CACHE_RETENTION=long`) is possible but costs twice as much to write.
+
+**To remove.** Set `features.stableCache` to false in the agent's config and restart, or revert its
+commit (`git log --grep "stable-cache"`) or delete the tagged blocks in `prompt.ts`, `runtime.ts`,
+`types.ts`, the tests and the scenarios.
 
 ## Earlier changes (not tagged; find them by commit)
 

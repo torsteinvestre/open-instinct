@@ -22,7 +22,7 @@ import { OwnerNotifier } from "./notifier.js";
 import { DEFAULT_TIER_TABLE, SPEND_CAPABILITIES, type PolicyEngine } from "./policy.js";
 import { normalizePhone, phoneCountryOf, resolvePrincipal } from "./principal.js";
 import { readAgentsInstructions, readPersona } from "./persona.js";
-import { buildSystemPrompt, SILENT_REPLY, wrapUntrusted } from "./prompt.js";
+import { buildSystemPrompt, SILENT_REPLY, timeStamp, wrapUntrusted } from "./prompt.js";
 import { A2AStore, a2aState, a2aTerminal } from "./a2a-state.js";
 import type { Scheduler } from "./scheduler.js";
 import type { StateDir } from "./state.js";
@@ -94,6 +94,17 @@ export interface HandleResult {
 export const SESSION_KEEP_MESSAGES = 60;
 /** Characters of kept transcript (JSON) before older turns are folded even if the count is under the limit. */
 export const SESSION_KEEP_CHARS = 240_000;
+/**
+ * [sunshine:stable-cache] Folding in steps: nothing changes until the transcript passes the high
+ * mark, then it is folded down to the low mark in one go. Between folds the start of the history
+ * stays byte-identical, so the prompt cache holds; the sliding fold above changed it every turn.
+ * At least 50 messages stay in view (the sliding fold kept about 58); the character cap is the old
+ * one, so the context never grows past what it could be before.
+ */
+export const FOLD_HIGH_MESSAGES = 80;
+export const FOLD_LOW_MESSAGES = 50;
+export const FOLD_HIGH_CHARS = SESSION_KEEP_CHARS;
+export const FOLD_LOW_CHARS = 160_000;
 /** An approved request can be acted on for this long before it lapses. */
 export const APPROVAL_USE_WINDOW_MS = 15 * 60 * 1000;
 const SEEN_IDS_MAX = 500;
@@ -155,6 +166,8 @@ interface ConversationOptions {
   replyRef: ReplyRef;
   refreshPrompt: () => string;
   now: () => Date;
+  /** [sunshine:stable-cache] Stamp each message with the owner's clock and fold in steps. */
+  stableCache?: { timeZone: string };
 }
 
 export class Conversation {
@@ -176,6 +189,7 @@ export class Conversation {
   private readonly sessionFile: string;
   private readonly refreshPrompt: () => string;
   private readonly now: () => Date;
+  private readonly stableCache?: { timeZone: string };
 
   constructor(opts: ConversationOptions) {
     this.key = opts.key;
@@ -187,6 +201,12 @@ export class Conversation {
     this.replyRef = opts.replyRef;
     this.refreshPrompt = opts.refreshPrompt;
     this.now = opts.now;
+    this.stableCache = opts.stableCache;
+  }
+
+  /** [sunshine:stable-cache] The message as the model sees it: with the time it was sent in front. */
+  private stamped(text: string): string {
+    return this.stableCache ? `${timeStamp(this.now(), this.stableCache.timeZone)}\n${text}` : text;
   }
 
   /** Prompt the agent, wait until it is idle, and return the final assistant text. */
@@ -199,9 +219,10 @@ export class Conversation {
     try {
       this.applySystemPrompt();
       // The transcript grows between restarts too, so the fold runs before every turn.
-      this.agent.state.messages = trimContext(this.agent.state.messages, this.now());
+      // [sunshine:stable-cache] In steps when on, so the start of the history stays the same.
+      this.agent.state.messages = this.stableCache ? foldInSteps(this.agent.state.messages, this.now()) : trimContext(this.agent.state.messages, this.now());
       const before = this.agent.state.messages.length;
-      await this.agent.prompt(text, images);
+      await this.agent.prompt(this.stamped(text), images);
       await this.agent.waitForIdle();
       const fresh = this.agent.state.messages.slice(before);
       this.persist();
@@ -214,11 +235,11 @@ export class Conversation {
   }
 
   steer(text: string): void {
-    this.agent.steer(userMessage(text, this.now()));
+    this.agent.steer(userMessage(this.stamped(text), this.now())); // [sunshine:stable-cache] stamped
   }
 
   followUp(text: string): void {
-    this.agent.followUp(userMessage(text, this.now()));
+    this.agent.followUp(userMessage(this.stamped(text), this.now())); // [sunshine:stable-cache] stamped
   }
 
   /** Write the transcript (without system messages, which are rebuilt) as JSON lines. */
@@ -326,7 +347,9 @@ export class AgentRuntime {
   private createConversation(key: string, principal: Principal, opts: ConversationOpts, stored: AgentMessage[]): Conversation {
     const channel = channelOf(key);
     const sessionFile = join(this.sessionsDir, `${encodeURIComponent(key)}.jsonl`);
-    const restored = restoreMessages(stored, this.now());
+    // [sunshine:stable-cache] On unless config.features.stableCache is false.
+    const stable = this.deps.config.features?.stableCache !== false;
+    const restored = stable ? foldInSteps(stored, this.now()) : restoreMessages(stored, this.now());
 
     // The Conversation needs the Agent and the Agent's hooks need the Conversation, so the
     // Agent is created with a placeholder tool list and tools are bound right after.
@@ -342,7 +365,7 @@ export class AgentRuntime {
       streamFn: this.deps.streamFn ?? (streamSimple as StreamFn),
       getApiKey: this.deps.getApiKey,
       toolExecution: "sequential",
-      transformContext: async (messages) => trimContext(messages, this.now()),
+      transformContext: async (messages) => (stable ? foldInSteps(messages, this.now(), false) : trimContext(messages, this.now())),
       beforeToolCall: async ({ toolCall, args }) => this.guard(conv, toolCall.name, args),
       afterToolCall: async ({ toolCall, args, isError, result }) => {
         this.recordToolCall(conv, toolCall.name, args, isError, result?.content);
@@ -359,6 +382,7 @@ export class AgentRuntime {
       replyRef: opts.replyRef ?? {},
       now: this.now,
       refreshPrompt: () => this.systemPromptFor(conv),
+      ...(stable ? { stableCache: { timeZone: this.deps.config.owner.timezone || "UTC" } } : {}),
     });
     agent.state.tools = this.bindTools(conv);
     this.conversations.set(key, conv);
@@ -1191,6 +1215,20 @@ export function trimContext(messages: AgentMessage[], now: Date): AgentMessage[]
   const system = messages.filter((m) => m.role === "system");
   const rest = restoreMessages(messages, now, SESSION_KEEP_MESSAGES - 2);
   return system.length ? [...system, ...rest] : rest;
+}
+
+/**
+ * [sunshine:stable-cache] The context before a model call, folded in steps: unchanged (apart from
+ * dropping a tool call that never got its result) until it passes a high mark, then folded down to
+ * the low marks in one go. Used instead of trimContext and restoreMessages when stableCache is on.
+ * Between the model calls of one run only size counts (`byCount` false): a count fold there would
+ * be redone differently when the next run folds the stored transcript, costing a second uncached call.
+ */
+export function foldInSteps(messages: AgentMessage[], now: Date, byCount = true): AgentMessage[] {
+  const system = messages.filter((m) => m.role === "system");
+  const rest = dropOrphanToolCalls(messages.filter((m) => m.role !== "system"));
+  if ((!byCount || rest.length <= FOLD_HIGH_MESSAGES) && charSize(rest) <= FOLD_HIGH_CHARS) return [...system, ...rest];
+  return [...system, ...restoreMessages(rest, now, FOLD_LOW_MESSAGES, FOLD_LOW_CHARS)];
 }
 
 /** The kept slice must begin at a user turn so no tool result is left without its call. */

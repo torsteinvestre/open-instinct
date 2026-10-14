@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_PERSONA } from "../src/persona.js";
-import { PROMPT_SOURCES, buildSystemPrompt, describePromptLayers, wrapUntrusted, type PromptInput } from "../src/prompt.js";
+import { PROMPT_SOURCES, buildSystemPrompt, describePromptLayers, timeStamp, wrapUntrusted, type PromptInput } from "../src/prompt.js";
 import type { Approval } from "../src/types.js";
 import { principalOf, testConfig } from "./helpers.js";
 
@@ -23,7 +23,8 @@ function input(overrides: Partial<PromptInput> = {}): PromptInput {
 describe("buildSystemPrompt", () => {
   it("has every section for the owner", () => {
     const p = buildSystemPrompt(input());
-    for (const heading of ["# You are Instinct", "# Your owner", "# Who you are talking to", "# Channel: imessage", "# Rules", "# Memory", "# Long tasks", "# Now"]) {
+    // [sunshine:stable-cache] "# Time" (the timezone, the clock rides on each message) replaced "# Now".
+    for (const heading of ["# You are Instinct", "# Your owner", "# Who you are talking to", "# Channel: imessage", "# Rules", "# Memory", "# Long tasks", "# Time"]) {
       expect(p).toContain(heading);
     }
     expect(p).toContain("@maria-instinct");
@@ -33,7 +34,28 @@ describe("buildSystemPrompt", () => {
     expect(p).toContain("Tool groups available: memory, web");
     expect(p).toContain("Capabilities in effect: converse, memory.write");
     expect(p).toContain("America/New_York");
-    expect(p).toContain(now.toISOString());
+    expect(p).not.toContain(now.toISOString());
+  });
+
+  // [sunshine:stable-cache] Anything in the prompt that changes from message to message breaks the
+  // model's prompt cache, and every message then pays for the whole context again. This fails the
+  // day something time-dependent is added.
+  it("is byte for byte the same at different times of day, unless stableCache is off", () => {
+    const morning = buildSystemPrompt(input({ now: new Date("2026-10-14T06:01:00Z") }));
+    expect(buildSystemPrompt(input({ now: new Date("2026-10-14T20:59:59Z") }))).toBe(morning);
+    expect(buildSystemPrompt(input({ now: new Date("2026-10-14T10:27:10Z"), channel: "imessage" }))).toBe(morning);
+    const off = input();
+    off.config = { ...off.config, features: { ...off.config.features, stableCache: false } };
+    const old = buildSystemPrompt(off);
+    expect(old).toContain("# Now");
+    expect(old).toContain(now.toISOString());
+  });
+
+  it("stamps a message with the owner's clock, offset included, across the change to winter time", () => {
+    expect(timeStamp(new Date("2026-10-14T10:27:10Z"), "Europe/Oslo")).toBe("[Wed 14 Oct 2026, 12:27 Europe/Oslo, UTC+02:00]");
+    expect(timeStamp(new Date("2026-10-26T08:00:00Z"), "Europe/Oslo")).toBe("[Mon 26 Oct 2026, 09:00 Europe/Oslo, UTC+01:00]");
+    expect(timeStamp(new Date("2026-10-14T10:27:10Z"), "UTC")).toBe("[Wed 14 Oct 2026, 10:27 UTC, UTC+00:00]");
+    expect(timeStamp(new Date("2026-10-14T10:27:10Z"), "Not/AZone")).toBe("[2026-10-14T10:27:10.000Z]");
   });
 
   it("hides owner.about, phones and emails from everyone but the owner", () => {

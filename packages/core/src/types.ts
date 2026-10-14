@@ -247,7 +247,17 @@ export interface InstinctConfig {
   model: { primary: string; fallback?: string; cheap?: string; thinking?: "off" | "minimal" | "low" | "medium" | "high" };
   computer: { mode: "auto" | "desktopd" | "maritime" | "none"; desktopdUrl?: string; maritimeMcpUrl?: string };
   apps: { enabled: boolean; toolkits: string[] };
-  features: { typingIndicators: boolean; tapbacks: boolean; journal: boolean };
+  features: {
+    typingIndicators: boolean;
+    tapbacks: boolean;
+    journal: boolean;
+    /**
+     * [sunshine:stable-cache] On unless false: the clock rides on each message instead of the
+     * system prompt, and history is folded in steps, so the model's prompt cache keeps working.
+     * false brings back upstream's behaviour on the next restart.
+     */
+    stableCache?: boolean;
+  };
 }
 
 // ---------------------------------------------------------------------------

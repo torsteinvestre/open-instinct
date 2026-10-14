@@ -217,6 +217,15 @@ describe("[sunshine:reactions] react", () => {
     expect(JSON.stringify(await react.execute({ reaction: "like", alone: true }, own()))).toMatch(/no message to react to/);
     expect(channel.react).toHaveBeenCalledTimes(1);
   });
+
+  it("never answers their tapback with one, and says so as nothing to do, not as a failure", async () => {
+    const theirs = { ...ctxFor(owner, "imessage:conv_1"), replyRef: { messageId: "msg_mine", tapback: "like" } };
+    const r = await tool("react").execute({ reaction: "like", alone: true }, theirs);
+    expect(channel.react).not.toHaveBeenCalled();
+    expect(typeof r !== "string" && r.isError).toBeFalsy(); // a lone one still counts as the whole reply
+    expect(JSON.stringify(r)).toContain("No tapback needed");
+    expect(JSON.stringify(r)).not.toMatch(/fail|error|couldn't|could not/i);
+  });
 });
 
 describe("send_file", () => {

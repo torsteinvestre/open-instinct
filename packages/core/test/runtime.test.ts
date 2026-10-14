@@ -11,7 +11,7 @@ import { MemoryStore } from "../src/memory.js";
 import { PolicyEngine, defaultPolicy } from "../src/policy.js";
 import { coreTools } from "../src/core-tools.js";
 import { A2AStore } from "../src/a2a-state.js";
-import { AgentRuntime, InboundUncertainError, SESSION_KEEP_MESSAGES, hashArgs, restoreMessages, runtimeKey, stableJson, type Outbox, type RuntimeDeps } from "../src/runtime.js";
+import { AgentRuntime, FOLD_HIGH_MESSAGES, FOLD_LOW_CHARS, FOLD_LOW_MESSAGES, InboundUncertainError, SESSION_KEEP_MESSAGES, foldInSteps, hashArgs, restoreMessages, runtimeKey, stableJson, type Outbox, type RuntimeDeps } from "../src/runtime.js";
 import { Scheduler } from "../src/scheduler.js";
 import { ToolRegistry, defineTool, textResult, type RegisteredTool } from "../src/tools.js";
 import type { InboundMessage, OutboundMessage, Policy, Principal } from "../src/types.js";
@@ -344,7 +344,10 @@ describe("AgentRuntime.handleInbound", () => {
   });
 
   it("keeps the live transcript bounded across many turns in one process", async () => {
-    const h = harness();
+    // [sunshine:stable-cache] Upstream's sliding fold, as it runs with the switch off.
+    const off = testConfig();
+    off.features = { ...off.features, stableCache: false };
+    const h = harness({ deps: { config: off } });
     const turns = SESSION_KEEP_MESSAGES / 2 + 10;
     h.faux.setResponses(Array.from({ length: turns }, (_, i) => textTurn(`answer ${i}`)));
     for (let i = 0; i < turns; i++) {
@@ -355,6 +358,78 @@ describe("AgentRuntime.handleInbound", () => {
     expect(conv.agent.state.messages[0]!.role).toBe("system");
     expect(JSON.stringify(conv.agent.state.messages[1]!.content)).toContain("[Conversation summary]");
     expect(JSON.stringify(conv.agent.state.messages.at(-1)!.content)).toContain(`answer ${turns - 1}`);
+  });
+
+  // [sunshine:stable-cache] The prompt cache only holds if the start of what is sent stays identical.
+  describe("stable cache", () => {
+    const history = (h: Harness) => h.runtime.conversation("chat:main", h.runtime.ownerPrincipal()).agent.state.messages.filter((m) => m.role !== "system");
+    const ask = (h: Harness, i: number) => h.runtime.handleInbound(inbound({ channel: "chat", from: "owner", conversationKey: "chat:main", text: `question ${i}`, id: `q${i}` }));
+
+    it("puts the owner's clock on every message and keeps it out of the system prompt", async () => {
+      let now = new Date("2026-10-14T10:27:10Z");
+      const config = testConfig();
+      config.owner = { ...config.owner, timezone: "Europe/Oslo" };
+      const h = harness({ deps: { config, now: () => now } });
+      h.faux.setResponses([textTurn("one"), textTurn("two")]);
+      await ask(h, 1);
+      const conv = h.runtime.conversation("chat:main", h.runtime.ownerPrincipal());
+      const firstPrompt = conv.agent.state.systemPrompt;
+      now = new Date("2026-10-14T10:41:04Z");
+      await ask(h, 2);
+      expect(userTexts(conv.agent.state.messages)).toEqual([
+        JSON.stringify([{ type: "text", text: "[Wed 14 Oct 2026, 12:27 Europe/Oslo, UTC+02:00]\nquestion 1" }]),
+        JSON.stringify([{ type: "text", text: "[Wed 14 Oct 2026, 12:41 Europe/Oslo, UTC+02:00]\nquestion 2" }]),
+      ]);
+      // Fourteen minutes later, the instructions are byte for byte the same.
+      expect(conv.agent.state.systemPrompt).toBe(firstPrompt);
+      expect(firstPrompt).toContain("# Time");
+      expect(firstPrompt).not.toContain("2026-10-14");
+    });
+
+    it("leaves the start of the history untouched between folds, and folds in one step at the high mark", async () => {
+      const h = harness();
+      const turns = FOLD_HIGH_MESSAGES / 2 + 6;
+      h.faux.setResponses(Array.from({ length: turns }, (_, i) => textTurn(`answer ${i}`)));
+      let before: AgentMessage[] = [];
+      let folds = 0;
+      for (let i = 0; i < turns; i++) {
+        await ask(h, i);
+        const now = history(h);
+        if (JSON.stringify(now[0]?.content).includes("[Conversation summary]") && !JSON.stringify(before[0]?.content).includes("[Conversation summary]")) folds++;
+        else expect(now.slice(0, before.length), `turn ${i}`).toEqual(before); // only appended to
+        before = now;
+      }
+      expect(folds).toBe(1);
+      expect(before.length).toBeGreaterThanOrEqual(FOLD_LOW_MESSAGES);
+      expect(before.length).toBeLessThanOrEqual(FOLD_HIGH_MESSAGES + 2);
+      expect(JSON.stringify(before.at(-1)!.content)).toContain(`answer ${turns - 1}`);
+    });
+
+    it("folds in one step on size too, and drops a tool call that never got its result", () => {
+      const big = "x".repeat(10_000);
+      const msgs: AgentMessage[] = [];
+      for (let i = 0; i < 30; i++) {
+        msgs.push({ role: "user", content: [{ type: "text", text: `q${i} ${big}` }], timestamp: i });
+        msgs.push(fauxAssistantMessage(`a${i}`));
+      }
+      expect(foldInSteps(msgs.slice(0, 20), new Date())).toEqual(msgs.slice(0, 20)); // under both marks: untouched
+      const folded = foldInSteps(msgs, new Date()); // ~300k characters: past the high mark
+      expect(JSON.stringify(folded[0]!.content)).toContain("[Conversation summary]");
+      expect(JSON.stringify(folded.slice(1)).length).toBeLessThanOrEqual(FOLD_LOW_CHARS + 20_000);
+      const orphan = fauxAssistantMessage([fauxToolCall("echo", { text: "x" })], { stopReason: "toolUse" });
+      expect(foldInSteps([...msgs.slice(0, 4), orphan], new Date())).toEqual(msgs.slice(0, 4));
+    });
+
+    it("is switched off by features.stableCache = false: no stamps, the clock back in the system prompt", async () => {
+      const off = testConfig();
+      off.features = { ...off.features, stableCache: false };
+      const h = harness({ deps: { config: off } });
+      h.faux.setResponses([textTurn("ok")]);
+      await ask(h, 1);
+      const conv = h.runtime.conversation("chat:main", h.runtime.ownerPrincipal());
+      expect(userTexts(conv.agent.state.messages)).toEqual([JSON.stringify([{ type: "text", text: "question 1" }])]);
+      expect(conv.agent.state.systemPrompt).toContain("# Now");
+    });
   });
 
   it("acknowledges when the budget is exceeded and delivers the final text later", async () => {

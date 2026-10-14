@@ -146,10 +146,16 @@ fresh ones sent, after one fix (it had second-guessed whether a story was worth 
 back one search could not confirm). About 0.4-0.6 cents per text sent.
 
 **Speaking as itself.** The skill and the tools' descriptions and results say what Sunshine does
-("keeping up with the news for them", "what you looked at"), never "the news watch", so it says "I
-saw…" rather than "my news watch checks headlines" (tested with `packages/server/scenarios/voice.mjs`:
-machinery talk in 3 of 4 answers before, 1 of 4 after). Step 2's own text no longer opens with
-"Since you follow X" (`packages/watcher/scenarios/wording.mjs`, old vs new on the same headlines).
+("keeping up with the news for them", "what you looked at"), never "the news watch", and
+`watch_profile` lists timing and settings last, labelled "to mention only if they ask". With the
+watch on, the owner's system prompt carries a short fixed section (`NEWS_PROMPT` in
+`packages/watcher/src/prompts.ts`, added in `boot.ts`): talk about what you keep an eye on and why
+it fit, not how. It has to be there: asked "how did you know?", the model never opened the skill
+and recited what the tools had shown it ("I check Google News every 60 minutes… a search for
+'startup Norge'"). Tested with `packages/server/scenarios/voice.mjs` (the real server answering
+four questions about a news text it sent): machinery talk in 3 of 4 answers before, 0 of 4 in two
+runs after ("I keep an eye on Norwegian startups and AI news for you, and that story fit"). Step
+2's own text no longer opens with "Since you follow X" (`packages/watcher/scenarios/wording.mjs`).
 
 No new headline means no model call. A failed step 2 sends nothing and its headlines wait for the
 next check. Each check leaves one `policy` audit entry (`watcher: "check"`) with counts, outcome,

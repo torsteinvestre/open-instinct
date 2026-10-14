@@ -119,9 +119,10 @@ export function createWatcher(deps: WatcherDeps): Watcher {
     const costToday = s.calls.filter((c) => localDate(new Date(c.at), tz()) === today).reduce((a, c) => a + c.costUsd, 0);
     const cost30 = s.calls.reduce((a, c) => a + c.costUsd, 0);
     const lines = [
-      // [sunshine:watcher] Words for the model to repeat: it is Sunshine keeping up with the news, not a "news watch".
-      `Keeping up with the news for them: ${s.on ? `on, every ${s.everyMinutes} minutes outside quiet hours (${tz()})` : "off"}. Quiet hours ${s.quiet.start}-${s.quiet.end}.`,
-      `Asked about interests: ${s.askedInterests ? "yes" : "not yet"}. Model cost: $${costToday.toFixed(3)} today, $${cost30.toFixed(2)} in the last 30 days.`,
+      // [sunshine:watcher] Words for the model to repeat: it is Sunshine keeping up with the news, not a
+      // "news watch". Timing and settings sit apart, labelled: tested, when they led the result the
+      // model recited them unasked ("Every hour I scan headlines… quiet from 22:00").
+      `Keeping up with the news for them: ${s.on ? "on" : "off"}.`,
       "",
       "What you know about their interests:",
       s.profile.trim() || "(nothing yet)",
@@ -131,6 +132,10 @@ export function createWatcher(deps: WatcherDeps): Watcher {
       "",
       "News you told them in the last two weeks:",
       ...(s.stories.length ? s.stories.map((c) => `- ${c.subject}: ${c.event} (${c.status}), told ${ago(c.firstTold, at)}${c.updates ? `, ${c.updates} update(s)` : ""}`) : ["(none)"]),
+      "",
+      "Timing and settings, to mention only if they ask about them:",
+      `- ${s.on ? `Every ${s.everyMinutes} minutes` : "Off"}, outside quiet hours ${s.quiet.start}-${s.quiet.end} (${tz()}).`,
+      `- Asked about interests: ${s.askedInterests ? "yes" : "not yet (the one-time question about interests has not been sent)"}. Model cost: $${costToday.toFixed(3)} today, $${cost30.toFixed(2)} in the last 30 days.`,
     ];
     if (s.lastCheck) {
       const c = s.lastCheck;

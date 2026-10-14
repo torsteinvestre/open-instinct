@@ -61,11 +61,14 @@ await say("hey");
 await app.outbox.send({ channel: "imessage", to: PHONE, text: NEWS }, { principal: app.runtime.ownerPrincipal(), conversationKey: "scheduled:watcher" });
 console.log(`(news text: "${NEWS}")`);
 let flagged = 0;
+const convo = () => app.runtime.conversation(THREAD, app.runtime.ownerPrincipal()).agent.state.messages;
 for (const q of QUESTIONS) {
+  const before = convo().length;
   const reply = await say(q);
+  const used = convo().slice(before).filter((m) => m.role === "assistant").flatMap((m) => m.content.filter((c) => c.type === "toolCall").map((c) => (c.name === "load_skill" ? `load_skill(${c.arguments?.name ?? ""})` : c.name)));
   const hit = reply.match(MACHINERY);
   if (hit) flagged++;
-  console.log(`  owner: ${q}\n  sunshine: ${reply}${hit ? `   <== machinery talk: "${hit[0]}"` : ""}`);
+  console.log(`  owner: ${q}  [tools: ${used.join(", ") || "none"}]\n  sunshine: ${reply}${hit ? `   <== machinery talk: "${hit[0]}"` : ""}`);
 }
 const thread = app.runtime.conversation(THREAD, app.runtime.ownerPrincipal()).agent.state.messages;
 const cost = thread.reduce((s, m) => s + (m.usage?.cost?.total ?? 0), 0);

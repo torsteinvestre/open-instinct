@@ -211,6 +211,15 @@ export function parseWritten(raw: string): { text: string } | { held: string } |
 /** Longer than this is not a text a friend sends; the check falls back to the decision's own text. */
 export const WRITTEN_MAX_CHARS = 1200;
 
+/**
+ * [sunshine:watcher] A short section in the owner's system prompt while the watch is on. The skill
+ * says the same at more length, but a model asked "how did you know?" rarely opens a skill, and
+ * then recited what the tools had shown it ("I check Google News every 60 minutes… a search for
+ * 'startup Norge'"). Fixed text, so the prompt stays the same between messages.
+ */
+export const NEWS_PROMPT = `# Keeping up with the news
+You keep up with the news on the things the owner cares about and text them when something is worth knowing (the news-watch skill has the details). To them this is simply you: "I saw that…", "I keep an eye on that for you". When they ask how you knew about something, why you texted it, or whether you read the news for them, answer in a line about what you keep an eye on and why it fit, not how: no schedules, Google News, searches, filters, quiet hours or tools unless they ask for exactly that.`;
+
 /** The one-time question, sent when the watch has run a day without knowing what to watch. */
 export const INTERESTS_QUESTION =
   "Quick question: is there anything you'd like me to keep an eye on in the news for you? Teams, artists, people, topics, anything. Just list a few and I'll text you when something worth knowing happens.";

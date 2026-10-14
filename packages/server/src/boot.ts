@@ -35,7 +35,7 @@ import { ampleTools, type AmpleCredentials } from "@open-instinct/ample";
 import { contextTools } from "@open-instinct/context";
 import { networkTools } from "@open-instinct/network";
 // [sunshine:watcher]
-import { DEFAULT_DECIDE_MODEL, DEFAULT_SCREEN_MODEL, DEFAULT_WRITE_MODEL, WATCH_GATE, createWatcher, modelCall, resolveWatcherModel, stepModelSpec, type Watcher } from "@open-instinct/watcher";
+import { DEFAULT_DECIDE_MODEL, DEFAULT_SCREEN_MODEL, DEFAULT_WRITE_MODEL, NEWS_PROMPT, WATCH_GATE, createWatcher, modelCall, resolveWatcherModel, stepModelSpec, type Watcher } from "@open-instinct/watcher";
 import { researchWith, writerContextFor } from "./watcher-writer.js";
 import { ChatAwareOutbox, ConsoleOutbox, type ChatReplyBuffer } from "./console-outbox.js";
 import { fileTools, resolveInsideWorkspace } from "./file-tools.js";
@@ -380,7 +380,8 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
     getApiKey: (provider: string) => apiKeyFor(provider, env),
     // Core cannot import the network package; the server bridges OIP and the network guidance.
     describeData: describeDataPart,
-    promptExtra: promptExtraFor,
+    // [sunshine:watcher] With the news watch on, the owner's prompt says how to talk about it.
+    promptExtra: watcher ? (principal, channel) => [...promptExtraFor(principal, channel), ...(principal.kind === "owner" ? [NEWS_PROMPT] : [])] : promptExtraFor,
     setupSummary: () =>
       setupSummaryFor({
         inkbox: inkbox ? { handle: inkbox.handle } : undefined,

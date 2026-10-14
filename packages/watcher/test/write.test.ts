@@ -1,6 +1,14 @@
 // [sunshine:watcher] The writer's prompt and how its reply is read.
 import { describe, expect, it } from "vitest";
-import { WRITTEN_MAX_CHARS, parseWritten, writeSystem, writeUser } from "../src/prompts.js";
+import { NEWS_PROMPT, WRITTEN_MAX_CHARS, parseWritten, writeSystem, writeUser } from "../src/prompts.js";
+
+describe("the owner's prompt section about the news", () => {
+  it("says to talk about what Sunshine keeps an eye on, not how, and never names a news watch", () => {
+    expect(NEWS_PROMPT).toMatch(/^# Keeping up with the news/);
+    expect(NEWS_PROMPT).toContain("what you keep an eye on and why it fit, not how");
+    expect(NEWS_PROMPT).not.toMatch(/news watch\b(?!-)/i); // "news-watch skill" is the skill's name
+  });
+});
 
 describe("the writer's reply", () => {
   it("is the text, without wrapping quotes", () => {

@@ -172,6 +172,7 @@ new?" in its own reply), `watch_journal` ("what did you skip?"), `watch_later`, 
 | How a news text reads, when the writer holds back | `writeSystem` in `packages/watcher/src/prompts.ts` |
 | What the writer is given (persona, memory, thread, search) | `packages/server/src/watcher-writer.ts` (`WRITER_THREAD_MESSAGES`); `RESEARCH_MAX_CHARS` in `packages/watcher/src/check.ts` |
 | Which models, or one step off | env `WATCHER_SCREEN_MODEL`, `WATCHER_DECIDE_MODEL`, `WATCHER_WRITE_MODEL` (`off` disables a step; the writer off sends step 2's text) |
+| Prompt caching for the steps (off) | `modelCall` in `packages/watcher/src/models.ts`. Off on purpose: Pi caches every call for 5 minutes and storing costs 25% more, but checks run an hour apart, so it was never read back (measured: 0.56 cents a call with it, 0.475 without) |
 | Haiku 5.5 description (Pi 1.0.1 lacks it) | `resolveWatcherModel` in `packages/watcher/src/models.ts` |
 | How often, quiet hours (per owner) | by text to Sunshine (`watch_settings`); defaults in `store.ts` / `clock.ts` |
 | Text limit, model budget, ask-after hours | constants at the top of `packages/watcher/src/check.ts` |

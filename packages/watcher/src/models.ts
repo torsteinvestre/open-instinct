@@ -40,13 +40,19 @@ export function resolveWatcherModel(spec: string, env: NodeJS.ProcessEnv = {}): 
   }
 }
 
-/** A single call: system instructions plus one user message in, the reply's text out. */
-export function modelCall(model: Model<any>, opts: { apiKey?: string; reasoning?: ThinkingLevel } = {}): ModelCall {
+/**
+ * A single call: system instructions plus one user message in, the reply's text out.
+ * [sunshine:watcher] No prompt caching by default: Pi caches every call for 5 minutes, and storing
+ * costs 25% more than sending. Checks run an hour apart, so the copy was never read again: measured,
+ * a decide-sized call paid 0.46 of its 0.56 cents for storing. A 1-hour cache costs double to store
+ * and, an hour apart, would miss about half the time, so it is not worth it either.
+ */
+export function modelCall(model: Model<any>, opts: { apiKey?: string; reasoning?: ThinkingLevel; cacheRetention?: "none" | "short" | "long" } = {}): ModelCall {
   return async ({ system, user, signal }) => {
     const reply = await completeSimple(
       model,
       { systemPrompt: system, messages: [{ role: "user", content: user, timestamp: Date.now() }] },
-      { ...(opts.apiKey ? { apiKey: opts.apiKey } : {}), ...(opts.reasoning ? { reasoning: opts.reasoning } : {}), ...(signal ? { signal } : {}) },
+      { ...(opts.apiKey ? { apiKey: opts.apiKey } : {}), ...(opts.reasoning ? { reasoning: opts.reasoning } : {}), cacheRetention: opts.cacheRetention ?? "none", ...(signal ? { signal } : {}) },
     );
     if (reply.stopReason === "error" || reply.stopReason === "aborted") throw new Error(`${model.id}: ${reply.errorMessage ?? reply.stopReason}`);
     const text = reply.content.map((c) => (c.type === "text" ? c.text : "")).join("").trim();

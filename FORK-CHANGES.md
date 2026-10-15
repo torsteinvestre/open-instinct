@@ -121,14 +121,17 @@ blocks in the files above. Upstream's tool comes back unusable as before.
 interests, and otherwise stays silent. Plan and reasoning: `~/sunshine-ops/WATCHER-PLAN.md`
 (private notes). Principle: code for facts and fences, reasoning for taste.
 
-**How a check works.** Every hour outside the owner's quiet hours (one scheduled job carrying
-`gate: "watcher"`), entirely in code, never waking the agent:
+**How a check works.** Every two hours outside the owner's quiet hours by default (one scheduled job
+carrying `gate: "watcher"`; the owner can ask for 15 minutes to 3 hours), entirely in code, never
+waking the agent:
 
 1. Fences: off, quiet hours, a daily model-call budget.
 2. Collect: Google News RSS per search, last day only, headlines already seen skipped (by link
    and wording); Jev (`TYPESAFE_API_KEY`) removes the clearly off-topic, one yes/no per headline.
-3. Screen (step 1, Claude Haiku 5.5): removes clear noise, generous on purpose.
-4. Decide (step 2, Claude Sonnet 5.5): the playbook. Tell now / keep for later / nothing, plus the
+   The short list holds an hour's worth (30) for every hour between checks, at most 60
+   (`headlinesPerCheck`); what does not fit waits for the next check.
+3. Screen (step 1): off unless `WATCHER_SCREEN_MODEL` names a model (see below).
+4. Decide (step 2, Claude Sonnet 5.5): the playbook, over every short-listed headline. Tell now / keep for later / nothing, plus the
    text and a story card per story ("new", or an update to an existing card with what changed).
 5. The door (code): refuses an article already told, an update with nothing changed, or a "new"
    story that reads almost like a told one (unless the model says how it differs); one retry with
@@ -161,6 +164,15 @@ four questions about a news text it sent): machinery talk in 3 of 4 answers befo
 runs after ("I keep an eye on Norwegian startups and AI news for you, and that story fit"). Step
 2's own text no longer opens with "Since you follow X" (`packages/watcher/scenarios/wording.mjs`).
 
+**Why every two hours, and no screen** (2026-10-15). About 25-30 new headlines arrive per hour for a
+typical owner, and a decision costs about 1.3 cents fixed (instructions, story cards, thinking) plus a
+little per headline: measured 1.5 cents for 11 headlines, 1.72 for 25, 2.36 for 60. Hourly that is
+about $8 a month per owner, every two hours about $5.70, and slower saves less and less while news
+arrives later and each list gets longer. The Haiku screen saved almost nothing (its own call cost
+about the difference) and dropped the day's one story worth telling (an Oslo pre-seed round, Jev
+0.96), which Sonnet picked every time it saw it, among 11, 25 or 60 headlines. A filter in front of
+the decision can only lose stories, so only Jev stays there: cheap, and a mechanical question.
+
 No new headline means no model call. A failed step 2 sends nothing and its headlines wait for the
 next check. Each check leaves one `policy` audit entry (`watcher: "check"`) with counts, outcome,
 note and cost, and one line in the decision journal (`watcher-journal.jsonl`) with every headline
@@ -175,14 +187,14 @@ new?" in its own reply), `watch_journal` ("what did you skip?"), `watch_later`, 
 | How the decision is made, examples | `packages/watcher/src/prompts.ts` (`DECIDE_SYSTEM`; the screen's `SCREEN_SYSTEM` next to it) |
 | How a news text reads, when the writer holds back | `writeSystem` in `packages/watcher/src/prompts.ts` |
 | What the writer is given (persona, memory, thread, search) | `packages/server/src/watcher-writer.ts` (`WRITER_THREAD_MESSAGES`); `RESEARCH_MAX_CHARS` in `packages/watcher/src/check.ts` |
-| Which models, or one step off | env `WATCHER_SCREEN_MODEL`, `WATCHER_DECIDE_MODEL`, `WATCHER_WRITE_MODEL` (`off` disables a step; the writer off sends step 2's text) |
+| Which models, or one step off | env `WATCHER_SCREEN_MODEL` (unset: no screen), `WATCHER_DECIDE_MODEL`, `WATCHER_WRITE_MODEL` (`off` disables a step; the writer off sends step 2's text); `boot.ts` |
 | Prompt caching for the steps (off) | `modelCall` in `packages/watcher/src/models.ts`. Off on purpose: Pi caches every call for 5 minutes and storing costs 25% more, but checks run an hour apart, so it was never read back (measured: 0.56 cents a call with it, 0.475 without) |
 | Haiku 5.5 description (Pi 1.0.1 lacks it) | `resolveWatcherModel` in `packages/watcher/src/models.ts` |
-| How often, quiet hours (per owner) | by text to Sunshine (`watch_settings`); defaults in `store.ts` / `clock.ts` |
+| How often, quiet hours (per owner) | by text to Sunshine (`watch_settings`); defaults in `store.ts` (`DEFAULT_EVERY_MINUTES`, 120) / `clock.ts`. A changed default reaches new owners only |
+| How many headlines one check takes on | `headlinesPerCheck`, `HEADLINES_PER_HOUR`, `DECIDE_MAX` in `packages/watcher/src/check.ts` |
 | Text limit, model budget, ask-after hours | constants at the top of `packages/watcher/src/check.ts` |
 | Jev threshold, how many headlines per search | `DEFAULTS` in `packages/watcher/src/scan.ts` |
 | How the short list is shared between searches | `fairShare` in `packages/watcher/src/scan.ts` |
-| How many headlines step 2 sees | `DECIDE_MAX` in `packages/watcher/src/check.ts` |
 | The decision journal (`watcher-journal.jsonl`, 7 days) | `JOURNAL_*` in `store.ts`; read by the `watch_journal` tool |
 | "Reads almost like a told story" threshold | `SAME_HEADLINE_OVERLAP` in `packages/watcher/src/decide.ts` |
 | How Sunshine keeps the picture, reacts to feedback | `skills/news-watch/SKILL.md` |

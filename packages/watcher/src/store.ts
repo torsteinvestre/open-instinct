@@ -13,7 +13,11 @@ export const PROFILE_MAX_CHARS = 2000;
 export const SEARCH_MAX = 12;
 export const QUERY_MAX_CHARS = 120;
 export const TOPIC_MAX_CHARS = 80;
-export const DEFAULT_EVERY_MINUTES = 60;
+/**
+ * Every two hours by default (2026-10-15): about $5.50 a month per owner instead of about $8 hourly,
+ * and news still arrives within two hours. Faster or slower is the owner's choice (watch_settings).
+ */
+export const DEFAULT_EVERY_MINUTES = 120;
 
 const DAY = 24 * 60 * 60 * 1000;
 /** How long each kind of memory lasts. Story cards cover long stories; notes only recent checks. */

@@ -86,12 +86,12 @@ describe("the news watch in conversation", () => {
 });
 
 describe("scheduling the checks", () => {
-  it("starts on its own on first boot with one gated job, every hour outside quiet hours in the owner's timezone", () => {
+  it("starts on its own on first boot with one gated job, every two hours outside quiet hours in the owner's timezone", () => {
     w.ensureStarted();
     w.ensureStarted();
     const jobs = f.scheduler.list();
     expect(jobs).toHaveLength(1);
-    expect(jobs[0]).toMatchObject({ cron: "0 8,9,10,11,12,13,14,15,16,17,18,19,20,21 * * *", tz: "Europe/Oslo", gate: WATCH_GATE, toolRepliesOnly: true, prompt: WATCH_PROMPT, enabled: true });
+    expect(jobs[0]).toMatchObject({ cron: "0 8,10,12,14,16,18,20 * * *", tz: "Europe/Oslo", gate: WATCH_GATE, toolRepliesOnly: true, prompt: WATCH_PROMPT, enabled: true });
   });
 
   it("follows the settings: interval and quiet hours move the job, off removes it, and a job deleted by hand comes back", async () => {

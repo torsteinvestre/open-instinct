@@ -306,8 +306,9 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
   );
 
   // [sunshine:watcher] The news watch, only where the operator turned it on (INSTINCT_WATCHER=1).
-  // Checks run in code through a schedule gate and never wake the agent; the two model steps are
-  // settings (WATCHER_SCREEN_MODEL, WATCHER_DECIDE_MODEL, "off" switches one off).
+  // Checks run in code through a schedule gate and never wake the agent; the model steps are
+  // settings (WATCHER_SCREEN_MODEL, WATCHER_DECIDE_MODEL, "off" switches one off; the screen is off
+  // unless named).
   let watcher: Watcher | undefined;
   if (env.INSTINCT_WATCHER === "1") {
     watcher = await safely(log, "watcher", () => {
@@ -318,7 +319,10 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
         const apiKey = apiKeyFor(model.provider, env);
         return modelCall(model, { reasoning, ...(apiKey ? { apiKey } : {}) });
       };
-      const screen = step(env.WATCHER_SCREEN_MODEL, DEFAULT_SCREEN_MODEL, "low");
+      // Step 1 (a cheap screen before the decision) is off unless WATCHER_SCREEN_MODEL names a model:
+      // it saved almost nothing (Sonnet on 25 headlines 1.72 cents, on Haiku's 11 1.5 cents) and once
+      // dropped the day's one story worth telling (2026-10-15). Jev still removes the off-topic.
+      const screen = env.WATCHER_SCREEN_MODEL?.trim() ? step(env.WATCHER_SCREEN_MODEL, DEFAULT_SCREEN_MODEL, "low") : undefined;
       const decide = step(env.WATCHER_DECIDE_MODEL, DEFAULT_DECIDE_MODEL, "medium");
       // Step 3: the text is written as the agent, with its persona, memory, the end of the owner's
       // thread and its own web search (WATCHER_WRITE_MODEL, "off" sends the decision's text).

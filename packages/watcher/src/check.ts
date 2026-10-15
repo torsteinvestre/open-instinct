@@ -2,7 +2,7 @@
  * [sunshine:watcher] One news check, start to finish, in code:
  *   1. fences first: off, quiet hours, the daily model budget
  *   2. collect: Google News per search, last day, nothing seen before, Jev sieve  (scan.ts)
- *   3. screen: a cheap model drops clear noise                                    (step 1)
+ *   3. screen: a cheap model drops clear noise (off unless the operator names one) (step 1)
  *   4. decide: a stronger model applies the playbook                              (step 2)
  *   4b. write: the text as the agent itself, with what it knows and a web search   (step 3)
  *   5. the door: checks the decision against the facts, then texts, keeps, remembers
@@ -23,10 +23,22 @@ export const DAILY_TEXT_LIMIT = 6;
 /** Model calls per owner day (both steps). A cost fuse against a runaway loop. */
 export const DAILY_MODEL_CALL_LIMIT = 40;
 /**
- * Headlines step 2 sees at most per check. Raised from 15 after the first preview: on a busy day
- * Haiku passed 26 and the rest went undecided. The prompt stays small (about 4k tokens).
+ * Headlines step 2 sees at most per check. Raised from 15 after the first preview (on a busy day
+ * Haiku passed 26 and the rest went undecided), then from 25 to 60 when the screen went off and
+ * checks moved to every two hours (2026-10-15).
  */
-export const DECIDE_MAX = 25;
+export const DECIDE_MAX = 60;
+/** New headlines that arrive per hour across a typical owner's searches (measured 2026-10-15: 25-30). */
+export const HEADLINES_PER_HOUR = 30;
+
+/**
+ * How many headlines one check takes on: an hour's worth for every hour since the last check, at
+ * least an hour's worth, at most DECIDE_MAX. The short list and step 2 use the same number; what
+ * does not fit is not marked seen, so it waits for the next check (until it is a day old).
+ */
+export function headlinesPerCheck(everyMinutes: number): number {
+  return Math.min(DECIDE_MAX, Math.max(HEADLINES_PER_HOUR, Math.round((HEADLINES_PER_HOUR * everyMinutes) / 60)));
+}
 /** Hours the watch runs without interests before it asks for them once. */
 export const ASK_AFTER_HOURS = 24;
 /** [sunshine:watcher] Characters of one story's search results the writer sees. */
@@ -120,9 +132,10 @@ export async function runCheck(deps: CheckDeps, mode: CheckMode, signal?: AbortS
     return finish({ status: "budget" });
   }
 
-  // 2. Collect.
+  // 2. Collect: as many headlines as arrive between two checks.
+  const perCheck = headlinesPerCheck(s.everyMinutes);
   const { summary, candidates, rejected } = await runScan(
-    { store: deps.store, ...(deps.sieve ? { sieve: deps.sieve } : {}), ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}), ...(deps.lookup ? { lookup: deps.lookup } : {}), now: () => at },
+    { store: deps.store, ...(deps.sieve ? { sieve: deps.sieve } : {}), ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}), ...(deps.lookup ? { lookup: deps.lookup } : {}), now: () => at, totalMax: perCheck },
     signal,
   );
   Object.assign(log, { fetched: summary.fetched, fresh: summary.fresh, shortlist: summary.passed, sieve: summary.sieve, jevInputTokens: summary.jevInputTokens, ...(summary.errors.length ? { errors: summary.errors } : {}) });
@@ -173,7 +186,7 @@ export async function runCheck(deps: CheckDeps, mode: CheckMode, signal?: AbortS
     log["costUsd"] = round(cost);
     return finish({ status: "screened out", note });
   }
-  passed = passed.slice(0, DECIDE_MAX);
+  passed = passed.slice(0, perCheck);
 
   // 4. Decide (step 2), with one retry when the answer breaks a fact the code can check.
   const headlines = numbered(passed);

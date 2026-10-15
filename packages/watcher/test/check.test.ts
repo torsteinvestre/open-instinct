@@ -1,6 +1,6 @@
 // [sunshine:watcher] One news check end to end, with fake feeds, a fake Jev and fake models.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { runCheck, type CheckDeps } from "../src/check.js";
+import { DECIDE_MAX, headlinesPerCheck, runCheck, type CheckDeps } from "../src/check.js";
 import type { RelevanceSieve } from "../src/jev.js";
 import type { ModelCall } from "../src/models.js";
 import { INTERESTS_QUESTION } from "../src/prompts.js";
@@ -310,5 +310,46 @@ describe("a news check", () => {
     store.update((s) => void (s.searches = []));
     expect((await runCheck(deps([]), "scheduled")).status).toBe("no searches");
     expect(f.sent).toHaveLength(0);
+  });
+});
+
+// [sunshine:watcher] Checks every two hours take on two hours' worth of headlines, and with the
+// screen off (the default since 2026-10-15) step 2 reads every one of them (2026-10-15).
+describe("how many headlines a check takes on", () => {
+  const many = (q: string) => Array.from({ length: 35 }, (_, i) => ({ title: `${q} story number ${i + 1}`, link: `https://n/${q}/${i}`, hoursAgo: 1 }));
+  const nothing = () => ({ message: null, keep: [], note: "nothing" });
+  const listed = (user: string) => user.split("\n").filter((l) => /^\d+\. \[/.test(l)).map((l) => l.replace(/^\d+\. /, ""));
+  function twoSearches(everyMinutes: number): CheckDeps {
+    store.update((s) => {
+      s.searches = [
+        { topic: "Brann", query: "SK Brann", edition: "no-NO" },
+        { topic: "Bergen", query: "Bergen", edition: "no-NO" },
+      ];
+      s.everyMinutes = everyMinutes;
+    });
+    const { fetchImpl } = feeds({ "SK Brann": many("brann"), Bergen: many("bergen") });
+    return { ...deps([]), fetchImpl };
+  }
+
+  it("is an hour's worth for every hour between checks, at least one hour's, at most DECIDE_MAX", () => {
+    expect([15, 30, 60, 120, 180].map(headlinesPerCheck)).toEqual([30, 30, 30, 60, 60]);
+    expect(DECIDE_MAX).toBe(60);
+  });
+
+  it("every two hours, step 2 reads 60 headlines with no screen in between", async () => {
+    const decide = fakeModel("sonnet", [nothing()]);
+    await runCheck({ ...twoSearches(120), decide }, "scheduled");
+    expect(listed(decide.asked[0]!.user)).toHaveLength(60);
+  });
+
+  it("hourly, step 2 reads 30, and the ones that did not fit come up in the next check", async () => {
+    const decide = fakeModel("sonnet", [nothing(), nothing()]);
+    const d = twoSearches(60);
+    await runCheck({ ...d, decide }, "scheduled");
+    await runCheck({ ...d, decide }, "scheduled");
+    const [first, second] = decide.asked.map((a) => listed(a.user));
+    expect(first).toHaveLength(30);
+    expect(second).toHaveLength(30);
+    expect(second!.filter((h) => first!.includes(h))).toEqual([]);
   });
 });

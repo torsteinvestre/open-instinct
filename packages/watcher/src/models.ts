@@ -1,8 +1,9 @@
 /**
  * [sunshine:watcher] The two model steps of a news check, as plain calls through Pi (the same
- * model layer the agent uses). Step 1 screens cheaply (default Claude Haiku 5.5); step 2 decides
- * (default Claude Sonnet 5.5). Each is a setting, and "off" switches a step off:
- *   WATCHER_SCREEN_MODEL=off  -> every short-listed headline goes to step 2 (Sonnet only)
+ * model layer the agent uses). Step 1 screens cheaply (Claude Haiku 5.5 when switched on); step 2
+ * decides (default Claude Sonnet 5.5). Each is a setting, and "off" switches a step off:
+ *   WATCHER_SCREEN_MODEL unset or off -> every short-listed headline goes to step 2 (the default
+ *                                         since 2026-10-15); set to a model -> that model screens
  *   WATCHER_DECIDE_MODEL=off  -> step 1's verdict is final, decided by the same model (Haiku only)
  */
 import { completeSimple, type Model, type ThinkingLevel } from "@earendil-works/pi-ai/compat";

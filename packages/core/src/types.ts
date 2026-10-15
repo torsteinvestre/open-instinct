@@ -268,7 +268,7 @@ export interface InstinctConfig {
      */
     deliveryMirror?: boolean;
     /**
-     * [sunshine:prune] On unless false: tool results older than the last turn are shortened when the
+     * [sunshine:prune] On unless false: tool results older than the last turn are removed when the
      * prompt cache has lapsed anyway, so big email lists and search results stop riding along.
      */
     pruneToolResults?: boolean;

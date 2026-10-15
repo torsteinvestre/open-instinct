@@ -82,7 +82,7 @@ export interface RuntimeDeps {
   scheduleGates?: Record<string, (entry: ScheduleEntry) => Promise<boolean>>;
   /**
    * [sunshine:prune] How long the model provider keeps the prompt cache. Old tool results are only
-   * shortened after it has lapsed. Default PROMPT_CACHE_MS; the server passes one hour when
+   * removed after it has lapsed. Default PROMPT_CACHE_MS; the server passes one hour when
    * PI_CACHE_RETENTION=long.
    */
   promptCacheMs?: number;
@@ -112,17 +112,22 @@ export const FOLD_LOW_MESSAGES = 50;
 export const FOLD_HIGH_CHARS = SESSION_KEEP_CHARS;
 export const FOLD_LOW_CHARS = 160_000;
 /**
- * [sunshine:prune] Old tool results (an email list, search results) are shortened once the turn they
+ * [sunshine:prune] Old tool results (an email list, search results) are removed once the turn they
  * served is over, as OpenClaw's session pruning does: measured live (2026-10-15, Gmail and Calendar),
  * tool results were 59% of the owner's history, nearly all of it in results over 2,000 characters.
- * A result before the last turn that is longer than PRUNE_MIN_CHARS (or holds an image) keeps its
- * first PRUNE_KEEP_CHARS and a note saying the tool can be run again. Conversation text is never
- * touched. It happens only when the start of the prompt is paid in full anyway: after a fold, or once
- * the prompt cache has lapsed (PROMPT_CACHE_MS after the last model call), so it never costs a cache
- * write of its own.
+ * A result before the last turn that is longer than PRUNE_MIN_CHARS (or holds an image) is replaced
+ * by PRUNED_RESULT. Conversation text is never touched. It happens only when the start of the prompt
+ * is paid in full anyway: after a fold, or once the prompt cache has lapsed (PROMPT_CACHE_MS after the
+ * last model call), so it never costs a cache write of its own.
  */
 export const PRUNE_MIN_CHARS = 2_000;
-export const PRUNE_KEEP_CHARS = 600;
+/**
+ * [sunshine:prune] What a removed result says instead: nothing of the result, like OpenClaw's hard clear
+ * and Anthropic's own clearing. Keeping its first 600 characters with "N more characters left out" made
+ * the model believe its earlier, correct reply came from a partial view, and it told the owner so ("my
+ * first summary went out when I'd only seen part of your inbox"; 2 to 3 of 3 runs, scenarios/prune.mjs).
+ */
+export const PRUNED_RESULT = "[Removed from the history later, to save space. You had the full result when you used it. Run the tool again if you need the details.]";
 /** [sunshine:prune] Anthropic's default prompt cache lifetime (Pi's "short"). */
 export const PROMPT_CACHE_MS = 5 * 60 * 1000;
 /** [sunshine:delivery-mirror] The same text to the same thread within this window is copied once. */
@@ -190,9 +195,9 @@ interface ConversationOptions {
   now: () => Date;
   /** [sunshine:stable-cache] Stamp each message with the owner's clock and fold in steps. */
   stableCache?: { timeZone: string };
-  /** [sunshine:prune] Shorten old tool results once the prompt cache has lapsed for this long; unset is off. */
+  /** [sunshine:prune] Remove old tool results once the prompt cache has lapsed for this long; unset is off. */
   pruneAfterMs?: number;
-  /** [sunshine:prune] Told how many results were shortened and by how many characters. */
+  /** [sunshine:prune] Told how many results were removed and how many characters they held. */
   onPrune?: (pruned: { results: number; chars: number }) => void;
 }
 
@@ -277,10 +282,10 @@ export class Conversation {
   }
 
   /**
-   * [sunshine:prune] Shorten old tool results, but only when the start of the prompt is paid in full
+   * [sunshine:prune] Remove old tool results, but only when the start of the prompt is paid in full
    * anyway: the fold just changed it, or the cache has lapsed since the last model call. Otherwise
-   * the history stays byte-identical and the next call reads it from the cache. The shortened
-   * results are saved with the rest, so later calls start from the same text.
+   * the history stays byte-identical and the next call reads it from the cache. The history is saved
+   * without them, so later calls start from the same text.
    */
   private pruneIfPaidAnyway(beforeFold: AgentMessage[]): void {
     if (this.pruneAfterMs === undefined) return;
@@ -1458,8 +1463,8 @@ function lastTurnStart(messages: AgentMessage[]): number {
 
 /**
  * [sunshine:prune] Every tool result before the last turn that is longer than PRUNE_MIN_CHARS, or
- * holds an image, keeps its first PRUNE_KEEP_CHARS and a note. The call it answers, its id and its
- * place stay, so the history stays valid for the API. Running it again changes nothing.
+ * holds an image, becomes PRUNED_RESULT. The call it answers, its id and its place stay, so the
+ * history stays valid for the API. Running it again changes nothing.
  */
 export function pruneToolResults(messages: AgentMessage[]): { messages: AgentMessage[]; results: number; chars: number } {
   const from = lastTurnStart(messages);
@@ -1468,25 +1473,13 @@ export function pruneToolResults(messages: AgentMessage[]): { messages: AgentMes
   const out = messages.map((m, i) => {
     if (i >= from || m.role !== "toolResult") return m;
     const text = m.content.map((c) => (c.type === "text" ? c.text : undefined)).filter((t) => t !== undefined).join("\n");
-    const images = m.content.filter((c) => c.type !== "text").length;
-    if (text.length <= PRUNE_MIN_CHARS && images === 0) return m;
-    const head = clipAt(text, PRUNE_KEEP_CHARS);
-    const left = [text.length > head.length ? `${text.length - head.length} more characters` : "", images ? `${images} image${images === 1 ? "" : "s"}` : ""].filter(Boolean).join(" and ");
-    // Says it was cut afterwards: "Older tool result shortened" read as if it had been cut when used, and
-    // the model told the owner its earlier, correct list came from a cut-off result (scenarios/prune.mjs).
-    const note = `[Shortened later to save space; you saw all of it when you used it. ${left} left out here. Run the tool again if you need them.]`;
+    const images = m.content.some((c) => c.type !== "text");
+    if (text.length <= PRUNE_MIN_CHARS && !images) return m;
     results++;
-    chars += text.length - head.length;
-    return { ...m, content: [{ type: "text" as const, text: head ? `${head}\n${note}` : note }] };
+    chars += text.length;
+    return { ...m, content: [{ type: "text" as const, text: PRUNED_RESULT }] };
   });
   return results === 0 ? { messages, results, chars } : { messages: out, results, chars };
-}
-
-/** [sunshine:prune] The first `max` characters, never splitting an emoji or other two-unit character. */
-function clipAt(text: string, max: number): string {
-  if (text.length <= max) return text;
-  const code = text.charCodeAt(max - 1);
-  return text.slice(0, code >= 0xd800 && code <= 0xdbff ? max - 1 : max);
 }
 
 /** The kept slice must begin at a user turn so no tool result is left without its call. */

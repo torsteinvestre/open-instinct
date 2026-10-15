@@ -1,12 +1,13 @@
-// [sunshine:prune] After old tool results are shortened, does Sunshine still answer follow-ups right?
-// Runs the real AgentRuntime (real system prompt, core tools, the owner's chat thread) against Sonnet 5.5
-// with a canned email search (8 emails, about 12,000 characters, like a real Gmail result). The owner
-// asks for emails, says thanks, then after a 10-minute pause (the clock is moved; the cache lapses) asks
-// about details of that list, which by then has been shortened. Prints per message: tools used, the
-// reply, whether results were shortened, and each call's cache use and cost; then whether the follow-ups
-// were right (from its own earlier reply or by searching again) and not made up. Once with pruning on,
-// once off for comparison. Nothing is sent anywhere. Usage (from packages/server, after `pnpm build`,
-// ANTHROPIC_API_KEY set): node scenarios/prune.mjs [on|off|both]
+// [sunshine:prune] After old tool results are removed, does Sunshine still answer follow-ups right, and
+// without doubting itself to the owner? Runs the real AgentRuntime (real system prompt, core tools, the
+// owner's chat thread) against Sonnet 5.5 with a canned email fetch (8 realistic emails, 13,421
+// characters, shaped like Composio's Gmail result). The owner asks for emails, says thanks, then after a
+// 10-minute pause (the clock is moved; the cache lapses) asks for a detail only in a removed email body,
+// then one that is in Sunshine's own earlier reply. Prints every reply whole, each call's cache use and
+// cost, whether the answer was right, whether it looked again, made-up codes, and words of machinery
+// talk or self-doubt (read the replies too: a phrase list cannot catch every wording). Nothing is sent
+// anywhere. Usage (from packages/server, after `pnpm build`, ANTHROPIC_API_KEY set):
+//   node scenarios/prune.mjs [on|off|both] [rounds]   (about 6 cents per round with pruning on)
 import {
   AgentRuntime, ApprovalStore, AuditLog, ContactStore, DEFAULT_PERSONA, MemoryStore, PolicyEngine, Scheduler, StateDir,
   ToolRegistry, coreTools, defaultConfig, defaultPolicy, defineTool, resolveModel, textResult,
@@ -20,6 +21,7 @@ import { join } from "node:path";
 const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
 if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set");
 const which = process.argv[2] ?? "both";
+const rounds = Math.max(1, Number(process.argv[3] ?? 1) || 1);
 
 // Realistic, varied emails in the shape Composio's Gmail fetch returns (metadata-heavy JSON). A first
 // version gave every email the same filler body, and the model rightly called it filler: an artifact.
@@ -55,12 +57,28 @@ const INBOX = EMAILS.map(([id, from, subject, date, text]) => JSON.stringify({
 })).join(",\n");
 const SEARCH_RESULT = `{"data":{"messages":[\n${INBOX}\n],"nextPageToken":"","resultSizeEstimate":8},"successful":true,"error":null}`;
 
+// After the pause the email list is removed from the history. The first follow-up asks for a detail deep
+// in one email that a summary rarely carries (doors open 18:30), so it should have to look again and must
+// not invent a time; it comes first so no lookup has brought the list back yet. The second is in
+// Sunshine's own earlier reply. Whether each fact was already in an earlier reply is printed, since only
+// the ones that were not test removed data. (An earlier order asked the cabin question first; its lookup
+// brought the whole list back, so the next question never tested removed data.)
 const STEPS = [
   { text: "what emails did I get this week?", pauseMin: 0 },
   { text: "thanks!", pauseMin: 1 },
-  { text: "what was the exact subject of the one from Nordnet?", pauseMin: 10, expect: "Endringer i vilkår for Aksjesparekonto" },
-  { text: "and what's the message id of the Norwegian booking one? need it for something", pauseMin: 1, expect: "msg_18f2d15" },
+  { text: "what time do the doors open for the J. Cole concert?", pauseMin: 10, expect: "18:30" },
+  { text: "and who was the cabin one from again?", pauseMin: 1, expect: "Ingrid" },
 ];
+/** Codes (references, flight numbers, ids) and clock times that do not appear in the emails: made up. */
+const madeUpCodes = (text) =>
+  [...(text.match(/\b(?=[A-Z0-9]*\d)(?=[A-Z0-9]*[A-Z])[A-Z0-9]{5,8}\b/g) ?? []), ...(text.match(/\b\d{1,2}[:.]\d{2}\b/g) ?? []).map((t) => t.replace(".", ":"))]
+    .filter((c) => !SEARCH_RESULT.includes(c));
+/**
+ * Machinery talk or self-doubt instead of the emails. Seen: "I wrote it from a result that had been cut
+ * off, so I should have re-checked", "my first summary went out when I'd only seen part of your inbox".
+ * Printed for reading, not scored blindly.
+ */
+const FLAGS = /cut[ -]off|shortened|truncat|filler|save space|tool result|re-?check|placeholder|removed|no longer (?:have|see)|should have|only (?:seen|saw|had)|part of (?:your|the)|partial|(?:earlier|first|previous) (?:list|summary|reply|answer)|I was wrong|apologi[sz]e|sorry/gi;
 
 async function play(prune) {
   const dir = mkdtempSync(join(tmpdir(), "prune-"));
@@ -103,8 +121,12 @@ async function play(prune) {
     const reply = String(res.reply ?? "");
     rows.push({
       step, reply, searchedAgain: searches > searchesBefore, usage: calls.slice(seenCalls).map((m) => m.usage),
+      inEarlierReply: step.expect ? rows.some((r) => r.reply.includes(step.expect)) : undefined,
       pruned: pruned ? `${pruned.detail.prunedToolResults} result(s), ${pruned.detail.prunedChars} chars` : "",
       right: step.expect ? reply.includes(step.expect) : undefined,
+      madeUp: madeUpCodes(reply),
+      flags: reply.match(FLAGS) ?? [],
+      context: calls.slice(seenCalls).map((m) => m.usage.input + m.usage.cacheRead + m.usage.cacheWrite),
     });
     seenCalls = calls.length;
   }
@@ -113,22 +135,29 @@ async function play(prune) {
 }
 
 let total = 0;
+const summary = [];
 for (const prune of which === "both" ? [true, false] : [which === "on"]) {
-  const rows = await play(prune);
-  console.log(`\n===== pruning ${prune ? "ON (new)" : "OFF (old)"}`);
-  let sum = 0;
-  for (const r of rows) {
-    console.log(`\n  > ${r.step.text}${r.step.pauseMin >= 5 ? `   (after ${r.step.pauseMin} min)` : ""}`);
-    if (r.pruned) console.log(`    shortened before the call: ${r.pruned}`);
-    for (const u of r.usage) {
-      sum += u.cost?.total ?? 0;
-      console.log(`    read ${String(u.cacheRead).padStart(6)}  written ${String(u.cacheWrite).padStart(6)}  uncached ${String(u.input).padStart(5)}  out ${String(u.output).padStart(4)}  $${(u.cost?.total ?? 0).toFixed(4)}`);
+  for (let round = 1; round <= rounds; round++) {
+    const rows = await play(prune);
+    console.log(`\n===== pruning ${prune ? "ON (new)" : "OFF (old)"}, round ${round} of ${rounds}`);
+    let sum = 0;
+    for (const r of rows) {
+      console.log(`\n  > ${r.step.text}${r.step.pauseMin >= 5 ? `   (after ${r.step.pauseMin} min)` : ""}`);
+      if (r.pruned) console.log(`    removed before the call: ${r.pruned}`);
+      for (const u of r.usage) {
+        sum += u.cost?.total ?? 0;
+        console.log(`    read ${String(u.cacheRead).padStart(6)}  written ${String(u.cacheWrite).padStart(6)}  uncached ${String(u.input).padStart(5)}  out ${String(u.output).padStart(4)}  $${(u.cost?.total ?? 0).toFixed(4)}`);
+      }
+      // Every reply whole: self-doubt can sit anywhere in it.
+      console.log(`    reply: "${r.reply.replace(/\n/g, " / ")}"`);
+      console.log(`    context per call (tokens): ${r.context.join(", ")}`);
+      if (r.right !== undefined) console.log(`    right answer: ${r.right ? "YES" : "NO"}   looked again: ${r.searchedAgain ? "yes" : "no"}   already in an earlier reply: ${r.inEarlierReply ? "yes" : "no"}`);
+      console.log(`    made-up codes: ${r.madeUp.length ? r.madeUp.join(", ") : "none"}   flagged words: ${r.flags.length ? r.flags.join(", ") : "none"}`);
     }
-    // The follow-ups are what this checks, so their replies are printed whole.
-    console.log(`    reply: "${r.reply.replace(/\n/g, " / ").slice(0, r.step.expect ? undefined : 260)}"`);
-    if (r.right !== undefined) console.log(`    right answer: ${r.right ? "YES" : "NO"}   searched again: ${r.searchedAgain ? "yes" : "no"}`);
+    console.log(`  round total $${sum.toFixed(4)}`);
+    total += sum;
+    const followUps = rows.filter((r) => r.right !== undefined);
+    summary.push(`${prune ? "on " : "off"} round ${round}: right ${followUps.filter((r) => r.right).length}/${followUps.length} (needing removed data: ${followUps.filter((r) => !r.inEarlierReply).length}), made up ${rows.reduce((n, r) => n + r.madeUp.length, 0)}, replies with flagged words ${rows.filter((r) => r.flags.length).length}, $${sum.toFixed(4)}`);
   }
-  console.log(`  total $${sum.toFixed(4)}`);
-  total += sum;
 }
-console.log(`\nCost: $${total.toFixed(4)}`);
+console.log(`\n===== summary\n${summary.join("\n")}\nCost: $${total.toFixed(4)}`);

@@ -458,7 +458,7 @@ without breaking the prompt cache (`tool_addition`, Sonnet 5.5 supports it).
 
 **To remove.** Delete `LEFT_OUT_TOOLS` and its filter in `tools()`, and the test next to it.
 
-### `[sunshine:prune]`: old tool results are shortened once their turn is over
+### `[sunshine:prune]`: old tool results are removed once their turn is over
 
 **Problem** (measured live 2026-10-15, a Gmail and Calendar test). Six requests in seven minutes grew the
 owner's history from 35k to 72k tokens: every email list and tool search (10,000-21,000 characters each)
@@ -468,14 +468,19 @@ all in the 9 results over 2,000 characters. A message after a pause would have c
 **What the fork adds** (copied from OpenClaw's session pruning, `contextPruning.mode: "cache-ttl"`).
 
 - `pruneToolResults` (`packages/core/src/runtime.ts`): every tool result before the last turn that is
-  longer than 2,000 characters (`PRUNE_MIN_CHARS`), or holds an image, keeps its first 600
-  (`PRUNE_KEEP_CHARS`) and a note: "[Shortened later to save space; you saw all of it when you used it.
-  N more characters left out here. Run the tool again if you need them.]". The call, its id and its
-  place stay, so the history stays valid for the API; running it again changes nothing.
-  The note says the cut came later on purpose: worded "Older tool result shortened", the real model read
-  it as cut when used and told the owner its earlier, correct list "was written from a result that had
-  been cut off" (`packages/server/scenarios/prune.mjs`, 2026-10-15). Conversation text is never touched, and nothing
-  else reads old results (the memory notes and the news writer read only messages and replies).
+  longer than 2,000 characters (`PRUNE_MIN_CHARS`), or holds an image, is replaced by `PRUNED_RESULT`:
+  "[Removed from the history later, to save space. You had the full result when you used it. Run the
+  tool again if you need the details.]". The call, its id and its place stay, so the history stays valid
+  for the API; running it again changes nothing. Conversation text is never touched, and nothing else
+  reads old results (the memory notes and the news writer read only messages and replies).
+- **Why nothing of the result is kept** (`packages/server/scenarios/prune.mjs`, 2026-10-15). A first
+  version kept the first 600 characters and "N more characters left out". With the real model the answers
+  stayed right, but beside a partial start its own detailed reply looked unsupported: it looked the emails
+  up again and told the owner "I wrote it from a result that had been cut off, so I should have
+  re-checked" and "my first summary went out when I'd only seen part of your inbox" (2 to 3 of 3 runs;
+  rewording the note alone did not stop it). Removed whole, as OpenClaw's hard clear and Anthropic's own
+  clearing do, 3 of 3 runs answered from its own earlier reply with no self-doubt and nothing made up.
+  Not yet tested: a follow-up that needs a detail only in the removed result.
 - The last turn (from the message that began the last model run) stays whole, so "reply to the second
   one" still finds what was just looked up. A reminder's note and copy added since do not move it.
 - **When:** at the start of a message, only if the start of the prompt is paid in full anyway: the history
@@ -484,17 +489,19 @@ all in the 9 results over 2,000 characters. A message after a pause would have c
   `promptCacheMs`). Between messages a few minutes apart nothing changes, so the cache keeps being read.
   OpenClaw's other route, Anthropic's server-side clearing, was not used: its docs say clearing
   invalidates the cache from the first cleared result, every time it clears.
-- The shortened results are saved, so later calls start from the same text. Each pruning leaves an audit
+- The history is saved without them, so later calls start from the same text. Each pruning leaves an audit
   entry (`policy`, `prunedToolResults`, `prunedChars`).
 - Off switch: `config.features.pruneToolResults = false`.
 
-**Expected effect.** In the measured history about 80,000 of 92,600 tool-result characters go (about
+**Expected effect.** In the measured history about 83,000 of 92,600 tool-result characters go (about
 20,000 tokens): a message after a pause from about 18 cents to about 10. Chat without tools barely changes.
+In the scenario the first call after the pause carried 5,500 tokens instead of 12,500.
 
 **Tests** (`packages/core/test/runtime.test.ts`, "prune old tool results"): warm cache leaves everything;
-lapsed cache shortens all but the last turn and saves it; a fold shortens even while warm; the one-hour
-cache and the off switch; small results untouched, images counted, no emoji split at the cut, the same
-result on a second pass; reminder copies do not count as model calls.
+lapsed cache removes all but the last turn and saves it; a fold removes even while warm; the one-hour
+cache and the off switch; small results untouched, old screenshots removed, the same result on a second
+pass; reminder copies do not count as model calls. Real model: `node scenarios/prune.mjs [on|off|both]
+[rounds]` (about 6 cents for the first round, about 2 for each further one).
 
 **To remove.** Set `features.pruneToolResults` to false, or revert the commit
 (`git log --grep "sunshine:prune"`) or delete the tagged blocks in `runtime.ts`, `types.ts`, `boot.ts`

@@ -21,19 +21,39 @@ const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
 if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set");
 const which = process.argv[2] ?? "both";
 
+// Realistic, varied emails in the shape Composio's Gmail fetch returns (metadata-heavy JSON). A first
+// version gave every email the same filler body, and the model rightly called it filler: an artifact.
 const EMAILS = [
-  ["msg_18f2a01", "DNB <noreply@dnb.no>", "Your card statement for September is ready", "Mon 12 Oct 08:14"],
-  ["msg_18f2a7c", "Skatteetaten <ikke-svar@skatteetaten.no>", "Skattemelding 2025: endelig skatteoppgjør", "Mon 12 Oct 11:02"],
-  ["msg_18f2b33", "Ingrid Haugen <ingrid.haugen@gmail.com>", "Hytta i november?", "Tue 13 Oct 19:47"],
-  ["msg_18f2c90", "Ticketmaster <noreply@ticketmaster.no>", "Your J. Cole tickets: venue update", "Wed 14 Oct 09:30"],
-  ["msg_18f2d15", "Norwegian <noreply@norwegian.no>", "Booking confirmation OSL-BCN, 6 Nov", "Wed 14 Oct 14:05"],
-  ["msg_18f2e02", "Startup Norway <hello@startupnorway.com>", "Pitch night 22 Oct: final speaker list", "Thu 15 Oct 07:55"],
-  ["msg_18f2e4b", "Nordnet <kundeservice@nordnet.no>", "Endringer i vilkår for Aksjesparekonto", "Thu 15 Oct 10:20"],
-  ["msg_18f2f11", "Martin Lie <martin@lie-consulting.no>", "Re: Fundraising deck feedback", "Thu 15 Oct 13:41"],
+  ["msg_18f2a01", "DNB <noreply@dnb.no>", "Your card statement for September is ready", "2026-10-12T06:14:09Z",
+    "Hi Torstein, your statement for DNB Mastercard (ending 4471) for the period 1-30 September is now available in the app and online bank. Amount due: NOK 8,412.50, due date 26 October. If you have set up eFaktura with AvtaleGiro, the amount will be deducted automatically. Questions? Chat with us in the DNB app."],
+  ["msg_18f2a7c", "Skatteetaten <ikke-svar@skatteetaten.no>", "Skattemelding 2025: endelig skatteoppgjør", "2026-10-12T09:02:41Z",
+    "Hei. Skatteoppgjøret ditt for 2025 er klart. Du får tilbake 3 218 kroner, som blir utbetalt til kontonummeret som er registrert hos oss innen tre uker. Du finner oppgjøret ved å logge inn på skatteetaten.no. Dette er en automatisk melding og kan ikke besvares."],
+  ["msg_18f2b33", "Ingrid Haugen <ingrid.haugen@gmail.com>", "Hytta i november?", "2026-10-13T17:47:12Z",
+    "Heisann! Mamma spør om vi skal ta en tur på hytta i Hemsedal helgen 13.-15. november. Jonas og Marte kommer, og vi tenkte å fyre opp badstua og ta en tur opp til Totten hvis det er snø. Kan du ta med deg tacoboksen og noe å drikke? Si fra innen søndag så jeg kan svare mamma. Klem, Ingrid"],
+  ["msg_18f2c90", "Ticketmaster <noreply@ticketmaster.no>", "Your J. Cole tickets: venue update", "2026-10-14T07:30:55Z",
+    "Important update about your order 23-48112/OSL. J. Cole, The Fall Off Tour, 14 November 2026 has moved from Telenor Arena to Unity Arena, Fornebu. Your tickets remain valid for the new venue; no action is needed. Doors open 18:30. Mobile tickets will appear in the Ticketmaster app 48 hours before the event."],
+  ["msg_18f2d15", "Norwegian <noreply@norwegian.no>", "Booking confirmation OSL-BCN, 6 Nov", "2026-10-14T12:05:03Z",
+    "Thank you for your booking, Torstein. Booking reference: K7HQ2P. Outbound DY1876 Oslo Gardermoen 07:05 - Barcelona El Prat 10:55, Friday 6 November. Return DY1877 Barcelona 11:40 - Oslo 15:35, Monday 9 November. 1 adult, LowFare+ with one checked bag. Check-in opens 30 days before departure in the Norwegian app."],
+  ["msg_18f2e02", "Startup Norway <hello@startupnorway.com>", "Pitch night 22 Oct: final speaker list", "2026-10-15T05:55:38Z",
+    "The speaker list for Pitch Night at MESH Youngstorget on Thursday 22 October is set: Solvera (pre-seed, climate data), Fjordkraft Labs, Nookie Health and Brygg. Doors 17:30, pitches from 18:00, networking after. You registered as an attendee; bring the QR code from your ticket email. See you there!"],
+  ["msg_18f2e4b", "Nordnet <kundeservice@nordnet.no>", "Endringer i vilkår for Aksjesparekonto", "2026-10-15T08:20:17Z",
+    "Hei Torstein. Fra 1. desember 2026 gjør vi endringer i vilkårene for Aksjesparekonto (ASK). Kurtasjeklassen Mini endres fra 0,06 % til 0,05 %, og valutapåslaget ved handel i utenlandske aksjer settes ned til 0,20 %. Endringene krever ingen handling fra deg. Fullstendige vilkår finner du under Min side > Dokumenter."],
+  ["msg_18f2f11", "Martin Lie <martin@lie-consulting.no>", "Re: Fundraising deck feedback", "2026-10-15T11:41:50Z",
+    "Hey Torstein, went through the deck. Strong problem slide, but the market sizing on slide 6 mixes TAM for all of Europe with a Nordic SAM, investors will poke at that. I'd also move traction before the team slide and cut the roadmap to one slide. Happy to do a 30 min call Monday or Tuesday if useful. Best, Martin"],
 ];
-const filler = (i) => `Hei Torstein, ${"dette er en lengre e-post med detaljer, lenker og vilkår som en ekte innboks har. ".repeat(17)}(#${i})`;
-const INBOX = EMAILS.map(([id, from, subject, date], i) => `{"id":"${id}","from":"${from}","subject":"${subject}","date":"${date}","snippet":"${filler(i)}","labels":["INBOX","UNREAD"]}`).join(",\n");
-const SEARCH_RESULT = `{"data":{"messages":[\n${INBOX}\n],"resultSizeEstimate":8},"successful":true}`;
+const HEADERS = (from, subject, date) => [
+  { name: "Delivered-To", value: "torstein.test@gmail.com" }, { name: "Received", value: `by 2002:a05:6a10:8e0c:b0:5a2:1f3 with SMTP id k12csp4471pxb; ${date}` },
+  { name: "ARC-Seal", value: "i=1; a=rsa-sha256; t=1760000000; cv=none; d=google.com; s=arc-20240605; b=Qm9ndXMgc2lnbmF0dXJlIGZvciB0ZXN0aW5n" },
+  { name: "DKIM-Signature", value: "v=1; a=rsa-sha256; c=relaxed/relaxed; s=selector1; h=from:to:subject:date:message-id; bh=47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=" },
+  { name: "From", value: from }, { name: "To", value: "Torstein <torstein.test@gmail.com>" }, { name: "Subject", value: subject }, { name: "Date", value: date },
+  { name: "Content-Type", value: "multipart/alternative; boundary=\"000000000000a1b2c3d4e5f6\"" },
+];
+const INBOX = EMAILS.map(([id, from, subject, date, text]) => JSON.stringify({
+  messageId: id, threadId: id.replace("msg_", "thr_"), messageTimestamp: date, labelIds: ["INBOX", "UNREAD", "CATEGORY_PERSONAL"],
+  sender: from, to: "torstein.test@gmail.com", subject, preview: { subject, body: text.slice(0, 120) }, messageText: text,
+  payload: { mimeType: "multipart/alternative", headers: HEADERS(from, subject, date) }, attachmentList: [],
+})).join(",\n");
+const SEARCH_RESULT = `{"data":{"messages":[\n${INBOX}\n],"nextPageToken":"","resultSizeEstimate":8},"successful":true,"error":null}`;
 
 const STEPS = [
   { text: "what emails did I get this week?", pauseMin: 0 },
@@ -104,7 +124,8 @@ for (const prune of which === "both" ? [true, false] : [which === "on"]) {
       sum += u.cost?.total ?? 0;
       console.log(`    read ${String(u.cacheRead).padStart(6)}  written ${String(u.cacheWrite).padStart(6)}  uncached ${String(u.input).padStart(5)}  out ${String(u.output).padStart(4)}  $${(u.cost?.total ?? 0).toFixed(4)}`);
     }
-    console.log(`    reply: "${r.reply.replace(/\n/g, " / ").slice(0, 260)}"`);
+    // The follow-ups are what this checks, so their replies are printed whole.
+    console.log(`    reply: "${r.reply.replace(/\n/g, " / ").slice(0, r.step.expect ? undefined : 260)}"`);
     if (r.right !== undefined) console.log(`    right answer: ${r.right ? "YES" : "NO"}   searched again: ${r.searchedAgain ? "yes" : "no"}`);
   }
   console.log(`  total $${sum.toFixed(4)}`);

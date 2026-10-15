@@ -317,6 +317,7 @@ for and says so (2 of 3 runs with stamps, 1 of 6 without, then 0 of 1).
 **Known limits.** The memory digest (today's journal) is still in the system prompt: a journal entry
 breaks the cache once. A message after more than 5 minutes of quiet pays full price (the cache's
 lifetime); a 1-hour cache (`PI_CACHE_RETENTION=long`) is possible but costs twice as much to write.
+`[sunshine:prune]` makes that full price smaller by shortening old tool results at exactly those moments.
 
 **To remove.** Set `features.stableCache` to false in the agent's config and restart, or revert its
 commit (`git log --grep "stable-cache"`) or delete the tagged blocks in `prompt.ts`, `runtime.ts`,
@@ -456,6 +457,45 @@ of direct actions chosen from what is actually used. Pi already supports adding 
 without breaking the prompt cache (`tool_addition`, Sonnet 5.5 supports it).
 
 **To remove.** Delete `LEFT_OUT_TOOLS` and its filter in `tools()`, and the test next to it.
+
+### `[sunshine:prune]`: old tool results are shortened once their turn is over
+
+**Problem** (measured live 2026-10-15, a Gmail and Calendar test). Six requests in seven minutes grew the
+owner's history from 35k to 72k tokens: every email list and tool search (10,000-21,000 characters each)
+stayed in the history and was sent again with every later message. Tool results were 59% of it, nearly
+all in the 9 results over 2,000 characters. A message after a pause would have cost about 18 cents.
+
+**What the fork adds** (copied from OpenClaw's session pruning, `contextPruning.mode: "cache-ttl"`).
+
+- `pruneToolResults` (`packages/core/src/runtime.ts`): every tool result before the last turn that is
+  longer than 2,000 characters (`PRUNE_MIN_CHARS`), or holds an image, keeps its first 600
+  (`PRUNE_KEEP_CHARS`) and a note: "[Older tool result shortened to save space: N more characters left
+  out. Run the tool again if you need it.]". The call, its id and its place stay, so the history stays
+  valid for the API; running it again changes nothing. Conversation text is never touched, and nothing
+  else reads old results (the memory notes and the news writer read only messages and replies).
+- The last turn (from the message that began the last model run) stays whole, so "reply to the second
+  one" still finds what was just looked up. A reminder's note and copy added since do not move it.
+- **When:** at the start of a message, only if the start of the prompt is paid in full anyway: the history
+  was just folded, or the last model call in this conversation is at least 5 minutes ago (Anthropic's
+  cache lifetime, `PROMPT_CACHE_MS`; one hour when `PI_CACHE_RETENTION=long`, passed by `boot.ts` as
+  `promptCacheMs`). Between messages a few minutes apart nothing changes, so the cache keeps being read.
+  OpenClaw's other route, Anthropic's server-side clearing, was not used: its docs say clearing
+  invalidates the cache from the first cleared result, every time it clears.
+- The shortened results are saved, so later calls start from the same text. Each pruning leaves an audit
+  entry (`policy`, `prunedToolResults`, `prunedChars`).
+- Off switch: `config.features.pruneToolResults = false`.
+
+**Expected effect.** In the measured history about 80,000 of 92,600 tool-result characters go (about
+20,000 tokens): a message after a pause from about 18 cents to about 10. Chat without tools barely changes.
+
+**Tests** (`packages/core/test/runtime.test.ts`, "prune old tool results"): warm cache leaves everything;
+lapsed cache shortens all but the last turn and saves it; a fold shortens even while warm; the one-hour
+cache and the off switch; small results untouched, images counted, no emoji split at the cut, the same
+result on a second pass; reminder copies do not count as model calls.
+
+**To remove.** Set `features.pruneToolResults` to false, or revert the commit
+(`git log --grep "sunshine:prune"`) or delete the tagged blocks in `runtime.ts`, `types.ts`, `boot.ts`
+and the tests.
 
 ### Long replies (investigated 2026-10-15, nothing changed)
 

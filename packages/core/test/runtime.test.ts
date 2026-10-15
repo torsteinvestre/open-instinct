@@ -11,7 +11,7 @@ import { MemoryStore } from "../src/memory.js";
 import { PolicyEngine, defaultPolicy } from "../src/policy.js";
 import { coreTools } from "../src/core-tools.js";
 import { A2AStore } from "../src/a2a-state.js";
-import { AgentRuntime, FOLD_HIGH_MESSAGES, FOLD_LOW_CHARS, FOLD_LOW_MESSAGES, InboundUncertainError, SESSION_KEEP_MESSAGES, foldInSteps, hashArgs, readSession, restoreMessages, runtimeKey, stableJson, type Outbox, type RuntimeDeps } from "../src/runtime.js";
+import { AgentRuntime, FOLD_HIGH_MESSAGES, FOLD_LOW_CHARS, FOLD_LOW_MESSAGES, InboundUncertainError, PROMPT_CACHE_MS, PRUNE_KEEP_CHARS, SESSION_KEEP_MESSAGES, cacheLapsed, foldInSteps, hashArgs, pruneToolResults, readSession, restoreMessages, runtimeKey, stableJson, type Outbox, type RuntimeDeps } from "../src/runtime.js";
 import { Scheduler } from "../src/scheduler.js";
 import { ToolRegistry, defineTool, textResult, type RegisteredTool } from "../src/tools.js";
 import type { InboundMessage, OutboundMessage, Policy, Principal } from "../src/types.js";
@@ -433,6 +433,124 @@ describe("AgentRuntime.handleInbound", () => {
       const conv = h.runtime.conversation("chat:main", h.runtime.ownerPrincipal());
       expect(userTexts(conv.agent.state.messages)).toEqual([JSON.stringify([{ type: "text", text: "question 1" }])]);
       expect(conv.agent.state.systemPrompt).toContain("# Now");
+    });
+  });
+
+  // [sunshine:prune] Old tool results are shortened, but only when the prompt is paid in full anyway.
+  describe("prune old tool results", () => {
+    const BIG = "r".repeat(5_000);
+    const lookup = defineTool({
+      name: "lookup",
+      label: "Lookup",
+      description: "returns a long result",
+      parameters: Type.Object({ q: Type.String() }),
+      meta: { capabilities: ["converse"], group: "system" },
+      execute: async ({ q }) => textResult(`${q}:${BIG}`),
+    });
+    const ask = (h: Harness, i: number) => h.runtime.handleInbound(inbound({ channel: "chat", from: "owner", conversationKey: "chat:main", text: `question ${i}`, id: `q${i}` }));
+    const resultTexts = (msgs: AgentMessage[]) => msgs.filter((m) => m.role === "toolResult").map((m) => m.content.map((c) => (c.type === "text" ? c.text : `[${c.type}]`)).join(""));
+    const live = (h: Harness) => h.runtime.conversation("chat:main", h.runtime.ownerPrincipal()).agent.state.messages;
+    const NOTE = /\n\[Older tool result shortened to save space: \d+ more characters left out\. Run the tool again if you need it\.\]$/;
+    const usage = { input: 100, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 110, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+    /** A reply as the model sends it: with token usage (fauxAssistantMessage alone has none, like a mirrored copy). */
+    const modelReply = (content: Parameters<typeof fauxAssistantMessage>[0], at = 0) => ({ ...fauxAssistantMessage(content, { stopReason: typeof content === "string" ? "stop" : "toolUse" }), usage, timestamp: at }) as AgentMessage;
+    const user = (text: string): AgentMessage => ({ role: "user", content: [{ type: "text", text }], timestamp: 0 });
+    const result = (id: string, text: string, image = false): AgentMessage =>
+      ({ role: "toolResult", toolCallId: id, toolName: "lookup", content: [{ type: "text", text }, ...(image ? [{ type: "image", data: "aGk=", mimeType: "image/png" }] : [])], isError: false, timestamp: 0 }) as AgentMessage;
+
+    it("shortens results before the last turn once the cache has lapsed, keeps the last turn whole, and saves it", async () => {
+      let now = new Date();
+      const h = harness({ extraTools: [lookup], deps: { now: () => now } });
+      h.faux.setResponses([toolTurn("lookup", { q: "first" }), textTurn("one"), toolTurn("lookup", { q: "second" }), textTurn("two"), textTurn("three")]);
+      await ask(h, 1);
+      await ask(h, 2);
+      // A minute apart the cache is warm: nothing changes, so the next call reads it.
+      expect(resultTexts(live(h))).toEqual([`first:${BIG}`, `second:${BIG}`]);
+      now = new Date(Date.now() + PROMPT_CACHE_MS + 60_000);
+      await ask(h, 3);
+      const [first, second] = resultTexts(live(h));
+      expect(first!.slice(0, PRUNE_KEEP_CHARS)).toBe(`first:${BIG}`.slice(0, PRUNE_KEEP_CHARS));
+      expect(first).toMatch(NOTE);
+      expect(first).toContain("4406 more characters");
+      expect(second).toBe(`second:${BIG}`);
+      // The call and its result keep their ids, and the shortened text is what is saved.
+      const msgs = live(h);
+      const call = msgs.find((m) => m.role === "assistant" && m.content.some((c) => c.type === "toolCall"));
+      const callId = call?.role === "assistant" ? call.content.find((c) => c.type === "toolCall")?.id : undefined;
+      expect(msgs.find((m) => m.role === "toolResult")).toMatchObject({ toolCallId: callId, toolName: "lookup" });
+      expect(resultTexts(readSession(`${h.deps.state.path("sessions")}/${encodeURIComponent("chat:main")}.jsonl`))).toEqual([first, second]);
+      expect(h.deps.audit.read({ limit: 100 }).filter((e) => e.kind === "policy" && (e.detail as { prunedToolResults?: number }).prunedToolResults === 1)).toHaveLength(1);
+    });
+
+    it("shortens at a fold even while the cache is warm, since the fold rewrites the start anyway", async () => {
+      const h = harness({ extraTools: [lookup] });
+      const turns = FOLD_HIGH_MESSAGES / 4 + 2; // four messages a turn: past the high mark
+      h.faux.setResponses(Array.from({ length: turns }, (_, i) => [toolTurn("lookup", { q: `q${i}` }), textTurn(`answer ${i}`)]).flat());
+      for (let i = 0; i < turns; i++) await ask(h, i);
+      const texts = resultTexts(live(h));
+      expect(JSON.stringify(live(h).find((m) => m.role !== "system")?.content)).toContain("[Conversation summary]");
+      // The fold came at the start of the last turn: the turn before it stayed whole, the last one is new.
+      expect(texts.slice(-2)).toEqual([`q${turns - 2}:${BIG}`, `q${turns - 1}:${BIG}`]);
+      expect(texts.length).toBeGreaterThan(4);
+      expect(texts.slice(0, -2).every((t) => NOTE.test(t))).toBe(true);
+    });
+
+    it("waits as long as the provider keeps the cache, and is switched off by features.pruneToolResults = false", async () => {
+      for (const variant of ["hour", "off"] as const) {
+        let now = new Date();
+        const config = testConfig();
+        if (variant === "off") config.features = { ...config.features, pruneToolResults: false };
+        const h = harness({ extraTools: [lookup], deps: { now: () => now, config, ...(variant === "hour" ? { promptCacheMs: 60 * 60 * 1000 } : {}) } });
+        h.faux.setResponses([toolTurn("lookup", { q: "first" }), textTurn("one"), textTurn("two"), textTurn("three"), textTurn("four")]);
+        await ask(h, 1);
+        await ask(h, 2);
+        now = new Date(Date.now() + PROMPT_CACHE_MS + 60_000);
+        await ask(h, 3);
+        expect(resultTexts(live(h)), variant).toEqual([`first:${BIG}`]);
+        now = new Date(Date.now() + 61 * 60 * 1000);
+        await ask(h, 4);
+        expect(NOTE.test(resultTexts(live(h))[0]!), variant).toBe(variant === "hour");
+      }
+    });
+
+    it("keeps small results and the last model turn, counts images, and changes nothing the second time", () => {
+      const tricky = `a${"😀".repeat(1_500)}`;
+      const msgs: AgentMessage[] = [
+        user("q1"),
+        modelReply([fauxToolCall("lookup", {}, { id: "c1" }), fauxToolCall("lookup", {}, { id: "c2" }), fauxToolCall("lookup", {}, { id: "c3" }), fauxToolCall("lookup", {}, { id: "c4" })]),
+        result("c1", BIG),
+        result("c2", "small"),
+        result("c3", "screenshot", true),
+        result("c4", tricky),
+        modelReply("a1"),
+        user("q2"),
+        modelReply([fauxToolCall("lookup", {}, { id: "c5" })]),
+        result("c5", BIG),
+        modelReply("a2"),
+        // A reminder that fired since: a note and a copy that no model wrote. The last turn is still q2's.
+        user("[Not a message from Maria: a note that you texted them the next message when a reminder came due.]"),
+        fauxAssistantMessage("Drink water"),
+      ];
+      const pruned = pruneToolResults(msgs);
+      expect(pruned.results).toBe(3);
+      const texts = resultTexts(pruned.messages);
+      expect(texts[0]).toMatch(NOTE);
+      expect(pruned.messages[3]).toBe(msgs[3]); // small: the very same message
+      expect(texts[2]).toBe("screenshot\n[Older tool result shortened to save space: 1 image left out. Run the tool again if you need it.]");
+      expect(texts[3]).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])/); // no half of an emoji left at the cut
+      expect(texts[4]).toBe(BIG);
+      expect(pruned.messages.map((m) => (m.role === "toolResult" ? m.toolCallId : m.role))).toEqual(msgs.map((m) => (m.role === "toolResult" ? m.toolCallId : m.role)));
+      const again = pruneToolResults(pruned.messages);
+      expect(again.results).toBe(0);
+      expect(again.messages).toBe(pruned.messages);
+    });
+
+    it("counts only model calls when deciding whether the cache has lapsed", () => {
+      const at = Date.parse("2026-10-15T12:00:00Z");
+      const msgs = [user("q"), modelReply("a", at), user("note"), { ...fauxAssistantMessage("copy"), timestamp: at + 9 * 60_000 } as AgentMessage];
+      expect(cacheLapsed(msgs, new Date(at + 4 * 60_000), PROMPT_CACHE_MS)).toBe(false);
+      expect(cacheLapsed(msgs, new Date(at + 10 * 60_000), PROMPT_CACHE_MS)).toBe(true); // the copy at +9 min used no cache
+      expect(cacheLapsed([user("q")], new Date(at), PROMPT_CACHE_MS)).toBe(true);
     });
   });
 

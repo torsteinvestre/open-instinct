@@ -80,6 +80,12 @@ export interface RuntimeDeps {
    * its whole check there and never wakes the agent.
    */
   scheduleGates?: Record<string, (entry: ScheduleEntry) => Promise<boolean>>;
+  /**
+   * [sunshine:prune] How long the model provider keeps the prompt cache. Old tool results are only
+   * shortened after it has lapsed. Default PROMPT_CACHE_MS; the server passes one hour when
+   * PI_CACHE_RETENTION=long.
+   */
+  promptCacheMs?: number;
 }
 
 export interface HandleResult {
@@ -105,6 +111,20 @@ export const FOLD_HIGH_MESSAGES = 80;
 export const FOLD_LOW_MESSAGES = 50;
 export const FOLD_HIGH_CHARS = SESSION_KEEP_CHARS;
 export const FOLD_LOW_CHARS = 160_000;
+/**
+ * [sunshine:prune] Old tool results (an email list, search results) are shortened once the turn they
+ * served is over, as OpenClaw's session pruning does: measured live (2026-10-15, Gmail and Calendar),
+ * tool results were 59% of the owner's history, nearly all of it in results over 2,000 characters.
+ * A result before the last turn that is longer than PRUNE_MIN_CHARS (or holds an image) keeps its
+ * first PRUNE_KEEP_CHARS and a note saying the tool can be run again. Conversation text is never
+ * touched. It happens only when the start of the prompt is paid in full anyway: after a fold, or once
+ * the prompt cache has lapsed (PROMPT_CACHE_MS after the last model call), so it never costs a cache
+ * write of its own.
+ */
+export const PRUNE_MIN_CHARS = 2_000;
+export const PRUNE_KEEP_CHARS = 600;
+/** [sunshine:prune] Anthropic's default prompt cache lifetime (Pi's "short"). */
+export const PROMPT_CACHE_MS = 5 * 60 * 1000;
 /** [sunshine:delivery-mirror] The same text to the same thread within this window is copied once. */
 export const MIRROR_REPEAT_MS = 2 * 60 * 1000;
 /** An approved request can be acted on for this long before it lapses. */
@@ -170,6 +190,10 @@ interface ConversationOptions {
   now: () => Date;
   /** [sunshine:stable-cache] Stamp each message with the owner's clock and fold in steps. */
   stableCache?: { timeZone: string };
+  /** [sunshine:prune] Shorten old tool results once the prompt cache has lapsed for this long; unset is off. */
+  pruneAfterMs?: number;
+  /** [sunshine:prune] Told how many results were shortened and by how many characters. */
+  onPrune?: (pruned: { results: number; chars: number }) => void;
 }
 
 export class Conversation {
@@ -196,6 +220,8 @@ export class Conversation {
   private readonly refreshPrompt: () => string;
   private readonly now: () => Date;
   private readonly stableCache?: { timeZone: string };
+  private readonly pruneAfterMs?: number; // [sunshine:prune]
+  private readonly onPrune?: (pruned: { results: number; chars: number }) => void; // [sunshine:prune]
 
   constructor(opts: ConversationOptions) {
     this.key = opts.key;
@@ -208,6 +234,8 @@ export class Conversation {
     this.refreshPrompt = opts.refreshPrompt;
     this.now = opts.now;
     this.stableCache = opts.stableCache;
+    this.pruneAfterMs = opts.pruneAfterMs; // [sunshine:prune]
+    this.onPrune = opts.onPrune; // [sunshine:prune]
   }
 
   /** [sunshine:stable-cache] The message as the model sees it: with the time it was sent in front. */
@@ -226,7 +254,9 @@ export class Conversation {
       this.applySystemPrompt();
       // The transcript grows between restarts too, so the fold runs before every turn.
       // [sunshine:stable-cache] In steps when on, so the start of the history stays the same.
-      this.agent.state.messages = this.stableCache ? foldInSteps(this.agent.state.messages, this.now()) : trimContext(this.agent.state.messages, this.now());
+      const kept = this.agent.state.messages;
+      this.agent.state.messages = this.stableCache ? foldInSteps(kept, this.now()) : trimContext(kept, this.now());
+      this.pruneIfPaidAnyway(kept); // [sunshine:prune]
       const before = this.agent.state.messages.length;
       await this.agent.prompt(this.stamped(text), images);
       await this.agent.waitForIdle();
@@ -244,6 +274,23 @@ export class Conversation {
         this.persist();
       }
     }
+  }
+
+  /**
+   * [sunshine:prune] Shorten old tool results, but only when the start of the prompt is paid in full
+   * anyway: the fold just changed it, or the cache has lapsed since the last model call. Otherwise
+   * the history stays byte-identical and the next call reads it from the cache. The shortened
+   * results are saved with the rest, so later calls start from the same text.
+   */
+  private pruneIfPaidAnyway(beforeFold: AgentMessage[]): void {
+    if (this.pruneAfterMs === undefined) return;
+    const messages = this.agent.state.messages;
+    const folded = firstTurn(messages) !== firstTurn(beforeFold);
+    if (!folded && !cacheLapsed(messages, this.now(), this.pruneAfterMs)) return;
+    const pruned = pruneToolResults(messages);
+    if (pruned.results === 0) return;
+    this.agent.state.messages = pruned.messages;
+    this.onPrune?.({ results: pruned.results, chars: pruned.chars });
   }
 
   /** [sunshine:delivery-mirror] Add messages to the end of this thread's history, now or after the current run. */
@@ -405,6 +452,14 @@ export class AgentRuntime {
       now: this.now,
       refreshPrompt: () => this.systemPromptFor(conv),
       ...(stable ? { stableCache: { timeZone: this.deps.config.owner.timezone || "UTC" } } : {}),
+      // [sunshine:prune] On unless config.features.pruneToolResults is false.
+      ...(this.deps.config.features?.pruneToolResults !== false
+        ? {
+            pruneAfterMs: this.deps.promptCacheMs ?? PROMPT_CACHE_MS,
+            onPrune: (pruned: { results: number; chars: number }) =>
+              this.deps.audit.append({ kind: "policy", conversationKey: key, principal: principal.id, detail: { prunedToolResults: pruned.results, prunedChars: pruned.chars } }),
+          }
+        : {}),
     });
     agent.state.tools = this.bindTools(conv);
     this.conversations.set(key, conv);
@@ -1366,6 +1421,70 @@ export function foldInSteps(messages: AgentMessage[], now: Date, byCount = true)
   const rest = dropOrphanToolCalls(messages.filter((m) => m.role !== "system"));
   if ((!byCount || rest.length <= FOLD_HIGH_MESSAGES) && charSize(rest) <= FOLD_HIGH_CHARS) return [...system, ...rest];
   return [...system, ...restoreMessages(rest, now, FOLD_LOW_MESSAGES, FOLD_LOW_CHARS)];
+}
+
+/** [sunshine:prune] The first message after the system message: a fold puts a new summary there. */
+function firstTurn(messages: AgentMessage[]): AgentMessage | undefined {
+  return messages.find((m) => m.role !== "system");
+}
+
+/** [sunshine:prune] A reply that came from the model. A copied text (the delivery mirror) used no tokens. */
+function isModelReply(m: AgentMessage): boolean {
+  if (m.role !== "assistant") return false;
+  const u = m.usage;
+  return Boolean(u) && u.input + u.output + u.cacheRead + u.cacheWrite > 0;
+}
+
+/** [sunshine:prune] True when the last model call is at least `cacheMs` ago, or there was none. */
+export function cacheLapsed(messages: AgentMessage[], now: Date, cacheMs: number): boolean {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]!;
+    if (isModelReply(m)) return now.getTime() - m.timestamp >= cacheMs;
+  }
+  return true;
+}
+
+/**
+ * [sunshine:prune] Where the last turn starts: the message that began the last model run. Results
+ * from there on stay whole, so "reply to the second one" still finds what was just looked up. A note
+ * and copy added after it (a reminder that fired since) do not move it.
+ */
+function lastTurnStart(messages: AgentMessage[]): number {
+  let i = messages.length - 1;
+  while (i >= 0 && !isModelReply(messages[i]!)) i--;
+  while (i >= 0 && messages[i]!.role !== "user") i--;
+  return Math.max(i, 0);
+}
+
+/**
+ * [sunshine:prune] Every tool result before the last turn that is longer than PRUNE_MIN_CHARS, or
+ * holds an image, keeps its first PRUNE_KEEP_CHARS and a note. The call it answers, its id and its
+ * place stay, so the history stays valid for the API. Running it again changes nothing.
+ */
+export function pruneToolResults(messages: AgentMessage[]): { messages: AgentMessage[]; results: number; chars: number } {
+  const from = lastTurnStart(messages);
+  let results = 0;
+  let chars = 0;
+  const out = messages.map((m, i) => {
+    if (i >= from || m.role !== "toolResult") return m;
+    const text = m.content.map((c) => (c.type === "text" ? c.text : undefined)).filter((t) => t !== undefined).join("\n");
+    const images = m.content.filter((c) => c.type !== "text").length;
+    if (text.length <= PRUNE_MIN_CHARS && images === 0) return m;
+    const head = clipAt(text, PRUNE_KEEP_CHARS);
+    const left = [text.length > head.length ? `${text.length - head.length} more characters` : "", images ? `${images} image${images === 1 ? "" : "s"}` : ""].filter(Boolean).join(" and ");
+    const note = `[Older tool result shortened to save space: ${left} left out. Run the tool again if you need it.]`;
+    results++;
+    chars += text.length - head.length;
+    return { ...m, content: [{ type: "text" as const, text: head ? `${head}\n${note}` : note }] };
+  });
+  return results === 0 ? { messages, results, chars } : { messages: out, results, chars };
+}
+
+/** [sunshine:prune] The first `max` characters, never splitting an emoji or other two-unit character. */
+function clipAt(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const code = text.charCodeAt(max - 1);
+  return text.slice(0, code >= 0xd800 && code <= 0xdbff ? max - 1 : max);
 }
 
 /** The kept slice must begin at a user turn so no tool result is left without its call. */

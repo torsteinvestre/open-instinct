@@ -267,6 +267,11 @@ export interface InstinctConfig {
      * elsewhere (a reminder, the news watch, a relay) is copied into that thread's history.
      */
     deliveryMirror?: boolean;
+    /**
+     * [sunshine:prune] On unless false: tool results older than the last turn are shortened when the
+     * prompt cache has lapsed anyway, so big email lists and search results stop riding along.
+     */
+    pruneToolResults?: boolean;
   };
 }
 

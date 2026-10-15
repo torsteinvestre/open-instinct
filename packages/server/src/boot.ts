@@ -432,6 +432,8 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
       ...(watcher ? { [WATCH_GATE]: watcher.gate } : {}),
       ...(memoryPass ? { [MEMORY_GATE]: memoryPass.gate } : {}),
     },
+    // [sunshine:prune] Pi keeps the prompt cache an hour with PI_CACHE_RETENTION=long; pruning waits that long then.
+    ...(env.PI_CACHE_RETENTION?.trim() === "long" ? { promptCacheMs: 60 * 60 * 1000 } : {}),
   });
   watcher?.ensureStarted(); // [sunshine:watcher] before the scheduler and the Maritime push read the jobs
   memoryPass?.ensureStarted(); // [sunshine:memory] likewise

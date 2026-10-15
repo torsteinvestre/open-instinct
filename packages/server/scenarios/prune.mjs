@@ -57,22 +57,24 @@ const INBOX = EMAILS.map(([id, from, subject, date, text]) => JSON.stringify({
 })).join(",\n");
 const SEARCH_RESULT = `{"data":{"messages":[\n${INBOX}\n],"nextPageToken":"","resultSizeEstimate":8},"successful":true,"error":null}`;
 
-// After the pause the email list is removed from the history. The first follow-up asks for a detail deep
-// in one email that a summary rarely carries (doors open 18:30), so it should have to look again and must
-// not invent a time; it comes first so no lookup has brought the list back yet. The second is in
-// Sunshine's own earlier reply. Whether each fact was already in an earlier reply is printed, since only
-// the ones that were not test removed data. (An earlier order asked the cabin question first; its lookup
-// brought the whole list back, so the next question never tested removed data.)
+// After the pause the email list is removed from the history. The first follow-up asks for a detail that
+// none of three earlier first summaries carried (the J. Cole order number; the doors time, tried first,
+// was in every summary), so it has to look again and must not invent a number; it comes first so no
+// lookup has brought the list back yet. The second is in Sunshine's own earlier reply. Whether each fact
+// was already in an earlier reply is printed, since only the ones that were not test removed data.
 const STEPS = [
   { text: "what emails did I get this week?", pauseMin: 0 },
   { text: "thanks!", pauseMin: 1 },
-  { text: "what time do the doors open for the J. Cole concert?", pauseMin: 10, expect: "18:30" },
+  { text: "what's the order number for my J. Cole tickets?", pauseMin: 10, expect: "23-48112" },
   { text: "and who was the cabin one from again?", pauseMin: 1, expect: "Ingrid" },
 ];
-/** Codes (references, flight numbers, ids) and clock times that do not appear in the emails: made up. */
+/** Codes (references, flight numbers, ids), order numbers and clock times not in the emails: made up. */
 const madeUpCodes = (text) =>
-  [...(text.match(/\b(?=[A-Z0-9]*\d)(?=[A-Z0-9]*[A-Z])[A-Z0-9]{5,8}\b/g) ?? []), ...(text.match(/\b\d{1,2}[:.]\d{2}\b/g) ?? []).map((t) => t.replace(".", ":"))]
-    .filter((c) => !SEARCH_RESULT.includes(c));
+  [
+    ...(text.match(/\b(?=[A-Z0-9]*\d)(?=[A-Z0-9]*[A-Z])[A-Z0-9]{5,8}\b/g) ?? []),
+    ...(text.match(/\b\d{2,}-\d{3,}\b/g) ?? []),
+    ...(text.match(/\b\d{1,2}[:.]\d{2}\b/g) ?? []).map((t) => t.replace(".", ":")),
+  ].filter((c) => !SEARCH_RESULT.includes(c));
 /**
  * Machinery talk or self-doubt instead of the emails. Seen: "I wrote it from a result that had been cut
  * off, so I should have re-checked", "my first summary went out when I'd only seen part of your inbox".

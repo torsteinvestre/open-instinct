@@ -480,7 +480,9 @@ all in the 9 results over 2,000 characters. A message after a pause would have c
   re-checked" and "my first summary went out when I'd only seen part of your inbox" (2 to 3 of 3 runs;
   rewording the note alone did not stop it). Removed whole, as OpenClaw's hard clear and Anthropic's own
   clearing do, 3 of 3 runs answered from its own earlier reply with no self-doubt and nothing made up.
-  Not yet tested: a follow-up that needs a detail only in the removed result.
+  A follow-up that needs a detail only in the removed result (the J. Cole order number, in none of the
+  first summaries): 3 of 3 runs looked the emails up again and answered right, with no self-doubt and
+  nothing made up.
 - The last turn (from the message that began the last model run) stays whole, so "reply to the second
   one" still finds what was just looked up. A reminder's note and copy added since do not move it.
 - **When:** at the start of a message, only if the start of the prompt is paid in full anyway: the history

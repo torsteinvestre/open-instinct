@@ -181,7 +181,9 @@ function scheduleTools({ scheduler, config }: CoreToolDeps): RegisteredTool[] {
     parameters: Type.Object({}),
     meta: { capabilities: ["schedule.manage"], group: "schedule" },
     execute: async () => {
-      const entries = scheduler.list();
+      // [sunshine:memory] Jobs that run in code (a `gate`: keeping up with the news, the nightly memory
+      // notes) are not the owner's reminders: listed, the model would recite or "tidy" them.
+      const entries = scheduler.list().filter((e) => !e.gate);
       if (entries.length === 0) return textResult("No schedules.");
       // A one-shot that has fired loses its next run and is switched off. Listed as "once at ? | off"
       // it read as broken, and the model "fixed" it by scheduling it again; so say plainly it is done.
@@ -207,7 +209,11 @@ function scheduleTools({ scheduler, config }: CoreToolDeps): RegisteredTool[] {
     description: "Delete a scheduled job by id.",
     parameters: Type.Object({ id: Type.String() }),
     meta: { capabilities: ["schedule.manage"], group: "schedule", describe: (a) => `delete schedule ${argText(a, "id")}` },
-    execute: async ({ id }) => textResult(scheduler.delete(id) ? `Deleted ${id}.` : `No schedule with id ${id}.`),
+    execute: async ({ id }) => {
+      // [sunshine:memory] A job that runs in code is changed through its own settings, never deleted here.
+      if (scheduler.get(id)?.gate) return textResult(`No schedule with id ${id}.`);
+      return textResult(scheduler.delete(id) ? `Deleted ${id}.` : `No schedule with id ${id}.`);
+    },
   });
 
   return [create, list, remove];

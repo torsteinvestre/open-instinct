@@ -1395,12 +1395,21 @@ function dropOrphanToolCalls(messages: AgentMessage[]): AgentMessage[] {
   return messages.slice(0, end);
 }
 
+const SUMMARY_PREFIX = "[Conversation summary]";
+const SUMMARY_MAX_CHARS = 6000;
+
 function summarizeMessages(older: AgentMessage[]): string {
   const lines: string[] = [];
   for (const m of older) {
     if (m.role === "user") {
       const text = messageText(m.content);
-      if (text) lines.push(`- user: ${clip(text, 200)}`);
+      // [sunshine:memory] An earlier summary is carried forward whole. Clipped to one line like any
+      // other message, everything it held was lost at the second fold (seen live: "[Conversation summ…").
+      if (text.startsWith(SUMMARY_PREFIX)) {
+        lines.push(...text.split("\n").slice(1).filter((l) => l.trim()));
+        continue;
+      }
+      if (text) lines.push(`- user: ${clip(compactStamp(text), 200)}`);
     } else if (m.role === "assistant") {
       const text = messageText(m.content.filter((c) => c.type === "text"));
       const calls = m.content.filter((c) => c.type === "toolCall").map((c) => c.name);
@@ -1408,8 +1417,27 @@ function summarizeMessages(older: AgentMessage[]): string {
       if (calls.length) lines.push(`- assistant used tools: ${calls.join(", ")}`);
     }
   }
-  const body = clip(lines.join("\n"), 6000);
-  return `[Conversation summary] ${older.length} earlier messages were trimmed to save space. Highlights:\n${body}`;
+  // [sunshine:memory] Over the cap, the oldest highlights go first, so the summary keeps the latest.
+  const kept: string[] = [];
+  let size = 0;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    size += lines[i]!.length + 1;
+    if (size > SUMMARY_MAX_CHARS) {
+      kept.unshift("- (older highlights dropped)");
+      break;
+    }
+    kept.unshift(lines[i]!);
+  }
+  return `${SUMMARY_PREFIX} ${older.length} earlier messages were trimmed to save space. Highlights, oldest first:\n${kept.join("\n")}`;
+}
+
+/**
+ * [sunshine:memory] The time stamp in front of a message ("[Wed 14 Oct 2026, 12:27 Europe/Oslo,
+ * UTC+02:00]" and a line break) shortened to "[Wed 14 Oct, 12:27] ", so a summary line keeps the
+ * date and still has room for what was said.
+ */
+function compactStamp(text: string): string {
+  return text.replace(/^\[(\w{3} \d{1,2} \w{3}) \d{4}, (\d{2}:\d{2})[^\]\n]*\]\n/, "[$1, $2] ");
 }
 
 // ---------------------------------------------------------------------------

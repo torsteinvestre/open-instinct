@@ -1256,6 +1256,31 @@ describe("restoreMessages", () => {
     const restored = restoreMessages([user(1), assistant(1), user(2), orphan], new Date());
     expect(restored.map((m) => m.role)).toEqual(["user", "assistant", "user"]);
   });
+
+  // [sunshine:memory] Seen live: the second fold clipped the first summary to "[Conversation summ…".
+  it("carries an earlier summary forward whole at the next fold", () => {
+    const stored: AgentMessage[] = [];
+    for (let i = 0; i < 45; i++) stored.push(user(i), assistant(i));
+    const again = restoreMessages(stored, new Date());
+    for (let i = 45; i < 90; i++) again.push(user(i), assistant(i));
+    const summary = JSON.stringify(restoreMessages(again, new Date())[0]!.content);
+    expect(summary).toContain("question 0"); // from the first fold
+    expect(summary).toContain("question 59"); // from the second
+    expect(summary.match(/\[Conversation summary\]/g)).toHaveLength(1);
+    expect(summary).not.toContain("summ…");
+  });
+
+  it("keeps each line's date in short form, and the newest highlights when it is over the cap", () => {
+    const long = (i: number): AgentMessage => ({ role: "user", content: [{ type: "text", text: `[Wed 14 Oct 2026, 14:58 Europe/Oslo, UTC+02:00]\nmessage ${i} ${"x".repeat(300)}` }], timestamp: i });
+    const stored: AgentMessage[] = [];
+    for (let i = 0; i < 100; i++) stored.push(long(i), assistant(i));
+    const text = (restoreMessages(stored, new Date())[0]!.content as Array<{ text: string }>)[0]!.text;
+    expect(text).toContain("- user: [Wed 14 Oct, 14:58] message");
+    expect(text).toContain("(older highlights dropped)");
+    expect(text).not.toContain("message 0 ");
+    expect(text).toContain("answer 69"); // the last folded turn, newest kept
+    expect(text.length).toBeLessThan(6300);
+  });
 });
 
 describe("afterApproval", () => {

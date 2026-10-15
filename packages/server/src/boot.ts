@@ -36,8 +36,9 @@ import { ampleTools, type AmpleCredentials } from "@open-instinct/ample";
 import { contextTools } from "@open-instinct/context";
 import { networkTools } from "@open-instinct/network";
 // [sunshine:watcher]
-import { DEFAULT_DECIDE_MODEL, DEFAULT_SCREEN_MODEL, DEFAULT_WRITE_MODEL, NEWS_PROMPT, WATCH_GATE, createWatcher, modelCall, resolveWatcherModel, stepModelSpec, type Watcher } from "@open-instinct/watcher";
+import { DEFAULT_DECIDE_MODEL, DEFAULT_SCREEN_MODEL, DEFAULT_WRITE_MODEL, NEWS_PROMPT, WATCH_GATE, createWatcher, modelCall, resolveWatcherModel, stepModelSpec, type ModelCall, type Watcher } from "@open-instinct/watcher";
 import { researchWith, writerContextFor } from "./watcher-writer.js";
+import { DEFAULT_MEMORY_MODEL, MEMORY_GATE, createMemoryPass } from "./memory-pass.js"; // [sunshine:memory]
 import { ChatAwareOutbox, ConsoleOutbox, type ChatReplyBuffer } from "./console-outbox.js";
 import { fileTools, resolveInsideWorkspace } from "./file-tools.js";
 import { describeDataPart, promptExtraFor } from "./hooks.js";
@@ -347,6 +348,19 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
     });
   }
 
+  // [sunshine:memory] The nightly memory notes: one model call a night, only after the owner texted.
+  // MEMORY_PASS_MODEL picks the model; "off" switches the notes off (and removes their job).
+  const memoryPass = await safely(log, "memory notes", () => {
+    const spec = stepModelSpec(env.MEMORY_PASS_MODEL, DEFAULT_MEMORY_MODEL);
+    let call: ModelCall | undefined;
+    // Without a key for its model the pass could never run, so there is no job either.
+    const m = spec ? resolveWatcherModel(spec, env) : undefined;
+    const apiKey = m ? apiKeyFor(m.provider, env) : undefined;
+    if (m && apiKey) call = modelCall(m, { reasoning: "low", apiKey });
+    log(`memory notes: ${call ? `nightly, ${spec}` : spec ? `off (no key for ${m?.provider})` : "off"}`);
+    return createMemoryPass({ state, memory, config, scheduler, audit, ...(call ? { call } : {}) });
+  });
+
   // Payments: a Stripe Link agent wallet, when the Link OAuth client and Stripe key are set.
   let wallet: LinkWalletLike | undefined;
   const payments = paymentsEnv(env);
@@ -413,9 +427,14 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
         wallet: wallet ? { connected: wallet.isConnected() } : undefined,
       }),
     ...(env.INSTINCT_REPLY_BUDGET_MS ? { replyBudgetMs: Number(env.INSTINCT_REPLY_BUDGET_MS) } : {}),
-    ...(watcher ? { scheduleGates: { [WATCH_GATE]: watcher.gate } } : {}), // [sunshine:watcher]
+    // [sunshine:watcher] [sunshine:memory] Jobs that run in code first.
+    scheduleGates: {
+      ...(watcher ? { [WATCH_GATE]: watcher.gate } : {}),
+      ...(memoryPass ? { [MEMORY_GATE]: memoryPass.gate } : {}),
+    },
   });
   watcher?.ensureStarted(); // [sunshine:watcher] before the scheduler and the Maritime push read the jobs
+  memoryPass?.ensureStarted(); // [sunshine:memory] likewise
   // [sunshine:delivery-mirror] Every text goes out through the channel; the runtime copies the ones
   // that reached the owner from elsewhere (reminders, news, relays) into the owner's thread.
   if (channel) channel.afterSend = (msg, ctx) => runtime.mirrorToOwner(msg, ctx);

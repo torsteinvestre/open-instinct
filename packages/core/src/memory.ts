@@ -32,6 +32,17 @@ function head(text: string, max: number): string {
   return text.slice(0, cut > 0 ? cut : max).trimEnd() + "\n...";
 }
 
+/**
+ * [sunshine:memory] The start and the end of a text that does not fit: a third from the top (who
+ * they are), the rest from the bottom (the newest facts, since facts are appended). head() alone
+ * dropped every new fact once MEMORY.md outgrew its share of the digest.
+ */
+function headAndTail(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const top = head(text, Math.floor(max / 3)).replace(/\n\.\.\.$/, "");
+  return `${top}\n...\n${tail(text, max - top.length - 5).replace(/^\.\.\.\n/, "")}`;
+}
+
 function tail(text: string, max: number): string {
   if (text.length <= max) return text;
   const start = text.indexOf("\n", text.length - max);
@@ -95,8 +106,8 @@ export class MemoryStore {
   }
 
   /**
-   * What the model sees every turn: the start of MEMORY.md and the end of the last
-   * two days of journal. The budget is split 60/25/15 so durable facts win.
+   * What the model sees every turn: MEMORY.md (its start and its newest lines when it is long) and
+   * the end of the last two days of journal. The budget is split 60/25/15 so durable facts win.
    */
   digest(maxChars = 4000, now: Date = new Date()): string {
     const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
@@ -104,7 +115,7 @@ export class MemoryStore {
     const today = this.readJournal(now).trim();
     const prior = this.readJournal(yesterday).trim();
     const parts: string[] = [];
-    if (durable) parts.push(head(durable, Math.floor(maxChars * 0.6)));
+    if (durable) parts.push(headAndTail(durable, Math.floor(maxChars * 0.6))); // [sunshine:memory]
     if (today) parts.push(`## Journal, today (${journalDate(now)})\n${tail(today, Math.floor(maxChars * 0.25))}`);
     if (prior) parts.push(`## Journal, yesterday (${journalDate(yesterday)})\n${tail(prior, Math.floor(maxChars * 0.15))}`);
     return parts.join("\n\n");

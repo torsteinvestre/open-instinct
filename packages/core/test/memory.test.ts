@@ -58,7 +58,9 @@ describe("MemoryStore", () => {
     const d = m.digest(1000, today);
     expect(d.length).toBeLessThanOrEqual(1100); // headers and ellipses add a little
     expect(d).toContain("fact 0 is important");
-    expect(d).not.toContain("fact 199 is important");
+    // [sunshine:memory] The newest facts stay too: facts are appended, so the end is what is new.
+    expect(d).toContain("fact 199 is important");
+    expect(d).not.toContain("fact 100 is important");
     expect(d).toContain("event number 199");
     expect(d).not.toContain("event number 0\n");
     expect(d).toContain("...");

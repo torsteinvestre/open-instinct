@@ -348,6 +348,65 @@ Sanna?" from the text it had sent (`packages/server/scenarios/mirror.mjs`, on vs
 (`git log --grep "delivery-mirror"`) or delete the tagged blocks in `channel.ts`, `runtime.ts`,
 `types.ts`, `boot.ts`, the tests and the scenario.
 
+### `[sunshine:memory]`: Sunshine keeps notes on what matters
+
+**Problem** (2026-10-15). After three days of chatting, `memory/MEMORY.md` held 231 bytes: saving
+depended on the model calling `memory_write` (3 times in 3 days), so the fund, the concert tickets and
+the apartment plans were not in it. The summary of a trimmed conversation was the first 200 characters
+of each message, and at the next trim that summary was clipped like any other message, so everything
+older vanished (seen live: "[Conversation summ…"). And the digest in the prompt kept the start of
+`MEMORY.md`, so once it grew, the newest facts would have been the first to drop out.
+
+**What the fork adds.**
+
+- `packages/core/src/runtime.ts` (`summarizeMessages`): an earlier summary is carried forward whole;
+  time stamps are kept short ("[Wed 14 Oct, 12:27]"); over 6,000 characters the oldest highlights go.
+- `packages/core/src/memory.ts` (`digest`): the start and the newest end of `MEMORY.md` when it is long.
+- `packages/server/src/memory-pass.ts`: the nightly notes. At 03:30 in the owner's timezone a job that
+  runs in code (gate `memory`, never wakes the agent, never texts) checks whether the owner texted since
+  the last pass. If so, one model call reads `MEMORY.md` and the owner's own thread since then (and the
+  summary of its trimmed part, if it was trimmed since) and writes `MEMORY.md` back, in sections: About,
+  People, Preferences, Lately. The model decides what a friend would remember; the code checks the
+  answer: under 2,400 characters (the part of the digest shown in full; one retry with the reason), a
+  rewrite under 40% of a longer file is refused as a loss, seven backups in `memory/backups/`, every run
+  in `memory-pass.json` and the audit log (`memoryPass`). A refused or failed night reads the same
+  conversation again the next night.
+- `packages/core/src/core-tools.ts`: `schedule_list` leaves out jobs that run in code (keeping up with
+  the news, the memory notes) and `schedule_delete` will not remove them: they are not the owner's
+  reminders.
+- `packages/server/src/watcher-writer.ts`: `ownerThreadEntries`, the owner's thread as entries, shared by
+  the news writer and the notes.
+
+**Why at night.** The notes are in every message's prompt. Changed by day, the next message pays for
+the whole prompt again (`[sunshine:stable-cache]`); at 03:30 the cache has long gone cold and nobody waits.
+
+**Cost.** One call on nights after the owner texted, none otherwise: about 1-3 cents with Sonnet 5.5,
+at most about $0.30-0.60 per owner per month. The notes in the prompt stay under the digest's cap.
+
+**Privacy.** The Preferences section is what partners and family may see (`preferencesDigest`), so the
+notes keep private things out of it. Only the owner's own thread is read.
+
+**Settings.** `MEMORY_PASS_MODEL` picks the model; `off` switches the notes off and removes their job.
+Without a key for the model there is no job either.
+
+**Known limits.** On a very busy day, messages trimmed before the night reach the notes only as summary
+highlights (200 characters each).
+
+**To remove.** `MEMORY_PASS_MODEL=off`, or revert the commit (`git log --grep "sunshine:memory"`) or
+delete the tagged blocks in the files above and their tests (`packages/server/test/memory-pass.test.ts`,
+`packages/core/test/runtime.test.ts`, `memory.test.ts`, `core-tools.test.ts`).
+
+### Long replies (investigated 2026-10-15, nothing changed)
+
+A money question ("what should be considered: fund vs apartment") got a 1,435-character, seven-point
+reply although the persona and the iMessage line ask for short texts. `packages/server/scenarios/texting.mjs`
+plays 17 questions through the exact live prompt (boots the server; about 30 cents a run). Three
+wordings of the iMessage line (upstream's, a principle, real example replies with the reason) and a
+prompt with only the everyday tools all landed in the same range (advice answers 712-828 characters on
+average, lists in 6-12 of 22), so neither the wording nor the tool list is the lever. Detail requests
+were answered in full and the main risk kept in every version. Upstream's line stays. Untested: the
+skills list, memory (`[sunshine:memory]`), the thinking level.
+
 ## Upstream merges
 
 ### 2026-10-15: upstream up to `9d262da`

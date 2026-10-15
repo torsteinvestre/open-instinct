@@ -180,6 +180,15 @@ describe("schedule tools", () => {
     expect(text(await run("schedule_list", {}))).not.toContain("No schedules");
   });
 
+  // [sunshine:memory] Jobs that run in code (the news, the memory notes) are not the owner's reminders.
+  it("leaves jobs that run in code out of the list, and will not delete them", async () => {
+    const { run, text, deps } = setup();
+    const job = deps.scheduler.create({ name: "memory notes", prompt: "x", cron: "30 3 * * *", tz: "Europe/Oslo", enabled: true, gate: "memory", toolRepliesOnly: true });
+    expect(text(await run("schedule_list", {}))).toBe("No schedules.");
+    expect(text(await run("schedule_delete", { id: job.id }))).toContain("No schedule");
+    expect(deps.scheduler.get(job.id)).toBeDefined();
+  });
+
   // [sunshine:relative-time] "In N minutes" is computed from the real clock, not by the model.
   it("turns inMinutes into a time from the real clock and reports it in the owner's zone", async () => {
     const { run, text, deps } = setup();

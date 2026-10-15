@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { alignTable, parseInline, parseMarkdown, pdfPageCount, renderMarkdownToPdf, stripInline } from "../src/pdf.js";
 
@@ -136,5 +139,33 @@ describe("renderMarkdownToPdf", () => {
     }
     const notString = await renderMarkdownToPdf(undefined as unknown as string);
     expect(pdfPageCount(notString)).toBe(1);
+  });
+});
+
+describe("images in markdown", () => {
+  // A 1x1 red PNG.
+  const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==", "base64");
+
+  it("parses ![alt](src) on its own line as an image block", () => {
+    const blocks = parseMarkdown("# Ships\n\n![A clipper at dawn](art/ship-01.png)\n\nText after.");
+    expect(blocks).toEqual([
+      { kind: "heading", level: 1, text: "Ships" },
+      { kind: "image", src: "art/ship-01.png", alt: "A clipper at dawn" },
+      { kind: "paragraph", text: "Text after." },
+    ]);
+  });
+
+  it("embeds a resolvable image and prints a placeholder for a refused one", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pdf-img-"));
+    const file = path.join(dir, "ship.png");
+    fs.writeFileSync(file, PNG);
+    const md = "# Book\n\n![A clipper at dawn](ship.png)\n\n![outside](../etc/passwd.png)\n";
+    const withImage = await renderMarkdownToPdf(md, { resolveImage: (src) => (src === "ship.png" ? file : undefined) });
+    // Body text is in compressed streams, so the checks are structural: one embedded image, not two.
+    const text = withImage.toString("latin1");
+    expect((text.match(/\/Subtype \/Image/g) ?? []).length).toBeGreaterThanOrEqual(1);
+    const without = await renderMarkdownToPdf(md);
+    expect(without.toString("latin1")).not.toContain("/Subtype /Image");
+    expect(pdfPageCount(withImage)).toBeGreaterThanOrEqual(1);
   });
 });

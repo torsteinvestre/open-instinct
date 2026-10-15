@@ -99,9 +99,9 @@ The `payment_*` tools from `@open-instinct/payments` sit under the same table.
 | `payment_list` | `purchase` | owner only |
 
 The Link approval screen is a second check on top of this one. The owner sees the exact amount and
-merchant in Link before any card exists. The spend policy matches merchants on arguments named
-`merchant`, `vendor`, `store` and the like; the `merchantName` argument of `payment_request` is not yet
-matched against the allowed and blocked merchant lists. See
+merchant in Link before any card exists. The blocked-merchant policy scans every object key and scalar value
+in the arguments, including the `merchantName` of `payment_request`. The allow list matches recognized fields
+such as `merchant`, `vendor` and `store`, so `payment_request` still asks when an allow list is set. See
 [packages/payments/README.md](../packages/payments/README.md).
 
 ## Who is the owner
@@ -188,7 +188,7 @@ blocked for every tier, grant or not.
 
 Anything above `askAbove` sends the owner an approval text:
 
-> Book Nopa, Thu 7:00 pm, 2 people, $0 deposit? Reply YES or NO. Token K7P2. (expires in 2 h)
+> Book Nopa, Thu 7:00 pm, 2 people, $0 deposit? Want me to go ahead? (expires in 2 h)
 
 The approval token is stored in `approvals.json`. The owner's reply resolves it; the waiting
 conversation continues with `followUp`.
@@ -205,6 +205,12 @@ conversation continues with `followUp`.
   approving a partner's hotel.
 - Replies count only from carrier-bound or local channels: iMessage, SMS and `chat`. Never from email,
   A2A or a group thread.
+- An answer in the owner's own words ("tell him yes", "no, skip it") is settled by the model with the
+  owner-only `approval_settle` tool, under two limits enforced in code. It works only in a run that the
+  owner's own iMessage, SMS or `chat` message started: never in a turn begun by an email, a group
+  thread, another agent's reply, a scheduled job or a resumed task, since the owner did not write that
+  text. And it never settles an approval that moves money (`purchase`, `travel.book`, or any amount):
+  those wait for the owner's own plain yes or no, as above.
 - An approval is for one exact call: same conversation, same requester, same tool, same arguments
   (hashed), same amount within 5%. The model's retry of that call passes once, within 15 minutes.
   A different merchant, amount or title needs a new approval. An `ask_owner` question ("Did you get

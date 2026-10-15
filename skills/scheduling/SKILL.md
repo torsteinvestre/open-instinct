@@ -47,7 +47,7 @@ transport differs.
 ## Confirm
 
 1. `ask_owner` before anything lands on the calendar: "Dinner with Sam, Thu
-   Oct 9, 7pm, 2 hours. Add it and confirm with Sam? YES or NO."
+   Oct 9, 7pm, 2 hours. Add it and confirm with Sam?"
 2. On yes: create the event with the calendar app tool. Invite the other person
    by email when you have it.
 3. Send `confirm` to the other Instinct (`ask_instinct`, intent `confirm`, with

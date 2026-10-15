@@ -13,8 +13,9 @@ import { pdfPageCount, renderMarkdownToPdf } from "./pdf.js";
 import { wrapUntrusted } from "./prompt.js";
 import type { Outbox } from "./runtime.js";
 import type { Scheduler } from "./scheduler.js";
+import { SPEND_CAPABILITIES } from "./policy.js";
 import { defineTool, textResult, type RegisteredTool, type ToolContext, type ToolResultLike } from "./tools.js";
-import type { AuditKind, InstinctConfig, ScheduleEntry } from "./types.js";
+import type { Approval, AuditKind, InstinctConfig, ScheduleEntry } from "./types.js";
 
 export interface CoreToolDeps {
   memory: MemoryStore;
@@ -29,7 +30,16 @@ export interface CoreToolDeps {
   searchApiKey?: string;
   /** The owner's workspace directory. create_pdf writes under it; without it the tool refuses. */
   workspaceDir?: string;
+  /** Called after approval_settle resolves an approval, so the runtime can wake the conversation that was waiting. */
+  onApprovalSettled?: (approval: Approval, approved: boolean) => Promise<void> | void;
+  /** An OpenAI-compatible images endpoint (`POST {baseUrl}/images/generations`). Without it image_generate explains what to set. */
+  images?: { apiKey: string; baseUrl?: string; model?: string };
 }
+
+export const DEFAULT_IMAGE_BASE_URL = "https://api.openai.com/v1";
+export const DEFAULT_IMAGE_MODEL = "gpt-image-1";
+const IMAGE_SIZES = ["1024x1024", "1024x1536", "1536x1024"] as const;
+const IMAGE_TIMEOUT_MS = 120_000;
 
 const WEB_TEXT_CAP = 20_000;
 /** Bytes read from a fetched page before giving up on the rest. */
@@ -47,6 +57,7 @@ export function coreTools(deps: CoreToolDeps): RegisteredTool[] {
     webFetchTool(deps),
     webSearchTool(deps),
     createPdfTool(deps),
+    imageGenerateTool(deps),
   ];
 }
 
@@ -206,7 +217,7 @@ function scheduleTools({ scheduler, config }: CoreToolDeps): RegisteredTool[] {
 // Owner relay
 // ---------------------------------------------------------------------------
 
-function ownerTools({ approvals, config, outbox, audit }: CoreToolDeps): RegisteredTool[] {
+function ownerTools({ approvals, config, outbox, audit, onApprovalSettled }: CoreToolDeps): RegisteredTool[] {
   const ownerPhone = () => config.owner.phones[0];
 
   const sendOwner = async (text: string, ctx: ToolContext): Promise<boolean> => {
@@ -244,7 +255,8 @@ function ownerTools({ approvals, config, outbox, audit }: CoreToolDeps): Registe
       });
       audit.append({ kind: "approval", conversationKey: ctx.conversationKey, principal: ctx.principal.id, detail: { token: approval.token, status: "pending", summary } });
       const who = ctx.principal.kind === "owner" ? "" : ` (from ${ctx.principal.displayName})`;
-      const sent = await sendOwner(`${question}${who} Reply YES or NO. Token ${approval.token}.`, ctx);
+      // The token stays internal: the owner reads a plain question and answers however they like.
+      const sent = await sendOwner(`${question}${who}`, ctx);
       // The question is now the last thing the owner heard from us, so a bare "yes" is about it.
       if (sent) approvals.markPrompted(approval.token);
       return textResult(
@@ -275,7 +287,45 @@ function ownerTools({ approvals, config, outbox, audit }: CoreToolDeps): Registe
     },
   });
 
-  return [askOwner, notifyOwner];
+  const settleApproval = defineTool({
+    name: "approval_settle",
+    label: "Settle approval",
+    description:
+      "Record the owner's answer to a pending approval when they answer in their own words (\"tell him yes\", \"no, skip that\", \"go ahead with the intro\") rather than a plain yes or no. Owner only. Pass the token when more than one approval is pending.",
+    parameters: Type.Object({
+      decision: Type.Union([Type.Literal("yes"), Type.Literal("no")]),
+      token: Type.Optional(Type.String({ description: "The 4-character token from the pending approvals list" })),
+    }),
+    meta: { capabilities: ["converse"], group: "owner", describe: (a) => `settle approval ${argText(a, "token") || "(only pending)"}: ${argText(a, "decision")}` },
+    execute: async ({ decision, token }, ctx) => {
+      if (ctx.principal.kind !== "owner") return { content: [{ type: "text", text: "Only the owner can settle an approval." }], isError: true };
+      // The owner's words have to be what started this run. An email, another agent's reply, a
+      // scheduled job or a resumed task runs as the owner too, but its text is not theirs.
+      if (!ctx.ownerTurn) {
+        return {
+          content: [{ type: "text", text: "Only the owner's own message can settle an approval, and this turn did not start with one. Ask the owner and let them answer." }],
+          isError: true,
+        };
+      }
+      const pending = approvals.pending();
+      if (pending.length === 0) return textResult("Nothing is pending.");
+      const wanted = token?.trim().toUpperCase();
+      const target = wanted ? pending.find((a) => a.token === wanted) : pending.length === 1 ? pending[0] : undefined;
+      if (!target) return textResult(`Which one? Pending: ${pending.map((a) => `${a.token}: ${a.summary}`).join("; ")}. Call again with the token.`);
+      // Money moves only on the owner's own plain yes, never on the model's reading of their words.
+      if (SPEND_CAPABILITIES.has(target.capability) || target.amountUsd !== undefined) {
+        return textResult(`${target.summary} involves money, so only the owner's own yes settles it. Ask whether they want to go ahead; a plain yes or no from them is handled automatically.`);
+      }
+      const approved = decision === "yes";
+      const resolved = approvals.resolve(target.token, approved);
+      if (!resolved) return textResult("That approval is no longer pending.");
+      audit.append({ kind: "approval", conversationKey: resolved.conversationKey, principal: ctx.principal.id, detail: { token: resolved.token, status: resolved.status, summary: resolved.summary, via: "approval_settle" } });
+      await onApprovalSettled?.(resolved, approved);
+      return textResult(`${approved ? "Approved" : "Denied"}: ${resolved.summary}. The conversation that was waiting has been resumed; confirm to the owner in one line.`);
+    },
+  });
+
+  return [askOwner, notifyOwner, settleApproval];
 }
 
 // ---------------------------------------------------------------------------
@@ -555,11 +605,74 @@ function createPdfTool({ workspaceDir, config }: CoreToolDeps): RegisteredTool {
       if (!/\.pdf$/i.test(requested.trim())) return fail(`The path must end in .pdf: ${requested}`);
       const target = resolveWorkspacePath(workspaceDir, requested.trim());
       if (!target) return fail(`Refused: "${requested}" is outside the workspace.`);
-      const pdf = await renderMarkdownToPdf(markdown, { ...(title ? { title } : {}), author: config.agent.name });
+      const pdf = await renderMarkdownToPdf(markdown, {
+        ...(title ? { title } : {}),
+        author: config.agent.name,
+        // `![alt](images/ship.png)` embeds a file from the workspace; anything outside it is refused.
+        resolveImage: (src) => {
+          const file = resolveWorkspacePath(workspaceDir, src.trim());
+          return file && fs.existsSync(file) ? file : undefined;
+        },
+      });
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.writeFileSync(target, pdf);
       const pages = pdfPageCount(pdf);
       return { content: [{ type: "text", text: `Wrote ${target} (${formatBytes(pdf.length)}, ${pages} page${pages === 1 ? "" : "s"}).` }], details: { path: target, bytes: pdf.length, pages } };
+    },
+  });
+}
+
+function imageGenerateTool({ workspaceDir, images, fetchImpl }: CoreToolDeps): RegisteredTool {
+  const doFetch = fetchImpl ?? fetch;
+  return defineTool({
+    name: "image_generate",
+    label: "Generate image",
+    description:
+      "Generate an image from a text prompt and save it as a PNG in the workspace. Returns the path. Put it in a PDF with create_pdf using ![caption](path), or send it with send_file. Describe the subject, style, mood and composition in the prompt.",
+    parameters: Type.Object({
+      prompt: Type.String({ description: "What to draw, in one or two sentences" }),
+      path: Type.String({ description: "Where to save, relative to the workspace, ending in .png, e.g. art/ship-01.png" }),
+      size: Type.Optional(Type.Union(IMAGE_SIZES.map((s) => Type.Literal(s)), { description: "1024x1024 (default), 1024x1536 portrait or 1536x1024 landscape" })),
+    }),
+    meta: { capabilities: ["files.write"], group: "files", describe: (a) => `generate image ${argText(a, "path")}: ${argText(a, "prompt")}` },
+    execute: async ({ prompt, path: requested, size }, _ctx, signal) => {
+      if (!workspaceDir) return fail("No workspace is configured, so images cannot be saved.");
+      if (!images) return fail("Image generation is not set up on this agent: the deployer sets IMAGE_API_KEY (or OPENAI_API_KEY) and optionally IMAGE_BASE_URL and IMAGE_MODEL. Say that in one line and offer a text-only version.");
+      if (!/\.png$/i.test(requested.trim())) return fail(`The path must end in .png: ${requested}`);
+      const target = resolveWorkspacePath(workspaceDir, requested.trim());
+      if (!target) return fail(`Refused: "${requested}" is outside the workspace.`);
+      const base = (images.baseUrl ?? DEFAULT_IMAGE_BASE_URL).replace(/\/+$/, "");
+      let res: Response;
+      try {
+        res = await doFetch(`${base}/images/generations`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${images.apiKey}`, "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({ model: images.model ?? DEFAULT_IMAGE_MODEL, prompt, size: size ?? "1024x1024", n: 1 }),
+          signal: signal ?? AbortSignal.timeout(IMAGE_TIMEOUT_MS),
+        });
+      } catch (err) {
+        return fail(`Image generation failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      const text = await res.text();
+      if (!res.ok) return fail(`Image generation failed (HTTP ${res.status}): ${clip(text.replace(/\s+/g, " "), 200)}`);
+      let payload: { data?: Array<{ b64_json?: string; url?: string }> };
+      try {
+        payload = JSON.parse(text) as typeof payload;
+      } catch {
+        return fail("Image generation failed: the endpoint did not return JSON.");
+      }
+      const first = payload.data?.[0];
+      let bytes: Buffer | undefined;
+      if (first?.b64_json) bytes = Buffer.from(first.b64_json, "base64");
+      else if (first?.url) {
+        const img = await doFetch(first.url, { signal: AbortSignal.timeout(IMAGE_TIMEOUT_MS) });
+        if (!img.ok) return fail(`Image generation failed: could not download the result (HTTP ${img.status}).`);
+        bytes = Buffer.from(await img.arrayBuffer());
+      }
+      if (!bytes || bytes.length === 0) return fail("Image generation failed: the endpoint returned no image.");
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, bytes);
+      return { content: [{ type: "text", text: `Saved ${target} (${formatBytes(bytes.length)}). Embed it with ![caption](${requested.trim()}) in create_pdf, or send it with send_file.` }], details: { path: target, bytes: bytes.length } };
     },
   });
 }

@@ -1,7 +1,8 @@
 # Changes in this fork
 
 This fork (torsteinvestre/open-instinct) runs as **Sunshine**. It is based on
-[mariagorskikh/open-instinct](https://github.com/mariagorskikh/open-instinct) at commit `79a144a`.
+[mariagorskikh/open-instinct](https://github.com/mariagorskikh/open-instinct) at commit `79a144a`,
+with upstream merged in up to `9d262da` on 2026-10-15 (see [Upstream merges](#upstream-merges)).
 This page lists what the fork adds, so each change can be found, understood and removed.
 
 ## Tagged changes
@@ -38,6 +39,9 @@ Torstein the reminder ...").
 
 **To remove.** Revert its commits (`git log --grep "reply-guard"` finds them), or delete every
 tagged block. The tests tagged the same way go with it.
+
+Upstream's system tasks (`runSystemTask`, merged 2026-10-15) follow the scheduled-job rule: a task
+that texted the owner with a tool sends no final reply, and `NO_REPLY` is never texted from one.
 
 **A new tool that texts the owner or the current conversation** must declare `replyTarget`,
 or the double message comes back for it. The tests list which tools declare it, so a new one
@@ -331,6 +335,30 @@ Sanna?" from the text it had sent (`packages/server/scenarios/mirror.mjs`, on vs
 **To remove.** Set `features.deliveryMirror` to false, or revert its commit
 (`git log --grep "delivery-mirror"`) or delete the tagged blocks in `channel.ts`, `runtime.ts`,
 `types.ts`, `boot.ts`, the tests and the scenario.
+
+## Upstream merges
+
+### 2026-10-15: upstream up to `9d262da`
+
+**What came in** (9 commits, none fixing what the fork fixes): approvals in the owner's own words
+(`approval_settle`, no tokens or "Reply YES or NO" in texts), `image_generate` (needs `IMAGE_API_KEY` or
+`OPENAI_API_KEY`; without one it says it is not set up), `system.task` envelopes (an operator-started
+task, `runSystemTask`, nothing sends them here yet), `INSTINCT_INSTRUCTIONS` seeding `AGENTS.md`, an
+apps hint after a connect link, a blocked-merchant fix, Windows fixes.
+
+**Collisions,** all both sides adding in the same place, resolved by keeping both: one import line in
+`core-tools.ts`; the run flags on `Conversation` and the place where the fork's two audit helpers meet
+`runSystemTask` in `runtime.ts`; the end of `runtime.test.ts`.
+
+**Fitted to the fork.** `runSystemTask` texted its final reply straight to the owner, past the
+`[sunshine:silent-reply]` and `[sunshine:reply-guard]` checks, and a `system:` conversation did not count
+the owner as its audience. Both now behave as a scheduled job (tagged blocks in `runtime.ts`, two tests).
+
+**Checked after the merge.** All tests (1,148) and the smoke test; real-model scenarios: reminders 14/14,
+the cache read on every message after the first, the mirror (answers "what's Sanna?" on, not off),
+tapbacks (misses only the known English "Loved “…”" text and the flaky "you're hilarious"), voice
+(no machinery talk in 4 of 4). Approvals now add a section to the system prompt while one is pending,
+which costs one cache write when it appears and when it goes.
 
 ## Earlier changes (not tagged; find them by commit)
 

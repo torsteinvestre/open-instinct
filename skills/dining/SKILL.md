@@ -37,7 +37,7 @@ what you assumed.
    cancelled without charge). Read the confirmation screen before you believe
    it. Zoom on the time and party size.
 5. `ask_owner` with the exact details: "Nopa, Thu Oct 9, 7:00pm, table for 2,
-   no deposit. Confirm? YES or NO." If the owner already said "book whatever
+   no deposit. Go ahead?" If the owner already said "book whatever
    is free at 7", skip this step and tell them what you booked.
 6. On no: cancel the hold on the site and offer the next option.
 

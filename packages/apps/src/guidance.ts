@@ -38,6 +38,10 @@ export function appsGuidance(connected: string[], missing: string[], opts: AppsG
   lines.push(
     "To connect an app, call apps_connect with the toolkit name (or app_composio_manage_connections) and send the owner the link it returns. The owner opens the link and signs in; no one else can do this step.",
   );
+  lines.push(
+    "After you send a connect link, never make the owner report back or type a word like done. On their next message, whatever it says, call apps_list first: if the app is now connected, carry on with what they wanted; if not, say so in one line and offer the same link again.",
+  );
+  lines.push("When an app action fails because the app is not connected, send the connect link in that same turn instead of describing the problem.");
   lines.push("Only the owner may connect or disconnect apps. If someone else asks, decline and offer to tell the owner.");
   lines.push("Never paste tokens, API keys or OAuth codes into a message. Links are fine.");
   lines.push("Prefer one direct app_ tool per action. Check the result before telling anyone it worked.");

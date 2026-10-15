@@ -126,23 +126,48 @@ function merchantOf(args: unknown): string | undefined {
   return undefined;
 }
 
+/** Lower-cased object keys and scalar values from a JSON-like tool argument payload. */
+function stringPartsOf(args: unknown): string[] {
+  const strings: string[] = [];
+  const pending: unknown[] = [args];
+  const seen = new Set<object>();
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+      strings.push(String(value).toLowerCase());
+    } else if (value && typeof value === "object" && !seen.has(value)) {
+      seen.add(value);
+      if (Array.isArray(value)) {
+        for (const nested of value) pending.push(nested);
+      } else {
+        for (const [key, nested] of Object.entries(value)) {
+          strings.push(key.toLowerCase());
+          pending.push(nested);
+        }
+      }
+    }
+  }
+  return strings;
+}
+
 /**
  * A blocked merchant must be unmissable, so this reads the whole argument
  * payload and not just the six keys `merchantOf` knows. The model composes tool
  * arguments, so the name can arrive nested (`order.merchant`), inside a list
  * (`items[0].merchant`) or under a key this file has never heard of (`seller`,
  * `payee`); `merchantOf` returns undefined for all three and the deny list then
- * silently passes. `neverWithoutAsk` already scans the full payload via
- * `textOf`, so the weaker control was wider than the stronger one. Matching on
- * the serialised payload can over-block (an `item` string that mentions the name
- * also trips it); for a deny list that is the correct direction to err in.
+ * silently passes. Scan object keys and scalar values themselves rather than serialised
+ * JSON: JSON escapes quotes, backslashes and line breaks, which would otherwise
+ * let those merchant names miss an exact block-list entry. Matching every object
+ * key and scalar value can over-block (an `item` string that mentions the name also
+ * trips it); for a deny list that is the correct direction to err in.
  */
 function blockedMerchantIn(args: unknown, blocked: readonly string[]): string | undefined {
   if (blocked.length === 0) return undefined;
-  const haystack = `${textOf(args)} ${merchantOf(args) ?? ""}`;
+  const haystacks = stringPartsOf(args);
   return blocked.find((m) => {
     const needle = m.trim().toLowerCase();
-    return needle.length > 0 && haystack.includes(needle);
+    return needle.length > 0 && haystacks.some((value) => value.includes(needle));
   });
 }
 
@@ -210,7 +235,7 @@ export class PolicyEngine {
     const ask = (reason: string): PolicyDecision => ({
       outcome: "ask",
       reason,
-      approvalPrompt: `${asker}${label}${amount !== undefined ? ` (${fmtUsd(amount)})` : ""}? Reply YES or NO.`,
+      approvalPrompt: `${asker}${label}${amount !== undefined ? ` (${fmtUsd(amount)})` : ""}?`,
     });
     const merchant = merchantOf(args);
     const blocked = blockedMerchantIn(args, s.blockedMerchants);
@@ -241,7 +266,7 @@ export class PolicyEngine {
     const askDecision: PolicyDecision = {
       outcome: "ask",
       reason: `${capability} requires the owner's approval for tier ${principal.tier}`,
-      approvalPrompt: `${principal.displayName} asks: ${label}${amount !== undefined ? ` (${fmtUsd(amount)})` : ""}. Reply YES or NO.`,
+      approvalPrompt: `${principal.displayName} asks: ${label}${amount !== undefined ? ` (${fmtUsd(amount)})` : ""}. Want me to go ahead?`,
     };
 
     // A blocked merchant is blocked for everyone; no tier, grant or approval opens it.

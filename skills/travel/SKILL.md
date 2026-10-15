@@ -41,7 +41,7 @@ take JetBlue. Want me to book it?
 ## Book
 
 1. `ask_owner` with the exact itinerary and total: "Book JetBlue BOS-SFO Oct 20
-   7:10am, return Oct 24 4:30pm, 1 adult, $412 total? YES or NO." Wait.
+   7:10am, return Oct 24 4:30pm, 1 adult, $412 total? Go ahead?" Wait.
 2. On yes, fill passenger details from memory only if the owner has stored
    them there and told you to use them. Dates of birth, passport numbers and
    loyalty numbers that live in the Vault are entered by the owner during a

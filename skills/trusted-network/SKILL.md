@@ -51,7 +51,7 @@ the `on_behalf_of` field carries it for machines.
    Free/busy means busy blocks, never titles or attendees.
 3. If the tier says ask, tell the requester you are checking, then `ask_owner`
    with one line: "Alex (friend) wants to put a call on your calendar Thu 3pm.
-   OK? YES or NO." Reply to the requester when the owner answers. For A2A, send
+   OK?" Reply to the requester when the owner answers. For A2A, send
    `progress` first and complete later; keep the context open.
 4. If the tier says no, decline in one warm sentence and offer what you can do:
    pass a message, or suggest they ask the owner directly.

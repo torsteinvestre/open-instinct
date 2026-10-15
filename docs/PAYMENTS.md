@@ -203,11 +203,11 @@ always asks the owner, whatever the policy says.
 the spend check never asks for them. `payment_request` reports `amountUsd`, so every
 limit applies to it.
 
-One gap to know about. Core's spend policy matches merchants on arguments named
-`merchant`, `vendor`, `store`, `restaurant`, `airline` and `hotel`. The payment tool's
-argument is `merchantName`. The `allowedMerchants` and `blockedMerchants` lists do not
-match it yet. The `neverWithoutAsk` words still match, because they are searched in the
-whole argument text.
+One gap to know about. `blockedMerchants` scans every object key and scalar value in the tool
+arguments, including `payment_request`'s `merchantName`, nested objects and lists. `allowedMerchants`
+is narrower: it matches only `merchant`, `vendor`, `store`, `restaurant`, `airline` and
+`hotel`, so `payment_request` still asks when an allow list is configured. The block list
+intentionally errs toward denying incidental mentions; an allow list fails closed instead.
 
 ## What is not supported
 
@@ -220,7 +220,7 @@ whole argument text.
 | Checking a request the agent did not make | `payment_status` accepts only ids created by `payment_request`. |
 | Non-owner connect or list | `payment_connect` and `payment_list` run for the owner only, whatever the policy says. |
 | Shared payment tokens | The tool always asks for `credential_type: "card"`. |
-| Merchant allow and block lists by `merchantName` | See the gap above. |
+| Merchant allow list by `merchantName` | See the gap above. The block list already applies. |
 | Approval links older than 10 minutes | They expire. The agent makes a new request. |
 | Skipping Link's own limits | The owner's Link account has per-transaction, daily and 30-day limits. Link may also ask for identity verification before the first purchase. The agent surfaces that as a `requires_action` message for the owner. |
 

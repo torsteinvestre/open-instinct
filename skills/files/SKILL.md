@@ -113,3 +113,14 @@ PDF.
 - Do not send a file to anyone the owner did not name.
 - Do not paste a long document into a text when the owner asked for a file;
   make the PDF and send it.
+
+## Images and picture books
+
+`image_generate` makes a PNG from a prompt and saves it in the workspace; the
+key it uses lives in your environment and is never visible to you or your
+shell, which is fine. For an art book or anything illustrated: generate each
+image with a clear prompt (subject, style, mood, composition), then `create_pdf`
+with a line `![caption](art/ship-01.png)` where each picture goes, then
+`send_file`. Keep prompts varied across a set so the pages don't repeat. If the
+tool answers that image generation is not set up, say so in one line and offer
+the text-only version; never say you cannot use API keys.

@@ -9,6 +9,8 @@ import PDFDocument from "pdfkit";
 export interface PdfOptions {
   title?: string;
   author?: string;
+  /** Turn an image reference (`![alt](src)`) into a readable absolute path, or undefined to refuse it. */
+  resolveImage?: (src: string) => string | undefined;
 }
 
 type Block =
@@ -17,6 +19,7 @@ type Block =
   | { kind: "list"; ordered: boolean; items: string[] }
   | { kind: "code"; lines: string[] }
   | { kind: "table"; rows: string[][] }
+  | { kind: "image"; src: string; alt: string }
   | { kind: "rule" };
 
 interface Run {
@@ -52,7 +55,7 @@ export async function renderMarkdownToPdf(markdown: string, opts: PdfOptions = {
       renderTitle(doc, opts);
       for (const block of blocks) {
         try {
-          renderBlock(doc, block);
+          renderBlock(doc, block, opts);
         } catch {
           // A block that pdfkit rejects (bad glyphs, odd widths) becomes plain text.
           safeText(doc, blockText(block));
@@ -122,6 +125,13 @@ export function parseMarkdown(markdown: string): Block[] {
     if (heading) {
       flushParagraph();
       blocks.push({ kind: "heading", level: heading[1]!.length, text: heading[2] ?? "" });
+      continue;
+    }
+
+    const image = /^!\[([^\]]*)\]\((\S+?)\)$/.exec(trimmed);
+    if (image) {
+      flushParagraph();
+      blocks.push({ kind: "image", src: image[2] ?? "", alt: image[1] ?? "" });
       continue;
     }
 
@@ -282,8 +292,35 @@ function renderTitle(doc: PDFKit.PDFDocument, opts: PdfOptions): void {
   doc.fillColor("#111111");
 }
 
-function renderBlock(doc: PDFKit.PDFDocument, block: Block): void {
+const IMAGE_MAX_HEIGHT = 440;
+
+function renderBlock(doc: PDFKit.PDFDocument, block: Block, opts: PdfOptions = {}): void {
   switch (block.kind) {
+    case "image": {
+      const file = opts.resolveImage?.(block.src);
+      if (!file) {
+        doc.font("Helvetica-Oblique").fontSize(BODY_SIZE).fillColor("#666666");
+        safeText(doc, block.alt ? `[image: ${block.alt}]` : "[image]");
+        doc.moveDown(0.4);
+        return;
+      }
+      const width = contentWidth(doc);
+      if (doc.y > doc.page.height - doc.page.margins.bottom - Math.min(IMAGE_MAX_HEIGHT, width)) doc.addPage();
+      try {
+        doc.image(file, doc.page.margins.left, doc.y, { fit: [width, IMAGE_MAX_HEIGHT], align: "center" });
+        doc.y = Math.min(doc.y + IMAGE_MAX_HEIGHT, doc.page.height - doc.page.margins.bottom);
+        doc.moveDown(0.3);
+      } catch {
+        doc.font("Helvetica-Oblique").fontSize(BODY_SIZE).fillColor("#666666");
+        safeText(doc, block.alt ? `[image could not be embedded: ${block.alt}]` : "[image could not be embedded]");
+      }
+      if (block.alt) {
+        doc.font("Helvetica-Oblique").fontSize(CODE_SIZE).fillColor("#555555");
+        safeText(doc, block.alt);
+      }
+      doc.moveDown(0.6);
+      return;
+    }
     case "heading": {
       const size = HEADING_SIZES[block.level] ?? BODY_SIZE;
       doc.moveDown(block.level <= 2 ? 0.6 : 0.4);
@@ -418,6 +455,8 @@ function safeText(doc: PDFKit.PDFDocument, text: string): void {
 
 function blockText(block: Block): string {
   switch (block.kind) {
+    case "image":
+      return block.alt;
     case "heading":
     case "paragraph":
       return stripInline(block.text);

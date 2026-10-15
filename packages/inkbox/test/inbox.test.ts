@@ -7,6 +7,13 @@ import { DurableInbox } from "../src/inbox.js";
 const file = () => join(mkdtempSync(join(tmpdir(), "inkbox-inbox-")), "receipts.json");
 
 describe("durable inbox", () => {
+  it.skipIf(process.platform !== "win32")("persists admission when directory fsync is unavailable on Windows", () => {
+    const path = file();
+    const inbox = new DurableInbox({ file: path, handle: async () => {} });
+    expect(() => inbox.enqueue("event", { message: "hello" })).not.toThrow();
+    expect(JSON.parse(readFileSync(path, "utf8")).receipts[0]).toMatchObject({ status: "queued", payload: { message: "hello" } });
+  });
+
   it("persists admission before processing and recovers without the original request", async () => {
     const path = file();
     const first = new DurableInbox({ file: path, handle: async () => { throw new Error("must not run"); } });

@@ -53,6 +53,15 @@ describe("appsGuidance with toolkits lacking an auth config", () => {
   });
 });
 
+describe("appsGuidance after a connect link", () => {
+  it("tells the model to check apps_list itself and to send the link when an action fails unconnected", () => {
+    const text = appsGuidance(["gmail"], ["googlecalendar"]);
+    expect(text).toContain("call apps_list first");
+    expect(text).toContain("never make the owner report back");
+    expect(text).toContain("send the connect link in that same turn");
+  });
+});
+
 describe("DEFAULT_TOOLKITS", () => {
   it("is gmail, calendar and contacts", () => {
     expect(DEFAULT_TOOLKITS).toEqual(["gmail", "googlecalendar", "googlecontacts"]);

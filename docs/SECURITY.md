@@ -205,7 +205,7 @@ Be clear about these before you trust the agent with anything that matters.
 | Email sender identity | The mail webhook carries no SPF, DKIM or DMARC result. Email is never treated as the owner, but a forged email from a contact's address runs at that contact's tier |
 | Someone with the owner's phone | iMessage from the owner's number is the owner. Lock your phone |
 | The desktop's own browser state | Logins persist in the VM's browser profile under `/home/desk`. Anyone with access to the VM has them |
-| Merchant matching in payments | The spend policy matches merchants on tool arguments named `merchant`, `vendor`, `store` and the like. The `merchantName` argument of `payment_request` is not matched by the allow and block lists yet |
+| Merchant matching in payments | The block list scans every object key and scalar value, including `payment_request`'s `merchantName`, and may deny incidental mentions. The allow list only recognizes fields such as `merchant`, `vendor` and `store`, so `payment_request` asks when an allow list is set |
 | Rate limits across restarts | Gateway signup limits and the event dedupe list are in memory and reset on restart |
 | Memory accuracy | The agent writes what it believes. A trusted person can plant a false fact through a message that the owner then confirms. Read `memory/MEMORY.md` now and then |
 

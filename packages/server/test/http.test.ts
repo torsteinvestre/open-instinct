@@ -267,6 +267,31 @@ describe("http server", () => {
     expect(await res.json()).toEqual({ error: "not found" });
   });
 
+  it("system task envelope: runs as a system task, never as owner chat or an Inkbox event", async () => {
+    const tasks: Array<{ id: string; prompt: string; quiet?: boolean }> = [];
+    app.runtime.runSystemTask = async (task) => {
+      tasks.push(task);
+      return "done";
+    };
+    const message = `@@instinct-event@@${JSON.stringify({ type: "system.task", id: "conference-prepare", name: "Prepare", prompt: "Research the owner.", quiet: true })}`;
+    const res = await post("/chat", { message, conversation_id: "system:conference-prepare" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ response: "", acked: true, conversationKey: "system:conference-prepare" });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(tasks).toEqual([{ type: "system.task", id: "conference-prepare", name: "Prepare", prompt: "Research the owner.", quiet: true }]);
+    expect(app.inbound).toHaveLength(0);
+    expect(app.scheduled).toHaveLength(0);
+
+    delete app.runtime.runSystemTask;
+    const unsupported = await post("/chat", { message, conversation_id: "system:conference-prepare" });
+    expect(await unsupported.json()).toMatchObject({ acked: true, blocked: "system tasks are not supported by this runtime" });
+    expect(app.inbound).toHaveLength(0);
+
+    const malformed = await post("/chat", { message: `@@instinct-event@@${JSON.stringify({ type: "system.task", id: "no prompt" })}` });
+    expect(await malformed.json()).toMatchObject({ response: "", acked: true });
+    expect(app.inbound).toHaveLength(0);
+  });
+
   it("scheduled wake: runs the matching entry once on scheduled:<id> and never as owner chat", async () => {
     const res = await post("/chat", { message: "Send the morning brief", source: "scheduled" });
     expect(res.status).toBe(200);

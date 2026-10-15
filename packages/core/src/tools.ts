@@ -17,6 +17,13 @@ export interface ToolContext {
   assertA2AActive?: () => Promise<void>;
   markA2AState?: (state: string) => void;
   channel: Channel;
+  /**
+   * True only while the current run was started by the owner's own direct message on a
+   * carrier-bound or local channel (iMessage, SMS, chat). False for email, group threads,
+   * delegated A2A results, scheduled jobs and resumed conversations, whose text the owner
+   * did not write.
+   */
+  ownerTurn?: boolean;
   now(): Date;
 }
 

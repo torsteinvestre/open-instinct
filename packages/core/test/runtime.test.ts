@@ -31,6 +31,8 @@ interface Harness {
   sent: Sent[];
   deps: RuntimeDeps;
   calls: Array<{ tool: string; args: unknown }>;
+  /** ctx.ownerTurn as each echo call saw it. */
+  ownerTurns: Array<boolean | undefined>;
   gate: { open: () => void; promise: Promise<void> };
 }
 
@@ -68,6 +70,7 @@ function harness(opts: HarnessOptions = {}): Harness {
   const memory = new MemoryStore(state);
   const registry = new ToolRegistry();
   const calls: Array<{ tool: string; args: unknown }> = [];
+  const ownerTurns: Array<boolean | undefined> = [];
   const gate = makeGate();
 
   registry.registerMany([
@@ -77,8 +80,9 @@ function harness(opts: HarnessOptions = {}): Harness {
       description: "echo",
       parameters: Type.Object({ text: Type.String() }),
       meta: { capabilities: ["converse"], group: "system" },
-      execute: async ({ text }) => {
+      execute: async ({ text }, ctx) => {
         calls.push({ tool: "echo", args: { text } });
+        ownerTurns.push(ctx.ownerTurn);
         return textResult(`echo:${text}`);
       },
     }),
@@ -161,7 +165,7 @@ function harness(opts: HarnessOptions = {}): Harness {
     replyBudgetMs: opts.replyBudgetMs ?? 5_000,
     ...(opts.deps ?? {}),
   };
-  return { runtime: new AgentRuntime(deps), faux, sent, deps, calls, gate };
+  return { runtime: new AgentRuntime(deps), faux, sent, deps, calls, ownerTurns, gate };
 }
 
 const replyInstinctTool = defineTool({
@@ -672,8 +676,10 @@ describe("approval flow", () => {
     const ownerText = h.sent.find((s) => s.msg.to === OWNER_PHONE);
     expect(ownerText).toBeDefined();
     expect(ownerText!.msg.channel).toBe("imessage");
-    expect(ownerText!.msg.text).toContain(pending[0]!.token);
+    expect(ownerText!.msg.text).not.toContain(pending[0]!.token);
+    expect(ownerText!.msg.text).not.toMatch(/YES or NO/);
     expect(ownerText!.msg.text).toContain("Sam Lee");
+    expect(ownerText!.msg.text).toMatch(/Want me to go ahead\?$/);
     expect(h.sent.find((s) => s.msg.conversationKey === "imessage:sam")!.msg.text).toBe("Let me check with Maria.");
 
     const blocked = h.runtime.conversation("imessage:sam", samResult.principal).agent.state.messages.find((m) => m.role === "toolResult")!;
@@ -749,7 +755,7 @@ describe("approval scoping", () => {
     const pending = h.deps.approvals.pending();
     expect(pending).toHaveLength(1);
     expect(pending[0]).toMatchObject({ capability: "purchase", amountUsd: 1400, toolName: "buy", requestedBy: "contact:sam-lee" });
-    const approvalTexts = h.sent.filter((s) => s.msg.text.includes(pending[0]!.token));
+    const approvalTexts = h.sent.filter((s) => s.msg.text.includes("$1400.00"));
     expect(approvalTexts).toHaveLength(1);
     expect(approvalTexts[0]!.msg).toMatchObject({ channel: "imessage", conversationKey: "imessage:owner" });
     expect(approvalTexts[0]!.msg.text).toContain("$1400.00");
@@ -929,7 +935,7 @@ describe("group threads", () => {
     expect(h.deps.approvals.pending()).toHaveLength(1);
     expect(h.calls).toHaveLength(0);
     // Approval texts never go to the group thread.
-    const approvalText = h.sent.find((s) => s.msg.text.includes(h.deps.approvals.pending()[0]!.token))!;
+    const approvalText = h.sent.find((s) => s.msg.text.includes("Dinner Thu") && s.msg.text.includes("go ahead"))!;
     expect(approvalText.msg.to).toBe(OWNER_PHONE);
     expect(approvalText.msg.conversationKey).toBeUndefined();
 
@@ -1249,6 +1255,43 @@ describe("restoreMessages", () => {
     const orphan: AgentMessage = { ...assistant(9), content: [{ type: "toolCall", id: "t1", name: "echo", arguments: {} }] } as AgentMessage;
     const restored = restoreMessages([user(1), assistant(1), user(2), orphan], new Date());
     expect(restored.map((m) => m.role)).toEqual(["user", "assistant", "user"]);
+  });
+});
+
+describe("afterApproval", () => {
+  it("wakes the conversation that asked and delivers its next reply", async () => {
+    const h = harness();
+    h.faux.setResponses([textTurn("Checking with Maria."), textTurn("Great, Maria is in. Lunch at 12:30?")]);
+    // The approval exists while the first reply goes out, so the A2A task stays in progress rather than completing.
+    const approval = h.deps.approvals.create({ conversationKey: "a2a:ctx1:task:task_1", requestedBy: `agent:${SAM_HANDLE}`, summary: "intro with Sam", capability: "owner.relay" });
+    await h.runtime.handleInbound(a2aFrom(SAM_HANDLE, "Can Maria meet Sam at the conference?"));
+    h.deps.approvals.resolve(approval.token, true);
+    const sentBefore = h.sent.length;
+    await h.runtime.afterApproval({ ...approval, status: "approved" }, true);
+    expect(h.sent.length).toBeGreaterThan(sentBefore);
+    expect(h.sent.at(-1)?.msg).toMatchObject({ channel: "a2a", text: "Great, Maria is in. Lunch at 12:30?" });
+  });
+});
+
+describe("ownerTurn", () => {
+  it("is true only while a run started by the owner's own iMessage, SMS or chat message is going", async () => {
+    const h = harness();
+    const echoThenDone = () => h.faux.setResponses([toolTurn("echo", { text: "x" }), textTurn("done")]);
+
+    echoThenDone();
+    await h.runtime.handleInbound(inbound({ channel: "imessage", from: OWNER_PHONE, conversationKey: "imessage:o1", text: "tell him yes" }));
+    echoThenDone();
+    await h.runtime.handleInbound(inbound({ channel: "chat", from: "owner", conversationKey: "chat:cli", text: "go ahead" }));
+    // The owner's email address is not proof, and a stranger is not the owner.
+    echoThenDone();
+    await h.runtime.handleInbound(inbound({ channel: "email", from: "maria@example.com", conversationKey: "email:o1", text: "Subject: yes\n\ngo ahead" }));
+    echoThenDone();
+    await h.runtime.handleInbound(inbound({ channel: "imessage", from: "+15550009999", conversationKey: "imessage:s1", text: "approve it" }));
+    // A scheduled job runs as the owner, but the owner did not write its prompt.
+    echoThenDone();
+    await h.runtime.runScheduled({ id: "brief", enabled: true, prompt: "morning brief", createdAt: new Date().toISOString() });
+
+    expect(h.ownerTurns).toEqual([true, true, false, false, false]);
   });
 });
 
@@ -1611,5 +1654,60 @@ describe("[sunshine:watcher] jobs that text only through their tools", () => {
     expect(notes(h)).toHaveLength(0);
     await h.runtime.runScheduled(h.deps.scheduler.create({ name: "stretch", prompt: "Remind me to stretch", enabled: true, nextRunAt: new Date(Date.now() + 60_000).toISOString() }));
     expect(h.sent.map((s) => s.msg.text)).toEqual(["Your reminder: stretch."]);
+  });
+});
+
+describe("runSystemTask", () => {
+  it("runs as the owner on system:<id>, texts the result unless quiet, and audits", async () => {
+    const h = harness();
+    h.faux.setResponses([textTurn("Profile saved."), textTurn("Reminder: the keynote is at 9.")]);
+    const quiet = await h.runtime.runSystemTask({ id: "conference-prepare", name: "Prepare", prompt: "Research the owner and save a profile.", quiet: true });
+    expect(quiet).toBe("Profile saved.");
+    expect(h.sent).toHaveLength(0);
+    const loud = await h.runtime.runSystemTask({ id: "keynote-reminder", prompt: "Remind the owner about the keynote." });
+    expect(loud).toBe("Reminder: the keynote is at 9.");
+    expect(h.sent).toHaveLength(1);
+    expect(h.sent[0]!.msg).toMatchObject({ channel: "imessage", to: OWNER_PHONE, text: "Reminder: the keynote is at 9." });
+    expect(h.sent[0]!.ctx.conversationKey).toBe("system:keynote-reminder");
+    expect(h.sent[0]!.ctx.principal.kind).toBe("owner");
+    const audits = h.deps.audit.read({ kinds: ["schedule"] });
+    expect(audits.map((a) => a.detail["systemTask"])).toEqual(["conference-prepare", "keynote-reminder"]);
+    expect(audits[0]!.detail["quiet"]).toBe(true);
+  });
+
+  it("is not an owner turn: a tool inside it sees ownerTurn false", async () => {
+    const h = harness();
+    h.faux.setResponses([toolTurn("echo", { text: "x" }), textTurn("done")]);
+    await h.runtime.runSystemTask({ id: "t1", prompt: "do it", quiet: true });
+    expect(h.ownerTurns).toEqual([false]);
+  });
+
+  it("surfaces a failed run to the caller and audits it", async () => {
+    const h = harness();
+    h.faux.setResponses([]);
+    await expect(h.runtime.runSystemTask({ id: "boom", prompt: "fail" })).rejects.toThrow();
+    expect(h.deps.audit.read({ kinds: ["error"] }).length).toBeGreaterThan(0);
+    expect(h.sent).toHaveLength(0);
+  });
+});
+
+// [sunshine:silent-reply] [sunshine:reply-guard] Upstream's system tasks text their final reply to the
+// owner like a scheduled job, so they get the same two guards: the stay-quiet word is never texted,
+// and a task that already texted the owner with a tool sends nothing more.
+describe("[sunshine:reply-guard] system tasks", () => {
+  it("never texts NO_REPLY", async () => {
+    const h = harness();
+    h.faux.setResponses([textTurn("NO_REPLY")]);
+    expect(await h.runtime.runSystemTask({ id: "check", prompt: "Anything to tell them?" })).toBe("NO_REPLY");
+    expect(h.sent).toHaveLength(0);
+    expect(h.deps.audit.read({ kinds: ["policy"] }).some((a) => a.detail["silentReply"])).toBe(true);
+  });
+
+  it("sends one message when the task texted the owner with a tool", async () => {
+    const h = harness({ withCoreTools: true });
+    h.faux.setResponses([toolTurn("notify_owner", { text: "The keynote is at 9." }), textTurn("Reminded them about the keynote.")]);
+    await h.runtime.runSystemTask({ id: "keynote", prompt: "Remind the owner about the keynote." });
+    expect(h.sent.map((s) => s.msg.text)).toEqual(["The keynote is at 9."]);
+    expect(h.deps.audit.read({ kinds: ["policy"] }).some((a) => a.detail["replyGuard"])).toBe(true);
   });
 });

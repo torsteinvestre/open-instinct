@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decodeEvent, encodeEvent, isEnvelope } from "../src/envelope.js";
+import { decodeEvent, encodeEvent, isEnvelope, systemTaskOf } from "../src/envelope.js";
 import { EVENT_ENVELOPE_PREFIX } from "../src/types.js";
 
 describe("envelope", () => {
@@ -30,5 +30,22 @@ describe("envelope", () => {
     expect(decodeEvent("  " + encodeEvent({ a: 1 }))).toEqual({ a: 1 });
     expect(decodeEvent(encodeEvent("text"))).toBe("text");
     expect(decodeEvent(encodeEvent(null))).toBeNull();
+  });
+});
+
+describe("systemTaskOf", () => {
+  it("accepts a well-formed task and rejects anything else", () => {
+    expect(systemTaskOf({ type: "system.task", id: "conference-prepare", prompt: "Research the owner", name: "Prepare", quiet: true })).toEqual({
+      type: "system.task",
+      id: "conference-prepare",
+      prompt: "Research the owner",
+      name: "Prepare",
+      quiet: true,
+    });
+    expect(systemTaskOf({ type: "system.task", id: "x", prompt: "go", quiet: "yes" })).toEqual({ type: "system.task", id: "x", prompt: "go" });
+    expect(systemTaskOf({ type: "system.task", id: "bad id!", prompt: "go" })).toBeUndefined();
+    expect(systemTaskOf({ type: "system.task", id: "x", prompt: "   " })).toBeUndefined();
+    expect(systemTaskOf({ type: "imessage.received", id: "x", prompt: "go" })).toBeUndefined();
+    expect(systemTaskOf("system.task")).toBeUndefined();
   });
 });

@@ -153,7 +153,12 @@ export class DurableInbox<T> {
       fsyncSync(fd);
     } finally { closeSync(fd); }
     renameSync(temporary, this.opts.file);
-    const directory = openSync(dir, "r");
-    try { fsyncSync(directory); } finally { closeSync(directory); }
+    // POSIX needs the directory sync to make the rename durable. Node cannot
+    // fsync a directory handle on Windows (EPERM); the file itself was already
+    // flushed above, so do not turn every durable-inbox admission into a 500.
+    if (process.platform !== "win32") {
+      const directory = openSync(dir, "r");
+      try { fsyncSync(directory); } finally { closeSync(directory); }
+    }
   }
 }

@@ -203,7 +203,8 @@ policy engine checks. Groups:
 | schedule | `schedule_create`, `schedule_list`, `schedule_delete` | `core` | always |
 | web | `web_search`, `web_fetch` (public hosts only, no login) | `core` | always |
 | files | `read`, `write`, `edit`, `bash`, `ls`, `grep`, scoped to `workspace/` | `pi-coding-agent` factories wrapped by `server` | always, owner only |
-| files | `create_pdf` (markdown to a real PDF under `workspace/`: headings, lists, tables, code, links, page numbers) | `core` | always, owner only |
+| files | `create_pdf` (markdown to a real PDF under `workspace/`: headings, lists, tables, code, links, page numbers, `![caption](path)` images from the workspace) | `core` | always, owner only |
+| files | `image_generate` (a PNG from a prompt, saved under `workspace/`, through an OpenAI-compatible `/images/generations` endpoint) | `core` | always, owner only; needs `IMAGE_API_KEY` or `OPENAI_API_KEY` to do anything |
 | contacts and trust | `contacts_search`, `contacts_upsert`, `trust_set_tier`, `trust_grant`, `trust_revoke`, `trust_list` | `@open-instinct/network` | always |
 | network | `ask_instinct` (one contact, or several for a group plan), `reply_instinct`, `invite_to_network` | `@open-instinct/network` | always; A2A sends need Inkbox, invitations need `INKBOX_ADMIN_API_KEY` |
 | computer (in the VM) | `computer`, `computer_batch`, `request_takeover`, `takeover_status`, `computer_read_file`, `computer_write_file` | `@open-instinct/computer` over desktopd REST | `INSTINCT_COMPUTER` is `auto` or `desktopd` and desktopd answers |
@@ -296,6 +297,7 @@ Server:
 | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, ... | model access, looked up per Pi provider |
 | `INSTINCT_OWNER_NAME`, `INSTINCT_OWNER_PHONE`, `INSTINCT_OWNER_EMAIL`, `INSTINCT_OWNER_TIMEZONE`, `INSTINCT_AGENT_NAME` | who the owner is and what the agent is called; seeded into `config.json` on first boot |
 | `INSTINCT_PERSONA` | seeds `<data>/PERSONA.md` on first boot only; after that the file is the owner's (`instinct persona`) |
+| `INSTINCT_INSTRUCTIONS` | seeds `<data>/AGENTS.md`; a changed value replaces the file on the next boot unless the owner edited it (`AGENTS.md.seed` remembers the last seed) |
 | `INKBOX_API_KEY`, `INKBOX_AGENT_HANDLE`, `INKBOX_IDENTITY_ID` | identity-scoped Inkbox credentials; turn on the Inkbox outbox, messaging tools and A2A |
 | `INKBOX_SIGNING_KEY` | webhook signing key (also read from `secrets/webhook.json`) |
 | `INKBOX_ADMIN_API_KEY` | org-wide key: invitations, contact rules, webhook subscription with the tunnel |
@@ -311,6 +313,7 @@ Server:
 | `COMPOSIO_API_KEY`, `COMPOSIO_TOOLKITS` | apps; the key alone turns them on |
 | `LINK_CLIENT_ID`, `LINK_CLIENT_SECRET`, `STRIPE_PUBLISHABLE_KEY`, `LINK_REDIRECT_URI` | payments; all three keys together turn them on |
 | `BRAVE_SEARCH_API_KEY` | better `web_search` |
+| `IMAGE_API_KEY`, `IMAGE_BASE_URL`, `IMAGE_MODEL` | `image_generate`; defaults to `OPENAI_API_KEY` / `OPENAI_BASE_URL` and `gpt-image-1` |
 
 Gateway: `GATEWAY_PUBLIC_URL`, `GATEWAY_DATA_DIR`, `GATEWAY_SIGNUP_SECRET`, `GATEWAY_ALLOW_OPEN_SIGNUP`,
 `GATEWAY_TRUST_PROXY`, `INSTINCT_AGENT_IMAGE`, `INSTINCT_IDLE_TTL_SECONDS`, `INSTINCT_USE_MARITIME_LLM`,

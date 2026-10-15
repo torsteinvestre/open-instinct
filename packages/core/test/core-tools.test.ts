@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ApprovalStore } from "../src/approvals.js";
@@ -23,7 +24,7 @@ const stubLookup = async (host: string): Promise<string[]> => {
   return ["93.184.216.34"];
 };
 
-function setup(opts: { fetchImpl?: typeof fetch; searchApiKey?: string; lookup?: (host: string) => Promise<string[]> } = {}) {
+function setup(opts: { fetchImpl?: typeof fetch; searchApiKey?: string; lookup?: (host: string) => Promise<string[]>; onApprovalSettled?: CoreToolDeps["onApprovalSettled"]; images?: CoreToolDeps["images"]; workspaceDir?: string } = {}) {
   const state = tempState();
   const sent: Array<{ msg: OutboundMessage; principal: Principal }> = [];
   const outbox: Outbox = { send: async (msg, ctx) => void sent.push({ msg, principal: ctx.principal }) };
@@ -39,11 +40,11 @@ function setup(opts: { fetchImpl?: typeof fetch; searchApiKey?: string; lookup?:
   };
   const registry = new ToolRegistry();
   registry.registerMany(coreTools(deps));
-  const ctxFor = (principal: Principal): ToolContext => ({ principal, conversationKey: "imessage:t", channel: "imessage", now: () => NOW });
-  const run = async (name: string, args: unknown, principal: Principal = principalOf("owner")) => {
+  const ctxFor = (principal: Principal, ownerTurn: boolean): ToolContext => ({ principal, conversationKey: "imessage:t", channel: "imessage", ownerTurn, now: () => NOW });
+  const run = async (name: string, args: unknown, principal: Principal = principalOf("owner"), ownerTurn = principal.kind === "owner") => {
     const tool = registry.get(name);
     if (!tool) throw new Error(`no tool ${name}`);
-    return tool.spec.execute(args, ctxFor(principal));
+    return tool.spec.execute(args, ctxFor(principal, ownerTurn));
   };
   const text = (r: Awaited<ReturnType<typeof run>>) => (typeof r === "string" ? r : r.content.map((c) => (c.type === "text" ? c.text : "")).join(""));
   return { deps, registry, run, text, sent, state };
@@ -64,7 +65,7 @@ describe("coreTools registration", () => {
   it("registers the documented tools with the documented capabilities", () => {
     const { registry } = setup();
     const names = registry.all().map((t) => t.spec.name).sort();
-    expect(names).toEqual(["ask_owner", "audit_read", "create_pdf", "journal_append", "memory_read", "memory_write", "notify_owner", "schedule_create", "schedule_delete", "schedule_list", "web_fetch", "web_search"]);
+    expect(names).toEqual(["approval_settle", "ask_owner", "audit_read", "create_pdf", "image_generate", "journal_append", "memory_read", "memory_write", "notify_owner", "schedule_create", "schedule_delete", "schedule_list", "web_fetch", "web_search"]);
     expect(registry.meta("create_pdf")).toMatchObject({ capabilities: ["files.write"], group: "files" });
     expect(registry.meta("memory_write")?.capabilities).toEqual(["memory.write"]);
     expect(registry.meta("schedule_create")?.capabilities).toEqual(["schedule.manage"]);
@@ -79,6 +80,58 @@ describe("coreTools registration", () => {
     expect(registry.meta("notify_owner")?.replyTarget?.({ text: "x" })).toBe("owner");
     expect(registry.meta("ask_owner")?.replyTarget?.({ question: "x", summary: "y" })).toBe("owner");
     expect(registry.all().filter((t) => t.spec.meta.replyTarget).map((t) => t.spec.name).sort()).toEqual(["ask_owner", "notify_owner"]);
+  });
+});
+
+describe("approval_settle", () => {
+  it("settles the only pending approval in the owner's words, wakes the waiting conversation, and refuses everyone else", async () => {
+    const settled: Array<{ token: string; approved: boolean }> = [];
+    const { run, text, deps } = setup({ onApprovalSettled: async (a, ok) => void settled.push({ token: a.token, approved: ok }) });
+    expect(text(await run("approval_settle", { decision: "yes" }))).toContain("Nothing is pending");
+    const a = deps.approvals.create({ conversationKey: "a2a:ctx1", requestedBy: "agent:shuja-keen", summary: "intro with Shuja Keen", capability: "owner.relay" });
+    const stranger = await run("approval_settle", { decision: "yes" }, principalOf("stranger"));
+    expect(typeof stranger === "string" ? stranger : stranger.isError).toBeTruthy();
+    expect(deps.approvals.get(a.token)?.status).toBe("pending");
+    expect(text(await run("approval_settle", { decision: "yes" }))).toContain("Approved: intro with Shuja Keen");
+    expect(deps.approvals.get(a.token)?.status).toBe("approved");
+    expect(settled).toEqual([{ token: a.token, approved: true }]);
+    expect(deps.audit.read({ kinds: ["approval"] }).some((e) => e.detail["via"] === "approval_settle")).toBe(true);
+    expect(text(await run("approval_settle", { decision: "no", token: a.token }))).toMatch(/Nothing is pending|no longer pending/);
+  });
+
+  it("refuses when the run did not start with the owner's own message", async () => {
+    const { run, text, deps } = setup();
+    const a = deps.approvals.create({ conversationKey: "a2a:1", requestedBy: "agent:x", summary: "intro with X", capability: "owner.relay" });
+    // An email, another agent's reply or a scheduled job runs as the owner but is not their words.
+    const r = await run("approval_settle", { decision: "yes" }, principalOf("owner"), false);
+    expect(typeof r === "string" ? false : r.isError).toBe(true);
+    expect(text(r)).toContain("Only the owner's own message can settle an approval");
+    expect(deps.approvals.get(a.token)?.status).toBe("pending");
+  });
+
+  it("never settles an approval that moves money", async () => {
+    const settled: string[] = [];
+    const { run, text, deps } = setup({ onApprovalSettled: async (a) => void settled.push(a.token) });
+    const buy = deps.approvals.create({ conversationKey: "imessage:t", requestedBy: "owner", summary: "buy the concert tickets", capability: "purchase", amountUsd: 180 });
+    expect(text(await run("approval_settle", { decision: "yes" }))).toContain("involves money");
+    const flight = deps.approvals.create({ conversationKey: "imessage:t", requestedBy: "partner:sam", summary: "book the Lisbon flight", capability: "travel.book" });
+    expect(text(await run("approval_settle", { decision: "yes", token: flight.token }))).toContain("involves money");
+    expect(deps.approvals.get(buy.token)?.status).toBe("pending");
+    expect(deps.approvals.get(flight.token)?.status).toBe("pending");
+    expect(settled).toEqual([]);
+  });
+
+  it("asks which one when several are pending and no token is given", async () => {
+    const { run, text, deps } = setup();
+    const a = deps.approvals.create({ conversationKey: "a2a:1", requestedBy: "agent:x", summary: "intro with X", capability: "owner.relay" });
+    const b = deps.approvals.create({ conversationKey: "a2a:2", requestedBy: "agent:y", summary: "intro with Y", capability: "owner.relay" });
+    const ask = text(await run("approval_settle", { decision: "no" }));
+    expect(ask).toContain("Which one?");
+    expect(ask).toContain(a.token);
+    expect(ask).toContain(b.token);
+    expect(text(await run("approval_settle", { decision: "no", token: b.token.toLowerCase() }))).toContain("Denied: intro with Y");
+    expect(deps.approvals.get(a.token)?.status).toBe("pending");
+    expect(deps.approvals.get(b.token)?.status).toBe("denied");
   });
 });
 
@@ -186,7 +239,7 @@ describe("schedule tools", () => {
 });
 
 describe("owner relay tools", () => {
-  it("ask_owner creates an approval, texts the owner with the token, and returns the token", async () => {
+  it("ask_owner creates an approval, texts the owner a plain question, and returns the token to the model only", async () => {
     const { run, text, deps, sent } = setup();
     const partner = principalOf("partner", { displayName: "Sam" });
     const out = text(await run("ask_owner", { question: "Book Nopa Thu 7pm for two?", summary: "Book Nopa Thu 7pm", amountUsd: 0 }, partner));
@@ -198,7 +251,8 @@ describe("owner relay tools", () => {
     expect(sent[0]!.msg).toMatchObject({ channel: "imessage", to: "+16175550100" });
     expect(sent[0]!.msg.text).toContain("Book Nopa Thu 7pm for two?");
     expect(sent[0]!.msg.text).toContain("(from Sam)");
-    expect(sent[0]!.msg.text).toContain(pending[0]!.token);
+    expect(sent[0]!.msg.text).not.toContain(pending[0]!.token);
+    expect(sent[0]!.msg.text).not.toMatch(/YES or NO/);
     expect(deps.audit.read({ kinds: ["approval", "outbound"] })).toHaveLength(2);
   });
 
@@ -468,5 +522,47 @@ describe("create_pdf", () => {
     const ok = await tool.spec.execute({ path: path.join(workspace, "docs", "ok.PDF"), markdown: "x" }, ctx);
     expect(typeof ok === "object" && ok.isError).toBeFalsy();
     expect(fs.existsSync(path.join(workspace, "docs", "ok.PDF"))).toBe(true);
+  });
+});
+
+describe("image_generate", () => {
+  const PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
+
+  it("explains what to set when no image endpoint is configured", async () => {
+    const { run, text } = setup({ workspaceDir: fs.mkdtempSync(path.join(os.tmpdir(), "img-")) });
+    const r = await run("image_generate", { prompt: "a ship", path: "art/ship.png" });
+    expect(typeof r === "string" ? false : r.isError).toBe(true);
+    expect(text(r)).toContain("IMAGE_API_KEY");
+  });
+
+  it("posts the prompt to the images endpoint with the key and saves the PNG in the workspace", async () => {
+    const seen: Array<{ url: string; auth: string; body: Record<string, unknown> }> = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      seen.push({ url: String(input), auth: headers["Authorization"] ?? "", body: JSON.parse(String(init?.body)) as Record<string, unknown> });
+      return new Response(JSON.stringify({ data: [{ b64_json: PNG_B64 }] }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "img-"));
+    const { run, text } = setup({ workspaceDir, fetchImpl, images: { apiKey: "sk-img", baseUrl: "https://proxy.test/v1/", model: "gpt-image-1" } });
+    const r = await run("image_generate", { prompt: "a clipper at dawn, ink sketch", path: "art/ship-01.png", size: "1536x1024" });
+    expect(text(r)).toContain("Saved");
+    expect(text(r)).toContain("![caption](art/ship-01.png)");
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.url).toBe("https://proxy.test/v1/images/generations");
+    expect(seen[0]!.auth).toBe("Bearer sk-img");
+    expect(seen[0]!.body).toEqual({ model: "gpt-image-1", prompt: "a clipper at dawn, ink sketch", size: "1536x1024", n: 1 });
+    expect(fs.readFileSync(path.join(workspaceDir, "art", "ship-01.png")).toString("base64")).toBe(PNG_B64);
+    const outside = await run("image_generate", { prompt: "x", path: "../escape.png" });
+    expect(text(outside)).toContain("outside the workspace");
+    const notPng = await run("image_generate", { prompt: "x", path: "art/ship.jpg" });
+    expect(text(notPng)).toContain("must end in .png");
+  });
+
+  it("reports an endpoint failure in one line without the key", async () => {
+    const fetchImpl = (async () => new Response(JSON.stringify({ error: { message: "model not available" } }), { status: 404 })) as typeof fetch;
+    const { run, text } = setup({ workspaceDir: fs.mkdtempSync(path.join(os.tmpdir(), "img-")), fetchImpl, images: { apiKey: "sk-secret" } });
+    const r = await run("image_generate", { prompt: "x", path: "a.png" });
+    expect(text(r)).toContain("HTTP 404");
+    expect(text(r)).not.toContain("sk-secret");
   });
 });

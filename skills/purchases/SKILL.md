@@ -36,7 +36,7 @@ days. I'd go Amazon for Thursday unless the ten dollars matters. Which?
 - Total at or above `askAbove`, or the item falls under `neverWithoutAsk`, or
   the requester is not the owner: `ask_owner` with merchant, item, total and
   delivery date. "Buy the Anker 737 from Amazon, $89.99 total, arrives Thu?
-  YES or NO." Wait. No answer means no.
+  Go ahead?" Wait. No answer means no.
 - Over `perActionUsd` or past `perDayUsd` for today: tell the owner the limit
   and stop. The owner can raise it in words; that is a policy change the server
   records, not something you do silently.

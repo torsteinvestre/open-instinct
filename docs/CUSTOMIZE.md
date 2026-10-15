@@ -100,6 +100,11 @@ Create `<data>/AGENTS.md`. Whatever it says is appended to the prompt right afte
 persona, under "Standing instructions", in every conversation. Same convention Pi,
 OpenClaw and Claude Code use for a project's `AGENTS.md`.
 
+A deployer can seed it with `INSTINCT_INSTRUCTIONS` in the environment (an event brief,
+house rules for every agent a gateway creates). Unlike `INSTINCT_PERSONA`, a changed value
+is applied on the next boot as long as the file is still exactly what the last seed wrote;
+once the owner edits `AGENTS.md`, it is theirs and the seed never touches it again.
+
 ```markdown
 # House rules
 
@@ -221,7 +226,9 @@ The data directory is `/data` inside the agent's microVM, and the same files app
 
 - Seed before the first boot: set `INSTINCT_PERSONA` (and `INSTINCT_AGENT_NAME`,
   `INSTINCT_MODEL`) as environment variables on the agent in the Maritime dashboard, or in
-  the gateway's env for every agent it creates.
+  the gateway's env for every agent it creates. `INSTINCT_INSTRUCTIONS` seeds `AGENTS.md`
+  the same way and, unlike the persona, follows a changed value on redeploy until the
+  owner edits the file.
 - Edit later: open the agent in the Maritime dashboard and edit `/data/PERSONA.md`,
   `/data/AGENTS.md` or `/data/memory/MEMORY.md` from its shell. The next message uses them.
 - Tiers and grants: the policy tools (`trust_set_tier`, `trust_grant`) work over text, so

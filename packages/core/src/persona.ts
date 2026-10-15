@@ -84,6 +84,53 @@ export function ensurePersona(state: StateDir, seed?: string): boolean {
   return true;
 }
 
+/**
+ * Create AGENTS.md when it is missing and a seed was given. `seed` is the
+ * INSTINCT_INSTRUCTIONS text a deployer may set (an event brief, house rules);
+ * first boot only, never overwrites. Returns true when the file was created.
+ */
+export function ensureInstructions(state: StateDir, seed?: string): boolean {
+  if (state.exists(AGENTS_FILE)) return false;
+  const text = seed?.trim();
+  if (!text) return false;
+  state.writeText(AGENTS_FILE, text + "\n");
+  return true;
+}
+
+/** The last seed written to AGENTS.md, so a changed seed can tell an untouched file from an owner's edit. */
+export const AGENTS_SEED_FILE = "AGENTS.md.seed";
+
+export type InstructionsSync = "created" | "updated" | "kept" | "none";
+
+/**
+ * Keep AGENTS.md in step with the deployer's INSTINCT_INSTRUCTIONS across redeploys.
+ * Missing file: write the seed. File still byte-equal to the last seed (the owner never
+ * edited it) and the seed changed: overwrite. Owner-edited file: leave it alone. Nothing
+ * to seed: leave everything alone.
+ */
+export function syncInstructions(state: StateDir, seed?: string): InstructionsSync {
+  const text = seed?.trim();
+  if (!text) return "none";
+  const body = text + "\n";
+  if (!state.exists(AGENTS_FILE)) {
+    state.writeText(AGENTS_FILE, body);
+    state.writeText(AGENTS_SEED_FILE, body);
+    return "created";
+  }
+  const current = state.readText(AGENTS_FILE, "");
+  const last = state.readText(AGENTS_SEED_FILE, "");
+  if (current === body) {
+    if (last !== body) state.writeText(AGENTS_SEED_FILE, body);
+    return "kept";
+  }
+  if (last && current.trim() === last.trim()) {
+    state.writeText(AGENTS_FILE, body);
+    state.writeText(AGENTS_SEED_FILE, body);
+    return "updated";
+  }
+  return "kept";
+}
+
 /** AGENTS.md as written, or undefined when absent or blank. */
 export function readAgentsInstructions(state: StateDir): string | undefined {
   const text = state.readText(AGENTS_FILE, "").trim();

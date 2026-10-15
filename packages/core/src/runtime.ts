@@ -187,6 +187,8 @@ export class Conversation {
   /** [sunshine:reactions] A tapback declared the whole reply this run, and whether any other tool ran. */
   acknowledged = false;
   usedOtherTool = false;
+  /** True while the current run was started by the owner's own direct message (see ToolContext.ownerTurn). */
+  ownerTurn = false;
   busy = false;
   /** [sunshine:delivery-mirror] Copies that arrived while a run was going; added when it ends. */
   private pendingNotes: AgentMessage[] = [];
@@ -539,7 +541,11 @@ export class AgentRuntime {
     }
 
     const promptedBefore = approvals.promptedToken();
-    const run = conv.run(prompt).then(
+    // Only a run the owner started with their own words may settle an approval through a tool.
+    conv.ownerTurn = principal.kind === "owner" && !group && !msg.meta?.delegatedResult && APPROVAL_CHANNELS.has(msg.channel);
+    const run = conv.run(prompt).finally(() => {
+      conv.ownerTurn = false;
+    }).then(
       (reply) => ({ ok: true as const, reply }),
       (error: unknown) => ({ ok: false as const, error }),
     );
@@ -612,6 +618,35 @@ export class AgentRuntime {
   /** [sunshine:silent-reply] Keep the decision to stay quiet in the audit log. */
   private recordSilentReply(conversationKey: string, principal: Principal): void {
     this.deps.audit.append({ kind: "policy", conversationKey, principal: principal.id, detail: { silentReply: `${SILENT_REPLY}: nothing sent` } });
+  }
+
+  /**
+   * A task the operator asked for (a `system.task` envelope): runs as the owner in
+   * its own conversation. The result goes to the owner's phone unless the task is
+   * quiet, in which case only its side effects (memory, schedules) remain. Like a
+   * scheduled job, the owner did not write the prompt, so ownerTurn stays false and
+   * approval_settle is refused inside it.
+   */
+  async runSystemTask(task: { id: string; name?: string; prompt: string; quiet?: boolean }): Promise<string> {
+    const principal = this.ownerPrincipal();
+    const key = `system:${task.id}`;
+    const conv = this.conversation(key, principal);
+    this.deps.audit.append({ kind: "schedule", conversationKey: key, principal: principal.id, detail: { systemTask: task.id, name: task.name, quiet: task.quiet === true } });
+    let text = "";
+    try {
+      text = await conv.run(task.prompt);
+    } catch (error) {
+      this.auditError(key, principal, error);
+      throw error;
+    }
+    if (!task.quiet && text.trim()) {
+      // [sunshine:silent-reply] [sunshine:reply-guard] As for a scheduled job: the stay-quiet word is
+      // never texted, and a task that already texted the owner with a tool sends nothing more.
+      if (isSilentReply(text)) this.recordSilentReply(key, principal);
+      else if (conv.repliedViaTool) this.recordSkippedReply(key, principal, text);
+      else await this.sendToOwner(text, principal, key);
+    }
+    return text;
   }
 
   // -------------------------------------------------------------------------
@@ -831,17 +866,24 @@ export class AgentRuntime {
     const verb = match.approved ? "approved" : "denied";
     audit.append({ kind: "approval", conversationKey: resolved.conversationKey, principal: principal.id, detail: { token: resolved.token, status: resolved.status, summary: resolved.summary } });
 
-    // A relay approval (ask_owner) informs the model through the follow-up only; it never
-    // pre-authorises a policy ask.
-    if (match.approved && resolved.capability !== "owner.relay") this.rememberApproved(resolved);
-
     const note = `${match.approved ? "Approved" : "Denied"}: ${resolved.summary}`;
-    await this.resumeConversation(resolved.conversationKey, `Owner ${verb}: ${resolved.summary}`);
+    await this.afterApproval(resolved, match.approved);
 
     if (DELIVERABLE.has(msg.channel)) {
       await this.safeSend({ channel: msg.channel as OutboundChannel, conversationKey: msg.conversationKey, text: note, replyRef: msg.replyRef }, principal, msg.conversationKey);
     }
     return note;
+  }
+
+  /**
+   * What happens once an approval is settled, whether by a yes/no text or by the
+   * approval_settle tool: remember a policy grant, then wake the conversation that
+   * asked. A relay approval (ask_owner) informs the model through the follow-up only;
+   * it never pre-authorises a policy ask.
+   */
+  async afterApproval(approval: Approval, approved: boolean): Promise<void> {
+    if (approved && approval.capability !== "owner.relay") this.rememberApproved(approval);
+    await this.resumeConversation(approval.conversationKey, `Owner ${approved ? "approved" : "denied"}: ${approval.summary}`);
   }
 
   /** Wake the conversation that was waiting on the owner. Busy: queue. Idle: run and deliver. */
@@ -1088,6 +1130,7 @@ export class AgentRuntime {
         if (conv.replyRef.taskId) this.a2aStore.recordTask({ taskId: conv.replyRef.taskId, state });
       },
       channel: conv.channel,
+      get ownerTurn() { return conv.ownerTurn; },
       now: this.now,
     };
     const visible = (t: RegisteredTool) => t.spec.meta.capabilities.every((c) => policy.canEver(conv.principal, c));
@@ -1454,7 +1497,8 @@ function safeReplyTarget(meta: ToolMeta | undefined, args: unknown): ReplyTarget
 function reachesOwnAudience(conv: Conversation, target: ReplyTarget | undefined): boolean {
   if (target === "current") return true;
   if (target !== "owner") return false;
-  if (conv.channel === "scheduled") return true;
+  // [sunshine:reply-guard] A system task (upstream's `system.task`) also runs as the owner with no thread of its own.
+  if (conv.channel === "scheduled" || conv.channel === "system") return true;
   const privateOwnerText = conv.principal.kind === "owner" && (conv.channel === "imessage" || conv.channel === "sms") && conv.deliveryKey === conv.key;
   return privateOwnerText;
 }
@@ -1497,7 +1541,9 @@ export function hashArgs(args: unknown): string {
 function approvalText(approval: Approval, requester: Principal, config: InstinctConfig): string {
   const who = requester.kind === "owner" ? "" : ` (asked by ${requester.displayName})`;
   const amount = approval.amountUsd !== undefined ? ` ($${approval.amountUsd.toFixed(2)})` : "";
-  return `${approval.summary}${amount}${who}. Reply YES or NO. Token ${approval.token}. From ${config.agent.name}.`;
+  // A plain question, no token and no protocol words: a bare yes or no settles it, anything else the model settles.
+  void config;
+  return `${approval.summary}${amount}${who}. Want me to go ahead?`;
 }
 
 function untrustedLabel(msg: InboundMessage, principal: Principal): string {

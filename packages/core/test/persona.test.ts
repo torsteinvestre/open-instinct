@@ -5,7 +5,10 @@ import {
   AGENTS_FILE,
   DEFAULT_PERSONA,
   PERSONA_FILE,
+  AGENTS_SEED_FILE,
+  ensureInstructions,
   ensurePersona,
+  syncInstructions,
   isDefaultPersona,
   personaText,
   readAgentsInstructions,
@@ -73,5 +76,50 @@ describe("persona files", () => {
     expect(DEFAULT_PERSONA.split("\n").length).toBeLessThan(40);
     for (const heading of ["## Voice", "## Texting style", "## Never"]) expect(DEFAULT_PERSONA).toContain(heading);
     expect(DEFAULT_PERSONA).not.toMatch(/—/); // no em-dashes, house style
+  });
+});
+
+describe("ensureInstructions", () => {
+  it("writes AGENTS.md from the seed once, never without a seed, never over an existing file", () => {
+    const state = tempState();
+    expect(ensureInstructions(state)).toBe(false);
+    expect(ensureInstructions(state, "   ")).toBe(false);
+    expect(state.exists(AGENTS_FILE)).toBe(false);
+
+    expect(ensureInstructions(state, "  # Event\n\nYou are at a conference.  ")).toBe(true);
+    expect(fs.readFileSync(path.join(state.root, AGENTS_FILE), "utf8")).toBe("# Event\n\nYou are at a conference.\n");
+    expect(readAgentsInstructions(state)).toBe("# Event\n\nYou are at a conference.");
+
+    expect(ensureInstructions(state, "# Something else")).toBe(false);
+    expect(readAgentsInstructions(state)).toBe("# Event\n\nYou are at a conference.");
+  });
+});
+
+describe("syncInstructions", () => {
+  it("creates, updates an untouched file when the seed changes, and never overwrites an owner's edit", () => {
+    const state = tempState();
+    expect(syncInstructions(state)).toBe("none");
+    expect(state.exists(AGENTS_FILE)).toBe(false);
+    expect(syncInstructions(state, "# Event v1")).toBe("created");
+    expect(readAgentsInstructions(state)).toBe("# Event v1");
+    expect(state.readText(AGENTS_SEED_FILE, "")).toBe("# Event v1\n");
+    expect(syncInstructions(state, "# Event v1")).toBe("kept");
+    expect(syncInstructions(state, "# Event v2")).toBe("updated");
+    expect(readAgentsInstructions(state)).toBe("# Event v2");
+    state.writeText(AGENTS_FILE, "# Event v2\n\nMy own rule: no emojis.\n");
+    expect(syncInstructions(state, "# Event v3")).toBe("kept");
+    expect(readAgentsInstructions(state)).toBe("# Event v2\n\nMy own rule: no emojis.");
+    expect(syncInstructions(state, "   ")).toBe("none");
+  });
+
+  it("adopts a file written by the older seed-once path as the baseline", () => {
+    const state = tempState();
+    expect(ensureInstructions(state, "# Old seed")).toBe(true);
+    expect(state.exists(AGENTS_SEED_FILE)).toBe(false);
+    // No marker yet: the file is treated as the owner's until the seed matches it once.
+    expect(syncInstructions(state, "# New seed")).toBe("kept");
+    expect(syncInstructions(state, "# Old seed")).toBe("kept");
+    expect(state.readText(AGENTS_SEED_FILE, "")).toBe("# Old seed\n");
+    expect(syncInstructions(state, "# New seed")).toBe("updated");
   });
 });

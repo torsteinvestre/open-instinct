@@ -314,8 +314,8 @@ function skillsSection(skillsPrompt: string | undefined): string | undefined {
 
 function approvalsSection(pending: Approval[] | undefined): string | undefined {
   if (!pending || pending.length === 0) return undefined;
-  const lines = pending.map((a) => `- ${a.summary} (requested by ${a.requestedBy}, expires ${a.expiresAt})`);
-  return `# Pending approvals\n${lines.join("\n")}`;
+  const lines = pending.map((a) => `- ${a.token}: ${a.summary} (requested by ${a.requestedBy}, expires ${a.expiresAt})`);
+  return `# Pending approvals\n${lines.join("\n")}\nThese are waiting on the owner. A plain yes or no from them is handled before you see it. When the owner answers one in their own words ("tell him yes", "no, skip it", "go ahead"), call approval_settle with its token (payments are the exception: only their own plain yes settles those, so ask whether they want to go ahead); never say it is done without calling it, and never ask the owner the same question again. The tokens are for you: never show the owner a token or ask them to reply YES or NO; ask the way a person would ("want me to say yes?").`;
 }
 
 function longTaskSection(channel: Channel): string {

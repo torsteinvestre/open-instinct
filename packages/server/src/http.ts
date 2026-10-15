@@ -13,7 +13,7 @@
  */
 import http from "node:http";
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import { decodeEvent } from "@open-instinct/core";
+import { decodeEvent, systemTaskOf } from "@open-instinct/core";
 import type { AgentRuntime, HandleResult, InboundMessage, InstinctConfig, OutboundMessage, ScheduleEntry, Scheduler, StateDir } from "@open-instinct/core";
 import { DurableInbox, parseInkboxEvent, verifyInkboxSignature } from "@open-instinct/inkbox";
 
@@ -37,7 +37,7 @@ export interface WalletCallback {
 export interface HttpApp {
   state?: StateDir;
   hydrateInbound?(msg: InboundMessage): Promise<InboundMessage>;
-  runtime: Pick<AgentRuntime, "handleInbound" | "stats"> & Partial<Pick<AgentRuntime, "runScheduled">>;
+  runtime: Pick<AgentRuntime, "handleInbound" | "stats"> & Partial<Pick<AgentRuntime, "runScheduled" | "runSystemTask">>;
   scheduler: Pick<Scheduler, "toMaritimeSchedules"> & Partial<Pick<Scheduler, "list" | "markRan">>;
   config: InstinctConfig;
   computerKind?: string;
@@ -161,9 +161,9 @@ export function presentedToken(headers: http.IncomingHttpHeaders): string | unde
 
 /**
  * The /chat body is one of: an Inkbox event the gateway wrapped in an envelope, a
- * Link OAuth callback the gateway relayed, a Maritime schedule wake, or the owner
- * typing. Envelope replies go out through the outbox, so the HTTP response carries
- * only an acknowledgement.
+ * Link OAuth callback the gateway relayed, a system task from the operator's front
+ * door, a Maritime schedule wake, or the owner typing. Envelope replies go out
+ * through the outbox, so the HTTP response carries only an acknowledgement.
  */
 export async function handleChat(app: HttpApp, body: ChatRequest, now: Date = new Date()): Promise<ChatResponse> {
   const event = decodeEvent(body.message);
@@ -173,6 +173,13 @@ export async function handleChat(app: HttpApp, body: ChatRequest, now: Date = ne
       if (!app.wallet) return { response: "", acked: true, blocked: "payments not configured" };
       await app.wallet.handleCallback(link.code, link.state);
       return { response: "", acked: true };
+    }
+    const task = systemTaskOf(event);
+    if (task) {
+      if (!app.runtime.runSystemTask) return { response: "", acked: true, blocked: "system tasks are not supported by this runtime" };
+      // Like a schedule wake: the task runs past the HTTP budget and reports (or not) through the outbox.
+      void app.runtime.runSystemTask(task).catch(() => undefined);
+      return { response: "", acked: true, conversationKey: `system:${task.id}` };
     }
     const inbound = parseInkboxEvent(event);
     if (!inbound) return { response: "", acked: true };

@@ -31,6 +31,13 @@ export type ComposioSessionMode = "direct" | "router";
 export const OPENAI_COMPLETIONS_TOOL_LIMIT = 128;
 
 /**
+ * [sunshine:apps] Composio's remote code tools, left out: a sandbox that runs code on Composio's
+ * servers, which email and calendar never need, and about 2,400 tokens on every message in router
+ * mode (measured 2026-10-15: the workbench 2,019, bash 406).
+ */
+export const LEFT_OUT_TOOLS: ReadonlySet<string> = new Set(["app_composio_remote_workbench", "app_composio_remote_bash_tool"]);
+
+/**
  * The session mode for this agent. `COMPOSIO_MODE=direct|router` wins. Unset, it is
  * `router` for a model served through an OpenAI-style chat completions API (the
  * Maritime LLM proxy among them), because direct Gmail plus Calendar alone lists
@@ -257,11 +264,11 @@ export class ComposioApps {
     }
   }
 
-  /** Every MCP tool wrapped as a RegisteredTool. Cached after the first call. */
+  /** Every MCP tool wrapped as a RegisteredTool, but the ones left out on purpose. Cached after the first call. */
   async tools(opts: { refresh?: boolean } = {}): Promise<RegisteredTool[]> {
     await this.connect();
     if (!this.cachedTools || opts.refresh) {
-      this.cachedTools = await wrapMcpTools(this.requireClient());
+      this.cachedTools = (await wrapMcpTools(this.requireClient())).filter((t) => !LEFT_OUT_TOOLS.has(t.spec.name)); // [sunshine:apps]
       this.log(`composio: ${this.cachedTools.length} app tools`);
     }
     return this.cachedTools;

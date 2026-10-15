@@ -361,6 +361,13 @@ describe("ComposioApps.tools", () => {
     expect(await apps.tools()).toBe(tools);
     expect(await apps.tools({ refresh: true })).not.toBe(tools);
   });
+
+  // [sunshine:apps] The remote code sandbox is never offered: not needed for apps, 2,400 tokens a message.
+  it("leaves out Composio's remote code tools", async () => {
+    const mcp = fakeMcp([{ name: "COMPOSIO_SEARCH_TOOLS" }, { name: "COMPOSIO_REMOTE_WORKBENCH" }, { name: "COMPOSIO_REMOTE_BASH_TOOL" }, { name: "COMPOSIO_MULTI_EXECUTE_TOOL" }]);
+    const apps = new ComposioApps({ ...base, mode: "router", state: fakeState(), adapters: { createComposio: () => fakeComposio().client, connectMcp: mcp.connectMcp } });
+    expect((await apps.tools()).map((t) => t.spec.name)).toEqual(["app_composio_search_tools", "app_composio_multi_execute_tool"]);
+  });
 });
 
 describe("ComposioApps.connectLink and connectedToolkits", () => {

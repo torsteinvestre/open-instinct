@@ -437,6 +437,25 @@ highlights (200 characters each).
 delete the tagged blocks in the files above and their tests (`packages/server/test/memory-pass.test.ts`,
 `packages/core/test/runtime.test.ts`, `memory.test.ts`, `core-tools.test.ts`).
 
+### `[sunshine:apps]`: Gmail and Calendar through Composio's router, without its code sandbox
+
+**Measured** (2026-10-15, a local boot with the live agent's settings, Anthropic's token counter):
+Gmail and Google Calendar in Composio's **direct** mode are 109 tools, about **100,000 tokens on every
+message** (nearly six times the whole prompt). **Router** mode is 6 meta tools, about 8,600 tokens, of
+which the remote workbench (2,019) and remote bash (406) run code on Composio's servers, which email
+and calendar never need.
+
+**What the fork adds.** `LEFT_OUT_TOOLS` in `packages/apps/src/composio.ts`: those two are never
+offered. Router mode then adds about **6,200 tokens** a message (search 2,613, run 1,698, connections
+915, tool schemas 534, apps_list and guidance). The agent runs with `COMPOSIO_MODE=router` and
+`COMPOSIO_TOOLKITS=gmail,googlecalendar` (Maritime settings), so apps are the owner's only.
+
+**Next** (planned): tools loaded only when needed, so apps cost nothing until used, and a short list
+of direct actions chosen from what is actually used. Pi already supports adding tools mid-conversation
+without breaking the prompt cache (`tool_addition`, Sonnet 5.5 supports it).
+
+**To remove.** Delete `LEFT_OUT_TOOLS` and its filter in `tools()`, and the test next to it.
+
 ### Long replies (investigated 2026-10-15, nothing changed)
 
 A money question ("what should be considered: fund vs apartment") got a 1,435-character, seven-point

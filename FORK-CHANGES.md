@@ -370,6 +370,13 @@ unreachable (the credits ran out twice). And nothing limited how often a repeati
   interval that fits. One-off reminders and jobs that run in code (the news, the memory notes) are not
   counted. A limit taken from the platform, not a judgment of how often is reasonable.
 
+**Tested with the real model** (`packages/server/scenarios/reminder-kinds.mjs`, about 5 cents a round):
+9 of 9 as expected. Five plain reminders (in 5 minutes, at 18, hourly 9-17, weekdays 8:55, Friday 12)
+were saved as messages; three jobs (the daily weather, "only tell me if it rains", the morning XRP
+price) as prompts; "every 2 minutes, PING" was refused and the reply explained it and offered what fits
+("every 2 minutes for a limited window, like 14:10 to 14:50"). Found and fixed: an example message with
+the owner's name came back in every reminder ("…, Torstein"), and the refusal counted only to 41.
+
 **What it does not cover.** Repeating jobs that run the model ("every 10 minutes, check the price")
 still cost per run; a daily spending limit per owner is the planned safety net for those.
 

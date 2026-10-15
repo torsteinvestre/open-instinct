@@ -151,7 +151,8 @@ function scheduleTools({ scheduler, config }: CoreToolDeps): RegisteredTool[] {
       "Schedule a reminder or a job. Give cron (5 fields, in tz) for repeating ones; inMinutes for a one-shot \"in N minutes/hours\" (the time is computed for you); or at (ISO timestamp) for a one-shot at a clock time or date. For a plain reminder, whose words need no thinking when it fires, give text: that exact message is sent each time and nothing else runs, so it costs nothing and always arrives. For a job that has to look something up or decide at the time, give prompt instead: it runs as the owner and the result is texted to them.",
     parameters: Type.Object({
       name: Type.String({ description: "Short name, e.g. \"morning briefing\"" }),
-      text: Type.Optional(Type.String({ description: "A plain reminder's exact message, written as you would text it (\"Time to stretch, Torstein\", \"Call mom!\", \"Dentist at 14:00 today\"). Leave it out when the job must check something or decide (the weather, a price, \"only if\"), and give prompt." })),
+      // [sunshine:reminders] No name in the examples: tested, one with the owner's name in it came back in every reminder.
+      text: Type.Optional(Type.String({ description: "A plain reminder's exact message, written as you would text it (\"Stretch break\", \"Call mom\", \"Dentist at 14:00 today\"). Leave it out when the job must check something or decide (the weather, a price, \"only if\"), and give prompt." })),
       prompt: Type.Optional(Type.String({ description: "What to do when it fires, for a job that looks something up or decides. Not with text." })),
       cron: Type.Optional(Type.String({ description: "minute hour day-of-month month day-of-week" })),
       tz: Type.Optional(Type.String({ description: "IANA timezone; defaults to the owner's" })),
@@ -183,7 +184,8 @@ function scheduleTools({ scheduler, config }: CoreToolDeps): RegisteredTool[] {
       if (cron) {
         let runs: number;
         try {
-          runs = busiestDayRuns(cron, zone, ctx.now(), REPEATING_SEND_SHARE);
+          // Counted in full (at most every minute of a day), so a refusal states the real number.
+          runs = busiestDayRuns(cron, zone, ctx.now(), 24 * 60);
         } catch (err) {
           return { content: [{ type: "text", text: `Invalid cron: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
         }

@@ -198,7 +198,7 @@ describe("schedule tools", () => {
   it("refuses repeating reminders that would use more than their share of the day's texts, and says why", async () => {
     const { run, text, deps } = setup();
     const tooOften = text(await run("schedule_create", { name: "ping", text: "PING", cron: "*/2 * * * *", tz: "Europe/Oslo" }));
-    expect(tooOften).toMatch(/^Not scheduled: that is up to \d+ texts a day\./);
+    expect(tooOften).toMatch(/^Not scheduled: that is up to 720 texts a day\./);
     expect(tooOften).toContain("can send 100 texts a day in total");
     expect(deps.scheduler.list()).toHaveLength(0);
     // Every half hour from 08:00 to 21:30 is 28 a day: fine. Another 24 a day on top is not.

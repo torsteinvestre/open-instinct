@@ -96,15 +96,29 @@ describe("scheduling the checks", () => {
 
   it("follows the settings: interval and quiet hours move the job, off removes it, and a job deleted by hand comes back", async () => {
     w.ensureStarted();
-    await run("watch_settings", { everyMinutes: 30, quietStart: "23:00", quietEnd: "07:00" });
-    expect(f.scheduler.list().map((j) => j.cron)).toEqual(["0,30 7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22 * * *"]);
+    await run("watch_settings", { everyMinutes: 180, quietStart: "23:00", quietEnd: "07:00" });
+    expect(f.scheduler.list().map((j) => j.cron)).toEqual(["0 7,10,13,16,19,22 * * *"]);
+    // [sunshine:watcher] Never more often than every two hours.
     expect(isError(await run("watch_settings", { everyMinutes: 7 }))).toBe(true);
+    expect(textOf(await run("watch_settings", { everyMinutes: 60 }))).toMatch(/never more often than every two hours/);
+    expect(f.scheduler.list().map((j) => j.cron)).toEqual(["0 7,10,13,16,19,22 * * *"]);
+    await run("watch_settings", { everyMinutes: 1440 });
+    expect(f.scheduler.list().map((j) => j.cron)).toEqual(["0 7 * * *"]);
     await run("watch_settings", { on: false });
     expect(f.scheduler.list()).toEqual([]);
     await run("watch_settings", { on: true });
     f.scheduler.delete(f.scheduler.list()[0]!.id);
     await run("watch_settings", { on: true });
     expect(f.scheduler.list()).toHaveLength(1);
+  });
+
+  // [sunshine:watcher] Settings saved before the two-hour minimum (2026-10-15) follow it at the next boot.
+  it("treats an older setting faster than two hours as two hours, and moves the job at the next start", () => {
+    const old = f.scheduler.create({ name: "news watch every 60 min", prompt: WATCH_PROMPT, cron: "0 8,9,10,11,12,13,14,15,16,17,18,19,20,21 * * *", tz: "Europe/Oslo", enabled: true, gate: WATCH_GATE, toolRepliesOnly: true });
+    f.state.writeJson("watcher.json", { on: true, everyMinutes: 60, startedAt: NOON.toISOString(), scheduleIds: [old.id] });
+    expect(new WatchStore(f.state, () => NOON).read().everyMinutes).toBe(120);
+    w.ensureStarted();
+    expect(f.scheduler.list().map((j) => j.cron)).toEqual(["0 8,10,12,14,16,18,20 * * *"]);
   });
 
   it("the gate runs a check in code and never wakes the agent", async () => {

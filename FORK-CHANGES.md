@@ -122,8 +122,9 @@ interests, and otherwise stays silent. Plan and reasoning: `~/sunshine-ops/WATCH
 (private notes). Principle: code for facts and fences, reasoning for taste.
 
 **How a check works.** Every two hours outside the owner's quiet hours by default (one scheduled job
-carrying `gate: "watcher"`; the owner can ask for 15 minutes to 3 hours), entirely in code, never
-waking the agent:
+carrying `gate: "watcher"`; the owner can ask for 2, 3, 4, 6, 8, 12 or 24 hours, never faster: an
+older faster setting counts as two hours and the job follows at the next start), entirely in code,
+never waking the agent:
 
 1. Fences: off, quiet hours, a daily model-call budget.
 2. Collect: Google News RSS per search, last day only, headlines already seen skipped (by link
@@ -190,7 +191,7 @@ new?" in its own reply), `watch_journal` ("what did you skip?"), `watch_later`, 
 | Which models, or one step off | env `WATCHER_SCREEN_MODEL` (unset: no screen), `WATCHER_DECIDE_MODEL`, `WATCHER_WRITE_MODEL` (`off` disables a step; the writer off sends step 2's text); `boot.ts` |
 | Prompt caching for the steps (off) | `modelCall` in `packages/watcher/src/models.ts`. Off on purpose: Pi caches every call for 5 minutes and storing costs 25% more, but checks run an hour apart, so it was never read back (measured: 0.56 cents a call with it, 0.475 without) |
 | Haiku 5.5 description (Pi 1.0.1 lacks it) | `resolveWatcherModel` in `packages/watcher/src/models.ts` |
-| How often, quiet hours (per owner) | by text to Sunshine (`watch_settings`); defaults in `store.ts` (`DEFAULT_EVERY_MINUTES`, 120) / `clock.ts`. A changed default reaches new owners only |
+| How often, quiet hours (per owner) | by text to Sunshine (`watch_settings`); defaults in `store.ts` (`DEFAULT_EVERY_MINUTES`, 120) / `clock.ts`. A changed default reaches new owners only. The choices: `CHECK_INTERVALS` in `clock.ts` (2 to 24 hours); `checkCron` starts long gaps at the first full hour after quiet hours |
 | How many headlines one check takes on | `headlinesPerCheck`, `HEADLINES_PER_HOUR`, `DECIDE_MAX` in `packages/watcher/src/check.ts` |
 | Text limit, model budget, ask-after hours | constants at the top of `packages/watcher/src/check.ts` |
 | Jev threshold, how many headlines per search | `DEFAULTS` in `packages/watcher/src/scan.ts` |
@@ -347,6 +348,34 @@ Sanna?" from the text it had sent (`packages/server/scenarios/mirror.mjs`, on vs
 **To remove.** Set `features.deliveryMirror` to false, or revert its commit
 (`git log --grep "delivery-mirror"`) or delete the tagged blocks in `channel.ts`, `runtime.ts`,
 `types.ts`, `boot.ts`, the tests and the scenario.
+
+### `[sunshine:reminders]`: plain reminders cost nothing; repeating ones leave room in the day's texts
+
+**Problem** (2026-10-15). Every reminder, even "drink water", ran a full agent turn: half a cent to a
+few cents each, more when nothing else had run for a while, and nothing at all when the model was
+unreachable (the credits ran out twice). And nothing limited how often a repeating one fired: "every
+2 minutes, text me PING" worked in testing, which would cost dollars a day and use up the day's texts
+(Inkbox lets an agent send 100 iMessages per rolling 24 hours).
+
+**What the fork adds.**
+
+- `schedule_create` takes `text` or `prompt` (`packages/core/src/core-tools.ts`). A plain reminder,
+  whose words need no thinking when it fires, gives `text`: that message is stored on the job
+  (`ScheduleEntry.text`, `types.ts`) and `runScheduled` sends it as written (`runtime.ts`), with no
+  model run. A job that looks something up or decides gives `prompt`, as before. The model chooses,
+  from the tool's description; the result repeats the exact message so its confirmation can say it.
+- A repeating job is refused when, on its busiest day, it and the other repeating jobs would plan more
+  than 40 texts (`REPEATING_SEND_SHARE` of `DAILY_SEND_LIMIT` 100; `busiestDayRuns` in
+  `scheduler.ts` counts them). The refusal says why, so the model can tell the owner and offer an
+  interval that fits. One-off reminders and jobs that run in code (the news, the memory notes) are not
+  counted. A limit taken from the platform, not a judgment of how often is reasonable.
+
+**What it does not cover.** Repeating jobs that run the model ("every 10 minutes, check the price")
+still cost per run; a daily spending limit per owner is the planned safety net for those.
+
+**To remove.** Revert the commit (`git log --grep "sunshine:reminders"`) or delete the tagged blocks
+in the files above and their tests (`core-tools.test.ts`, `scheduler.test.ts`, `runtime.test.ts`).
+Jobs saved with `text` would then run their prompt ("Send the plain reminder: …") through the model.
 
 ### `[sunshine:memory]`: Sunshine keeps notes on what matters
 

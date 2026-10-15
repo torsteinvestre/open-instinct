@@ -577,6 +577,14 @@ export class AgentRuntime {
       }
       if (!wake) return;
     }
+    // [sunshine:reminders] A plain reminder goes out as written: no model run, so it costs nothing and
+    // still arrives when the model is unreachable (the credits ran out twice in October 2026). The
+    // delivery mirror copies it into the owner's thread like any reminder.
+    if (entry.text) {
+      this.deps.audit.append({ kind: "schedule", conversationKey: key, principal: principal.id, detail: { id: entry.id, name: entry.name, fired: true, plain: true } });
+      await this.sendToOwner(entry.text, principal, key);
+      return;
+    }
     const conv = this.conversation(key, principal);
     this.deps.audit.append({ kind: "schedule", conversationKey: key, principal: principal.id, detail: { id: entry.id, name: entry.name, fired: true } });
     let text = "";

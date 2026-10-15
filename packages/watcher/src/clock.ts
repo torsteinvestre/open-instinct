@@ -40,8 +40,20 @@ export function inQuietHours(at: Date, tz: string, quiet: QuietHours): boolean {
   return start < end ? now >= start && now < end : now >= start || now < end;
 }
 
-/** How often a check may run, in minutes. */
-export const CHECK_INTERVALS = [15, 20, 30, 60, 120, 180] as const;
+/**
+ * How often a check may run, in minutes: every 2 to 24 hours (2026-10-15). Faster cost up to four
+ * times as much and news is rarely worse for an hour's wait; slower is the owner's choice.
+ */
+export const CHECK_INTERVALS = [120, 180, 240, 360, 480, 720, 1440] as const;
+/** The shortest gap. A setting below it, saved before the change, counts as this. */
+export const MIN_CHECK_MINUTES = CHECK_INTERVALS[0];
+
+/** A gap as words after "every": "2 hours", "hour", "90 minutes". */
+export function everyText(everyMinutes: number): string {
+  if (everyMinutes % 60 !== 0) return `${everyMinutes} minutes`;
+  const h = everyMinutes / 60;
+  return h === 1 ? "hour" : `${h} hours`;
+}
 
 function inQuietMinute(minuteOfDay: number, quiet: QuietHours): boolean {
   const start = minutes(quiet.start);
@@ -53,13 +65,16 @@ function inQuietMinute(minuteOfDay: number, quiet: QuietHours): boolean {
 /**
  * The cron for checks every `everyMinutes` outside quiet hours, in the owner's local time:
  * every 60 with quiet 22:00-08:00 is "0 8,9,...,21 * * *". Checks start on the hour; with gaps of
- * two or three hours they start at the end of quiet hours. The check itself also looks at the
- * clock, so a quiet hour that ends at :30 is still respected exactly.
+ * two hours or more they start at the first full hour after quiet hours. Undefined when quiet
+ * hours leave no hour at all. The check itself also looks at the clock, so a quiet hour that ends
+ * at :30 is still respected exactly.
  */
-export function checkCron(everyMinutes: number, quiet: QuietHours): string {
+export function checkCron(everyMinutes: number, quiet: QuietHours): string | undefined {
   const mins = everyMinutes < 60 ? Array.from({ length: Math.floor(60 / everyMinutes) }, (_, i) => i * everyMinutes) : [0];
   const step = everyMinutes < 60 ? 1 : Math.round(everyMinutes / 60);
-  const first = Math.floor(minutes(quiet.end) / 60);
+  // [sunshine:watcher] The first full hour after quiet hours: with quiet until 07:30 the 07:00 check
+  // fell inside them, so a daily check had no hour left and the cron fell back to every hour.
+  const first = Math.ceil(minutes(quiet.end) / 60) % 24;
   const hours: number[] = [];
   for (let i = 0; i < 24; i++) {
     const h = (first + i) % 24;
@@ -67,7 +82,7 @@ export function checkCron(everyMinutes: number, quiet: QuietHours): string {
     if (mins.some((m) => !inQuietMinute(h * 60 + m, quiet))) hours.push(h);
   }
   hours.sort((a, b) => a - b);
-  return `${mins.join(",")} ${hours.length ? hours.join(",") : "*"} * * *`;
+  return hours.length ? `${mins.join(",")} ${hours.join(",")} * * *` : undefined;
 }
 
 /** YYYY-MM-DD in `tz`, so "today" means the owner's day. */

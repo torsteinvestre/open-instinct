@@ -6,7 +6,7 @@
  */
 import { randomBytes } from "node:crypto";
 import type { StateDir } from "@open-instinct/core";
-import { DEFAULT_QUIET, type QuietHours } from "./clock.js";
+import { DEFAULT_QUIET, MIN_CHECK_MINUTES, type QuietHours } from "./clock.js";
 
 export const WATCH_FILE = "watcher.json";
 export const PROFILE_MAX_CHARS = 2000;
@@ -197,6 +197,8 @@ export class WatchStore {
     if (!s.quiet || typeof s.quiet.start !== "string" || typeof s.quiet.end !== "string") s.quiet = { ...DEFAULT_QUIET };
     if (typeof s.profile !== "string") s.profile = "";
     if (typeof s.everyMinutes !== "number") s.everyMinutes = DEFAULT_EVERY_MINUTES;
+    // [sunshine:watcher] Faster than every two hours is no longer offered; an older setting counts as two hours.
+    if (s.everyMinutes < MIN_CHECK_MINUTES) s.everyMinutes = MIN_CHECK_MINUTES;
     this.prune(s);
     return s;
   }

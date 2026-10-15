@@ -12,7 +12,7 @@ import { checkPublicTarget, type Lookup } from "./net-guard.js";
 import { pdfPageCount, renderMarkdownToPdf } from "./pdf.js";
 import { wrapUntrusted } from "./prompt.js";
 import type { Outbox } from "./runtime.js";
-import type { Scheduler } from "./scheduler.js";
+import { busiestDayRuns, type Scheduler } from "./scheduler.js";
 import { SPEND_CAPABILITIES } from "./policy.js";
 import { defineTool, textResult, type RegisteredTool, type ToolContext, type ToolResultLike } from "./tools.js";
 import type { Approval, AuditKind, InstinctConfig, ScheduleEntry } from "./types.js";
@@ -121,6 +121,16 @@ function memoryTools({ memory }: CoreToolDeps): RegisteredTool[] {
 /** [sunshine:relative-time] Longest "in N minutes" accepted: a year. */
 export const MAX_IN_MINUTES = 366 * 24 * 60;
 
+/**
+ * [sunshine:reminders] Inkbox lets an agent send 100 iMessages per rolling 24 hours (its API docs,
+ * read 2026-10-15). Repeating jobs together may plan up to 40 of them a day, so there is always room
+ * to talk: the news sends at most 6, and a busy day of conversation took about 40.
+ */
+export const DAILY_SEND_LIMIT = 100;
+export const REPEATING_SEND_SHARE = 40;
+/** [sunshine:reminders] Longest plain reminder text. */
+export const REMINDER_TEXT_MAX = 600;
+
 /** [sunshine:relative-time] A run time as the owner reads it, e.g. "Wed 14 Oct, 11:32 Europe/Oslo". */
 export function localTime(iso: string, tz: string): string {
   try {
@@ -137,10 +147,12 @@ function scheduleTools({ scheduler, config }: CoreToolDeps): RegisteredTool[] {
     label: "Create schedule",
     description:
       // [sunshine:relative-time] inMinutes added: "in N minutes" is computed here, not by the model.
-      "Schedule a prompt to run later. Give cron (5 fields, in tz) for repeating jobs; inMinutes for a one-shot \"in N minutes/hours\" (the time is computed for you); or at (ISO timestamp) for a one-shot at a clock time or date. The prompt runs as the owner and the result is texted to them.",
+      // [sunshine:reminders] text added: a plain reminder is sent as written, with no model run.
+      "Schedule a reminder or a job. Give cron (5 fields, in tz) for repeating ones; inMinutes for a one-shot \"in N minutes/hours\" (the time is computed for you); or at (ISO timestamp) for a one-shot at a clock time or date. For a plain reminder, whose words need no thinking when it fires, give text: that exact message is sent each time and nothing else runs, so it costs nothing and always arrives. For a job that has to look something up or decide at the time, give prompt instead: it runs as the owner and the result is texted to them.",
     parameters: Type.Object({
       name: Type.String({ description: "Short name, e.g. \"morning briefing\"" }),
-      prompt: Type.String({ description: "What to do when it fires" }),
+      text: Type.Optional(Type.String({ description: "A plain reminder's exact message, written as you would text it (\"Time to stretch, Torstein\", \"Call mom!\", \"Dentist at 14:00 today\"). Leave it out when the job must check something or decide (the weather, a price, \"only if\"), and give prompt." })),
+      prompt: Type.Optional(Type.String({ description: "What to do when it fires, for a job that looks something up or decides. Not with text." })),
       cron: Type.Optional(Type.String({ description: "minute hour day-of-month month day-of-week" })),
       tz: Type.Optional(Type.String({ description: "IANA timezone; defaults to the owner's" })),
       // [sunshine:relative-time] The zone is asked for: a bare time is read in the server's zone.
@@ -149,7 +161,12 @@ function scheduleTools({ scheduler, config }: CoreToolDeps): RegisteredTool[] {
       inMinutes: Type.Optional(Type.Number({ description: "Minutes from now for a one-shot run: \"in 5 minutes\" = 5, \"in 2 hours\" = 120. The time is computed from the real clock." })),
     }),
     meta: { capabilities: ["schedule.manage"], group: "schedule", describe: (a) => `schedule ${argText(a, "name")}` },
-    execute: async ({ name, prompt, cron, tz, at, inMinutes }, ctx) => {
+    execute: async ({ name, text, prompt, cron, tz, at, inMinutes }, ctx) => {
+      // [sunshine:reminders] One of the two: a plain message, or a job for the model.
+      const plain = text?.trim();
+      if (plain && prompt?.trim()) return { content: [{ type: "text", text: "Give text for a plain reminder or prompt for a job, not both." }], isError: true };
+      if (!plain && !prompt?.trim()) return { content: [{ type: "text", text: "Give text (a plain reminder's exact message) or prompt (a job that looks something up or decides)." }], isError: true };
+      if (plain && plain.length > REMINDER_TEXT_MAX) return { content: [{ type: "text", text: `A plain reminder is at most ${REMINDER_TEXT_MAX} characters.` }], isError: true };
       // [sunshine:relative-time] "In N minutes" becomes a timestamp here, from the real clock.
       if (inMinutes !== undefined) {
         if (cron || at) return { content: [{ type: "text", text: "Give inMinutes alone, without cron or at." }], isError: true };
@@ -160,17 +177,37 @@ function scheduleTools({ scheduler, config }: CoreToolDeps): RegisteredTool[] {
       const when = inMinutes !== undefined ? new Date(ctx.now().getTime() + inMinutes * 60_000).toISOString() : at;
       if (!cron && !when) return { content: [{ type: "text", text: "Give cron, at or inMinutes." }], isError: true };
       if (when && Number.isNaN(Date.parse(when))) return { content: [{ type: "text", text: `Invalid timestamp: ${when}` }], isError: true };
+      // [sunshine:reminders] Repeating jobs must leave room in the day's texts. A fact, not a taste: the
+      // platform's own limit, so the model can say why and offer something that fits.
+      const zone = tz ?? config.owner.timezone;
+      if (cron) {
+        let runs: number;
+        try {
+          runs = busiestDayRuns(cron, zone, ctx.now(), REPEATING_SEND_SHARE);
+        } catch (err) {
+          return { content: [{ type: "text", text: `Invalid cron: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+        }
+        const others = scheduler.list().filter((e) => e.cron && e.enabled && !e.gate).reduce((sum, e) => sum + busiestDayRuns(e.cron!, e.tz ?? zone, ctx.now(), REPEATING_SEND_SHARE), 0);
+        if (runs + others > REPEATING_SEND_SHARE) {
+          return {
+            content: [{ type: "text", text: `Not scheduled: that is up to ${runs} texts a day${others ? `, on top of ${others} from repeating reminders already set` : ""}. ${config.agent.name} can send ${DAILY_SEND_LIMIT} texts a day in total, and repeating reminders may plan up to ${REPEATING_SEND_SHARE} of them so there is always room to talk. Tell them that in a line and offer a longer interval or fewer hours that fits.` }],
+            isError: true,
+          };
+        }
+      }
       const entry = scheduler.create({
         name,
-        prompt,
+        prompt: plain ? `Send the plain reminder: ${plain}` : prompt!.trim(),
+        ...(plain ? { text: plain } : {}),
         enabled: true,
         ...(cron ? { cron } : {}),
-        tz: tz ?? config.owner.timezone,
+        tz: zone,
         ...(when ? { nextRunAt: new Date(when).toISOString() } : {}),
       });
       // [sunshine:relative-time] The owner's clock time too, so the model never converts zones itself.
       const local = entry.nextRunAt ? ` (${localTime(entry.nextRunAt, entry.tz ?? config.owner.timezone)})` : "";
-      return textResult(`Scheduled "${entry.name ?? entry.id}" (id ${entry.id}). Next run: ${entry.nextRunAt ?? "unknown"}${local}.`);
+      const sends = plain ? ` It will send exactly: "${plain}".` : "";
+      return textResult(`Scheduled "${entry.name ?? entry.id}" (id ${entry.id}).${sends} Next run: ${entry.nextRunAt ?? "unknown"}${local}.`);
     },
   });
 

@@ -173,6 +173,26 @@ export function cronMatches(spec: CronSpec, d: Date, tz: string): boolean {
   return dayMatches(spec, p) && spec.hour.has(p.hour) && spec.minute.has(p.minute);
 }
 
+/**
+ * [sunshine:reminders] The most runs a cron makes on any one day of the week after `from`, in `tz`.
+ * Counting stops once a day passes `stopAt`, so "every minute" costs no more than it needs to.
+ */
+export function busiestDayRuns(cron: string, tz: string, from: Date, stopAt = 1440): number {
+  const spec = parseCron(cron);
+  const end = from.getTime() + 7 * 24 * 60 * MINUTE;
+  const perDay = new Map<string, number>();
+  let best = 0;
+  let t: Date | undefined = from;
+  while ((t = nextCron(spec, t, tz)) && t.getTime() <= end) {
+    const day = localParts(t, tz).date;
+    const n = (perDay.get(day) ?? 0) + 1;
+    perDay.set(day, n);
+    if (n > best) best = n;
+    if (best > stopAt) break;
+  }
+  return best;
+}
+
 /** First minute strictly after `from` that matches. Undefined if none within two years. */
 export function nextCron(spec: CronSpec, from: Date, tz: string): Date | undefined {
   let t = Math.floor(from.getTime() / MINUTE) * MINUTE + MINUTE;

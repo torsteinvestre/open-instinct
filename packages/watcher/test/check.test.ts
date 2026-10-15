@@ -330,6 +330,14 @@ describe("how many headlines a check takes on", () => {
     const { fetchImpl } = feeds({ "SK Brann": many("brann"), Bergen: many("bergen") });
     return { ...deps([]), fetchImpl };
   }
+  function threeSearches(everyMinutes: number): CheckDeps {
+    store.update((s) => {
+      s.searches = ["Brann", "Bergen", "Vestland"].map((q) => ({ topic: q, query: q, edition: "no-NO" }));
+      s.everyMinutes = everyMinutes;
+    });
+    const { fetchImpl } = feeds({ Brann: many("brann"), Bergen: many("bergen"), Vestland: many("vestland") });
+    return { ...deps([]), fetchImpl };
+  }
 
   it("is an hour's worth for every hour between checks, at least one hour's, at most DECIDE_MAX", () => {
     expect([15, 30, 60, 120, 180].map(headlinesPerCheck)).toEqual([30, 30, 30, 60, 60]);
@@ -342,14 +350,22 @@ describe("how many headlines a check takes on", () => {
     expect(listed(decide.asked[0]!.user)).toHaveLength(60);
   });
 
-  it("hourly, step 2 reads 30, and the ones that did not fit come up in the next check", async () => {
+  it("the ones that did not fit come up in the next check", async () => {
     const decide = fakeModel("sonnet", [nothing(), nothing()]);
-    const d = twoSearches(60);
+    const d = threeSearches(120);
     await runCheck({ ...d, decide }, "scheduled");
     await runCheck({ ...d, decide }, "scheduled");
     const [first, second] = decide.asked.map((a) => listed(a.user));
-    expect(first).toHaveLength(30);
-    expect(second).toHaveLength(30);
+    expect(first).toHaveLength(60);
+    expect(second!.length).toBeGreaterThan(0);
     expect(second!.filter((h) => first!.includes(h))).toEqual([]);
+  });
+
+  // [sunshine:watcher] Faster than every two hours is no longer offered (2026-10-15).
+  it("treats an older hourly setting as every two hours", async () => {
+    const decide = fakeModel("sonnet", [nothing()]);
+    await runCheck({ ...twoSearches(60), decide }, "scheduled");
+    expect(store.read().everyMinutes).toBe(120);
+    expect(listed(decide.asked[0]!.user)).toHaveLength(60);
   });
 });

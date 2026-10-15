@@ -36,7 +36,18 @@ describe("clock", () => {
     expect(checkCron(120, q)).toBe("0 8,10,12,14,16,18,20 * * *");
     // Quiet until 07:30: the 07:00 check would be inside it, so the first is 08:00.
     expect(checkCron(60, { start: "23:00", end: "07:30" })).toBe("0 8,9,10,11,12,13,14,15,16,17,18,19,20,21,22 * * *");
-    expect(checkCron(60, { start: "00:00", end: "00:00" }).split(" ")[1]!.split(",")).toHaveLength(24);
+    expect(checkCron(60, { start: "00:00", end: "00:00" })!.split(" ")[1]!.split(",")).toHaveLength(24);
+  });
+
+  // [sunshine:watcher] Long gaps start at the first full hour after quiet hours. Before, with quiet
+  // until 07:30 the 07:00 check fell inside them: a daily check then had no hour and ran every hour.
+  it("starts long gaps at the first full hour after quiet hours, and never falls back to every hour", () => {
+    const q = { start: "23:00", end: "07:30" };
+    expect(checkCron(1440, q)).toBe("0 8 * * *");
+    expect(checkCron(720, q)).toBe("0 8,20 * * *");
+    expect(checkCron(120, q)).toBe("0 8,10,12,14,16,18,20,22 * * *");
+    expect(checkCron(1440, { start: "23:00", end: "07:00" })).toBe("0 7 * * *");
+    expect(checkCron(120, { start: "08:00", end: "07:59" })).toBeUndefined(); // quiet all day but a minute
   });
 
   it("says how long ago in plain words", () => {

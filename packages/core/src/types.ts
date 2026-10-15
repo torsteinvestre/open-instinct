@@ -201,6 +201,11 @@ export interface ScheduleEntry {
   toolRepliesOnly?: boolean;
   /** [sunshine:watcher] Name of a gate (RuntimeDeps.scheduleGates) that runs first, in plain code. */
   gate?: string;
+  /**
+   * [sunshine:reminders] A plain reminder: this exact text is sent to the owner when the job fires,
+   * and no model runs. `prompt` then only describes it.
+   */
+  text?: string;
 }
 
 // ---------------------------------------------------------------------------

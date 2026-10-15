@@ -1354,6 +1354,21 @@ describe("runScheduled", () => {
   });
 });
 
+// [sunshine:reminders] A plain reminder is sent as written and no model runs: free, and it still
+// arrives when the model is unreachable.
+describe("[sunshine:reminders] plain reminders", () => {
+  it("sends the exact text to the owner without running the model", async () => {
+    const h = harness();
+    h.faux.setResponses([]); // any model call would fail
+    const entry = h.deps.scheduler.create({ name: "stretch", prompt: "Send the plain reminder: Time to stretch, Torstein", text: "Time to stretch, Torstein", enabled: true, nextRunAt: new Date(Date.now() + 60_000).toISOString() });
+    await h.runtime.runScheduled(entry);
+    expect(h.sent.map((s) => s.msg.text)).toEqual(["Time to stretch, Torstein"]);
+    expect(h.sent[0]!.ctx.conversationKey).toBe(`scheduled:${entry.id}`);
+    expect(h.deps.audit.read({ kinds: ["schedule"] }).at(-1)!.detail).toMatchObject({ fired: true, plain: true });
+    expect(h.deps.audit.read({ kinds: ["error"] })).toHaveLength(0);
+  });
+});
+
 // [sunshine:reply-guard] One reply per run: a text the model sends with a tool to the run's own
 // audience is the reply, and its final text is not sent as well. Seen live: a reminder arrived
 // twice ("TIMER!!!" by notify_owner, then the same final text) or with a report after it

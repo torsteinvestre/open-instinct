@@ -20,7 +20,7 @@ import {
   type ToolResultLike,
 } from "@open-instinct/core";
 import { Type } from "typebox";
-import { CHECK_INTERVALS, ago, checkCron, localDate, normalizeTime } from "./clock.js";
+import { CHECK_INTERVALS, ago, checkCron, everyText, localDate, normalizeTime } from "./clock.js";
 import { runCheck, type CheckDeps, type CheckOutcome } from "./check.js";
 import { JevSieve, type RelevanceSieve } from "./jev.js";
 import type { ModelCall } from "./models.js";
@@ -102,10 +102,12 @@ export function createWatcher(deps: WatcherDeps): Watcher {
     for (const id of st.scheduleIds) deps.scheduler.delete(id);
     st.scheduleIds = [];
     if (!st.on) return;
+    const cron = checkCron(st.everyMinutes, st.quiet);
+    if (!cron) return; // quiet hours leave no hour to look in
     const entry = deps.scheduler.create({
       name: `news watch every ${st.everyMinutes} min`,
       prompt: WATCH_PROMPT,
-      cron: checkCron(st.everyMinutes, st.quiet),
+      cron,
       tz: tz(),
       enabled: true,
       gate: WATCH_GATE,
@@ -134,7 +136,7 @@ export function createWatcher(deps: WatcherDeps): Watcher {
       ...(s.stories.length ? s.stories.map((c) => `- ${c.subject}: ${c.event} (${c.status}), told ${ago(c.firstTold, at)}${c.updates ? `, ${c.updates} update(s)` : ""}`) : ["(none)"]),
       "",
       "Timing and settings, to mention only if they ask about them:",
-      `- ${s.on ? `Every ${s.everyMinutes} minutes` : "Off"}, outside quiet hours ${s.quiet.start}-${s.quiet.end} (${tz()}).`,
+      `- ${s.on ? `Every ${everyText(s.everyMinutes)}` : "Off"}, outside quiet hours ${s.quiet.start}-${s.quiet.end} (${tz()}).`,
       `- Asked about interests: ${s.askedInterests ? "yes" : "not yet (the one-time question about interests has not been sent)"}. Model cost: $${costToday.toFixed(3)} today, $${cost30.toFixed(2)} in the last 30 days.`,
     ];
     if (s.lastCheck) {
@@ -279,7 +281,7 @@ export function createWatcher(deps: WatcherDeps): Watcher {
     name: "watch_settings",
     label: "News watch: settings",
     description:
-      `Turn keeping up with the news on or off, change how often you look (${CHECK_INTERVALS.join(", ")} minutes), the owner's quiet hours (nothing unprompted is sent then, e.g. 22:00 to 08:00), or record that you asked about their interests.`,
+      `Turn keeping up with the news on or off, change how often you look (everyMinutes: ${CHECK_INTERVALS.join(", ")}, that is every ${CHECK_INTERVALS.map((m) => m / 60).join(", ")} hours; never more often than every two hours), the owner's quiet hours (nothing unprompted is sent then, e.g. 22:00 to 08:00), or record that you asked about their interests.`,
     parameters: Type.Object({
       on: Type.Optional(Type.Boolean()),
       everyMinutes: Type.Optional(Type.Number()),
@@ -291,7 +293,10 @@ export function createWatcher(deps: WatcherDeps): Watcher {
     execute: async ({ on, everyMinutes, quietStart, quietEnd, askedInterests }, ctx) => {
       const denied = ownerOnly(ctx);
       if (denied) return denied;
-      if (everyMinutes !== undefined && !(CHECK_INTERVALS as readonly number[]).includes(everyMinutes)) return fail(`Check every ${CHECK_INTERVALS.join(", ")} minutes.`);
+      // [sunshine:watcher] Every two to 24 hours: faster cost up to four times as much (2026-10-15).
+      if (everyMinutes !== undefined && !(CHECK_INTERVALS as readonly number[]).includes(everyMinutes)) {
+        return fail(`You look at the news every ${CHECK_INTERVALS.map((m) => m / 60).join(", ")} hours (everyMinutes ${CHECK_INTERVALS.join(", ")}); never more often than every two hours. Offer the nearest one in a line.`);
+      }
       const qs = quietStart === undefined ? undefined : normalizeTime(quietStart);
       const qe = quietEnd === undefined ? undefined : normalizeTime(quietEnd);
       if ((quietStart !== undefined && !qs) || (quietEnd !== undefined && !qe)) return fail("Quiet hours need times of day, like 22:00 and 08:00.");
@@ -325,7 +330,13 @@ export function createWatcher(deps: WatcherDeps): Watcher {
         return;
       }
       const s = store.read();
-      if (s.on && (s.scheduleIds.length === 0 || s.scheduleIds.some((id) => !deps.scheduler.get(id)))) store.update(reschedule);
+      // [sunshine:watcher] Also when the job no longer matches the settings: a setting below two hours
+      // counts as two hours now, and the first check after quiet hours moved to the full hour.
+      const stale = s.scheduleIds.some((id) => {
+        const job = deps.scheduler.get(id);
+        return !job || job.cron !== checkCron(s.everyMinutes, s.quiet) || job.tz !== tz();
+      });
+      if (s.on && (s.scheduleIds.length === 0 || stale)) store.update(reschedule);
     },
     runCheck: (mode) => runCheck(checkDeps(), mode),
   };

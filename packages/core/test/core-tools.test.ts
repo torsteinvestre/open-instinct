@@ -180,6 +180,37 @@ describe("schedule tools", () => {
     expect(text(await run("schedule_list", {}))).not.toContain("No schedules");
   });
 
+  // [sunshine:reminders] A plain reminder keeps its exact words and runs no model; a job keeps its prompt.
+  it("keeps a plain reminder's exact message, and asks for one of text or prompt", async () => {
+    const { run, text, deps } = setup();
+    const r = text(await run("schedule_create", { name: "stretch", text: "Time to stretch, Torstein", inMinutes: 20 }));
+    expect(r).toContain('It will send exactly: "Time to stretch, Torstein"');
+    const entry = deps.scheduler.list().find((e) => e.name === "stretch")!;
+    expect(entry.text).toBe("Time to stretch, Torstein");
+    expect(entry.prompt).toContain("Time to stretch, Torstein");
+    text(await run("schedule_create", { name: "rain", prompt: "Check the weather in Oslo; text them only if it rains.", inMinutes: 30 }));
+    expect(deps.scheduler.list().find((e) => e.name === "rain")!.text).toBeUndefined();
+    expect(text(await run("schedule_create", { name: "x", inMinutes: 5 }))).toContain("Give text");
+    expect(text(await run("schedule_create", { name: "x", text: "a", prompt: "b", inMinutes: 5 }))).toContain("not both");
+  });
+
+  // [sunshine:reminders] Inkbox sends at most 100 texts a day per agent; repeating jobs may plan 40.
+  it("refuses repeating reminders that would use more than their share of the day's texts, and says why", async () => {
+    const { run, text, deps } = setup();
+    const tooOften = text(await run("schedule_create", { name: "ping", text: "PING", cron: "*/2 * * * *", tz: "Europe/Oslo" }));
+    expect(tooOften).toMatch(/^Not scheduled: that is up to \d+ texts a day\./);
+    expect(tooOften).toContain("can send 100 texts a day in total");
+    expect(deps.scheduler.list()).toHaveLength(0);
+    // Every half hour from 08:00 to 21:30 is 28 a day: fine. Another 24 a day on top is not.
+    expect(text(await run("schedule_create", { name: "water", text: "Drink water", cron: "*/30 8-21 * * *", tz: "Europe/Oslo" }))).toContain("Scheduled");
+    expect(text(await run("schedule_create", { name: "hourly", text: "Hourly", cron: "0 * * * *", tz: "Europe/Oslo" }))).toContain("on top of 28 from repeating reminders already set");
+    // A weekday reminder, a job that runs in code, and one-offs are fine.
+    expect(text(await run("schedule_create", { name: "standup", text: "Standup in 5", cron: "55 8 * * 1-5", tz: "Europe/Oslo" }))).toContain("Scheduled");
+    deps.scheduler.create({ name: "news", prompt: "x", cron: "*/10 * * * *", tz: "Europe/Oslo", enabled: true, gate: "watcher" });
+    expect(text(await run("schedule_create", { name: "lunch", text: "Lunch", cron: "0 12 * * *", tz: "Europe/Oslo" }))).toContain("Scheduled");
+    for (let i = 1; i <= 50; i++) expect(text(await run("schedule_create", { name: `once ${i}`, text: "x", inMinutes: i }))).toContain("Scheduled");
+  });
+
   // [sunshine:memory] Jobs that run in code (the news, the memory notes) are not the owner's reminders.
   it("leaves jobs that run in code out of the list, and will not delete them", async () => {
     const { run, text, deps } = setup();

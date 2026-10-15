@@ -1,6 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { Scheduler, cronMatches, localParts, nextCron, parseCron } from "../src/scheduler.js";
+import { Scheduler, busiestDayRuns, cronMatches, localParts, nextCron, parseCron } from "../src/scheduler.js";
 import { tempState } from "./helpers.js";
+
+// [sunshine:reminders] How many texts a repeating job can send on its busiest day.
+describe("busiestDayRuns", () => {
+  const from = new Date("2026-10-15T10:00:00Z");
+  it("counts the most runs on any one local day of the coming week", () => {
+    expect(busiestDayRuns("*/30 8-21 * * *", "Europe/Oslo", from)).toBe(28);
+    expect(busiestDayRuns("0 * * * *", "Europe/Oslo", from)).toBe(24);
+    expect(busiestDayRuns("55 8 * * 1-5", "Europe/Oslo", from)).toBe(1);
+    expect(busiestDayRuns("0 9 1 1 *", "Europe/Oslo", from)).toBe(0); // not this week
+  });
+
+  it("stops counting once a day passes the limit it was given", () => {
+    expect(busiestDayRuns("* * * * *", "Europe/Oslo", from, 40)).toBe(41);
+  });
+});
 
 const set = (...n: number[]): Set<number> => new Set(n);
 

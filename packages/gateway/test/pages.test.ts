@@ -1,3 +1,5 @@
+// [sunshine:design] [sunshine:contact-card] This whole file is the fork's: the theme and motion
+// tests are [sunshine:design], the "connect page" ones [sunshine:contact-card].
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { renderConnect, renderLanding, renderPending } from "../src/pages.js";

@@ -49,6 +49,7 @@ describe("validateSignup", () => {
     expect(r.ok).toBe(false);
   });
 
+  // [sunshine:signup] the next four tests
   it("reads the phone as the picked country, the way people write it at home", () => {
     const phoneFor = (country: string, phone: string) => {
       const r = validateSignup({ name: "S", handle: "sam", country, phone });
@@ -129,6 +130,7 @@ describe("[sunshine:timezone] signup timezone", () => {
   });
 });
 
+// [sunshine:signup]
 describe("autoHandle", () => {
   const fixed = () => Buffer.from([0, 1, 2, 35]);
 
@@ -153,6 +155,7 @@ describe("autoHandle", () => {
   });
 });
 
+// [sunshine:signup]
 describe("renderLanding country picker", () => {
   it("preselects the default country, keeps the person's pick after an error, and offers Other", () => {
     const page = renderLanding({ signupEnabled: true, requireInvite: false, defaultCountry: "NO" });

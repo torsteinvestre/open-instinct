@@ -38,7 +38,7 @@ export async function runInvite(ctx: CliContext, argv: string[]): Promise<number
   const peerHandle = str(values, "handle") ? normalizeHandle(str(values, "handle")!) : undefined;
   const { c } = ctx;
 
-  // Read a --phone written the local way as the owner's country. Without config.json, keep the default.
+  // [sunshine:phone] Read a --phone written the local way as the owner's country. Without config.json, keep the default.
   const state = ctx.state();
   const phoneCountry = state.exists("config.json") ? phoneCountryOf(loadConfig(state, ctx.env)) : undefined;
   const contacts = new ContactStore(state, { phoneCountry });

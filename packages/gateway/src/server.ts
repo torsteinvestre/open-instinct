@@ -1,17 +1,17 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import type { PhoneCountry } from "@open-instinct/core";
+import type { PhoneCountry } from "@open-instinct/core"; // [sunshine:signup]
 import type { InkboxProvisioner } from "@open-instinct/inkbox";
 import { DurableInbox } from "@open-instinct/inkbox";
 import { join } from "node:path";
 import { type SignupLimits, SlidingWindowLimiter, clientAddress, pendingCount, signupLimits } from "./limits.js";
 import { type Logger, consoleLogger } from "./logger.js";
-import { type Brand, DEFAULT_BRAND } from "./brand.js";
-import { contactCard } from "./contact.js";
+import { type Brand, DEFAULT_BRAND } from "./brand.js"; // [sunshine:gateway-settings]
+import { contactCard } from "./contact.js"; // [sunshine:contact-card]
 import { GITHUB_URL, type LandingOptions, type PageOptions, type RouterInfo, connectRouterFor, renderConnect, renderLanding, renderLinkDone, renderMessage, renderPending } from "./pages.js";
 import { type LinkPassthrough, type MaritimeProvisionOptions, newUserId, provisionUser } from "./provision.js";
 import { EventDeduper, type HeaderMap, relayVerifiedEvent, relayGatewayEvent, verifyForUser } from "./relay.js";
 import { type UserRecord, type UserStore, publicUser } from "./store.js";
-import { autoHandle, validateSignup } from "./validate.js";
+import { autoHandle, validateSignup } from "./validate.js"; // [sunshine:signup] autoHandle
 
 export interface GatewayOptions {
   store: UserStore;
@@ -21,17 +21,17 @@ export interface GatewayOptions {
   inkboxBaseUrl?: string;
   maritime: MaritimeProvisionOptions;
   signupSecret?: string;
-  /** The country the signup form selects first and assumes for API signups without one. Default US. */
+  /** [sunshine:signup] The country the signup form selects first and assumes for API signups without one. Default US. */
   defaultCountry?: PhoneCountry;
-  /** Names shown on every page and given to every agent. Unset is Open Instinct. */
+  /** [sunshine:gateway-settings] Names shown on every page and given to every agent. Unset is Open Instinct. */
   brand?: Brand;
   /**
-   * Set to pick each person's handle ("sunshine-anna-k3f9") instead of asking for one.
+   * [sunshine:signup] Set to pick each person's handle ("sunshine-anna-k3f9") instead of asking for one.
    * A repeat signup is then recognized by phone number alone.
    */
   handlePrefix?: string;
   /**
-   * The number agents text from, when it is fixed and known (a dedicated line). Turns on the
+   * [sunshine:contact-card] The number agents text from, when it is fixed and known (a dedicated line). Turns on the
    * "save to contacts" step and its card. Leave unset on Inkbox's shared line: there the answering
    * line is picked at connect time and never reported, so a card would carry the wrong number.
    */
@@ -201,7 +201,7 @@ export function createGateway(opts: GatewayOptions): GatewayServer {
       composioApiKey: opts.composioApiKey,
       composioToolkits: opts.composioToolkits,
       link: opts.link,
-      brand: opts.brand,
+      brand: opts.brand, // [sunshine:gateway-settings]
       fetchImpl: opts.fetchImpl,
       logger: log,
       userId: user.id,
@@ -226,11 +226,13 @@ export function createGateway(opts: GatewayOptions): GatewayServer {
     return `${opts.publicUrl.replace(/\/+$/, "")}/connect/${encodeURIComponent(userId)}`;
   }
 
+  // [sunshine:gateway-settings] The brand reaches every page through `page` and names the agent in
+  // messages through `agentName` (upstream said "Instinct" in each). [sunshine:signup] pickHandles.
   const page: PageOptions = { brand: opts.brand };
   const agentName = (opts.brand ?? DEFAULT_BRAND).agent;
   const pickHandles = Boolean(opts.handlePrefix);
 
-  /** The landing page with this gateway's settings; callers add errors and values. */
+  /** [sunshine:gateway-settings] The landing page with this gateway's settings; callers add errors and values. */
   function landing(extra: Partial<LandingOptions> = {}): string {
     return renderLanding({
       signupEnabled: Boolean(opts.inkbox),
@@ -242,7 +244,7 @@ export function createGateway(opts: GatewayOptions): GatewayServer {
     });
   }
 
-  /** A handle no record holds yet. Inkbox suffixes it if another org has it. */
+  /** [sunshine:signup] A handle no record holds yet. Inkbox suffixes it if another org has it. */
   function freshHandle(name: string): string {
     let handle = autoHandle(opts.handlePrefix ?? "", name);
     for (let i = 0; i < 5 && opts.store.byHandle(handle); i++) handle = autoHandle(opts.handlePrefix ?? "", name);
@@ -252,6 +254,7 @@ export function createGateway(opts: GatewayOptions): GatewayServer {
   /** Same body for "this phone already has an Instinct" and "you asked again": nothing to learn. */
   async function respondPending(req: IncomingMessage, res: ServerResponse, handle: string | undefined): Promise<void> {
     if (wantsJson(req)) return json(res, 202, { status: "pending" });
+    // [sunshine:signup] No handle (picked handles): no connect text, which would reveal the stored handle.
     const shared = handle ? await routerInfo() : undefined;
     return html(res, 202, renderPending(handle, handle ? connectRouterFor(handle, shared, undefined) : undefined, page));
   }
@@ -263,7 +266,7 @@ export function createGateway(opts: GatewayOptions): GatewayServer {
       return html(res, 503, renderMessage("Signups are closed", "This gateway only relays messages.", "error", page));
     }
     const body = parseBody(await readBody(req, 64 * 1024), req.headers["content-type"]);
-    const check = validateSignup(body, { signupSecret: opts.signupSecret, defaultCountry: opts.defaultCountry, autoHandle: pickHandles });
+    const check = validateSignup(body, { signupSecret: opts.signupSecret, defaultCountry: opts.defaultCountry, autoHandle: pickHandles }); // [sunshine:signup]
     if (!check.ok) {
       if (asJson) return json(res, 400, { error: "invalid signup", errors: check.errors });
       const values = Object.fromEntries(Object.entries(body).filter(([k, v]) => k !== "inviteCode" && typeof v === "string")) as Record<string, string>;
@@ -279,7 +282,7 @@ export function createGateway(opts: GatewayOptions): GatewayServer {
     }
 
     if (pickHandles) {
-      // Nobody typed a handle, so the phone alone says "same person again": a retry after an
+      // [sunshine:signup] Nobody typed a handle, so the phone alone says "same person again": a retry after an
       // error, a crash mid-setup, a lost connect page, or someone else's number. Resume a stuck
       // setup and show nothing about the record.
       const existing = opts.store.byPhone(value.phone);
@@ -404,8 +407,10 @@ export function createGateway(opts: GatewayOptions): GatewayServer {
       const user = opts.store.get(decodeURIComponent(parts[1] ?? ""));
       if (!user) return html(res, 404, renderMessage("Not found", `No ${agentName} with that id. Check the link you were given.`, "error", page));
       const [shared, perUser] = await Promise.all([routerInfo(), routerInfoForUser(user)]);
+      // [sunshine:signup] autoHandle, [sunshine:contact-card] offerContact
       return html(res, 200, renderConnect(user, connectRouterFor(user.handle, shared, perUser), { ...page, autoHandle: pickHandles, offerContact: Boolean(opts.agentNumber) }));
     }
+    // [sunshine:contact-card] The card download; 404 unless GATEWAY_AGENT_NUMBER is set.
     if (parts[0] === "connect" && parts.length === 3 && parts[2] === "contact.vcf") {
       if (method !== "GET") throw new HttpError(405, "method not allowed");
       const user = opts.store.get(decodeURIComponent(parts[1] ?? ""));

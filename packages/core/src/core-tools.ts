@@ -216,7 +216,7 @@ function scheduleTools({ scheduler, config }: CoreToolDeps): RegisteredTool[] {
   const list = defineTool({
     name: "schedule_list",
     label: "List schedules",
-    description: "List scheduled jobs with ids, cron or next run, and whether they are waiting, repeating or already done.",
+    description: "List scheduled jobs with ids, cron or next run, and whether they are waiting, repeating or already done.", // [sunshine:schedule-list]
     parameters: Type.Object({}),
     meta: { capabilities: ["schedule.manage"], group: "schedule" },
     execute: async () => {
@@ -224,7 +224,7 @@ function scheduleTools({ scheduler, config }: CoreToolDeps): RegisteredTool[] {
       // notes) are not the owner's reminders: listed, the model would recite or "tidy" them.
       const entries = scheduler.list().filter((e) => !e.gate);
       if (entries.length === 0) return textResult("No schedules.");
-      // A one-shot that has fired loses its next run and is switched off. Listed as "once at ? | off"
+      // [sunshine:schedule-list] A one-shot that has fired loses its next run and is switched off. Listed as "once at ? | off"
       // it read as broken, and the model "fixed" it by scheduling it again; so say plainly it is done.
       const done = (e: ScheduleEntry) => !e.cron && !e.enabled && e.lastRunAt !== undefined;
       const lines = entries.map((e) => {
@@ -237,7 +237,7 @@ function scheduleTools({ scheduler, config }: CoreToolDeps): RegisteredTool[] {
             : `off${last}`;
         return `${e.id}: ${e.name ?? "(unnamed)"} | ${kind} | ${state}`;
       });
-      if (entries.some(done)) lines.push("Entries marked done already went out. They need no action; delete them only if the owner asks.");
+      if (entries.some(done)) lines.push("Entries marked done already went out. They need no action; delete them only if the owner asks."); // [sunshine:schedule-list]
       return textResult(lines.join("\n"));
     },
   });

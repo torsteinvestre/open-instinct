@@ -1,8 +1,16 @@
-import { type Brand, DEFAULT_BRAND } from "./brand.js";
+/*
+ * [sunshine:design] The fork redesigned every page in this file (CSS, SUN, layout, the page texts
+ * and render functions); upstream's version is a light/dark blue theme with feature cards and a
+ * "How it works" list. Other fork parts here carry their own tags: [sunshine:gateway-settings]
+ * (brand), [sunshine:signup] (country picker, picked handles), [sunshine:contact-card],
+ * [sunshine:timezone]. Unchanged from upstream: escapeHtml, safeUrl, RouterInfo, connectCommandFor,
+ * smsHrefFor, routerInfoIsFor, ConnectRouter, connectRouterFor.
+ */
+import { type Brand, DEFAULT_BRAND } from "./brand.js"; // [sunshine:gateway-settings]
 import type { UserRecord } from "./store.js";
-import { DEFAULT_SIGNUP_COUNTRY, OTHER_COUNTRY, SIGNUP_COUNTRIES } from "./validate.js";
+import { DEFAULT_SIGNUP_COUNTRY, OTHER_COUNTRY, SIGNUP_COUNTRIES } from "./validate.js"; // [sunshine:signup]
 
-/** What every page needs to know about the deployment. */
+/** [sunshine:gateway-settings] What every page needs to know about the deployment. */
 export interface PageOptions {
   /** Unset shows Open Instinct. */
   brand?: Brand;
@@ -22,7 +30,7 @@ export function safeUrl(u: string | undefined, allowData = false): string {
   return "";
 }
 
-// Always dark, whatever the device prefers: the warm light reads best on it. Amber buttons carry dark ink.
+// [sunshine:design] Always dark, whatever the device prefers: the warm light reads best on it. Amber buttons carry dark ink.
 // Sunlight comes in from beyond the top-left corner of the screen: a wide glow that fades out across the
 // page with no visible edge (a background, so it can never widen the page on a phone). It sits on <html>
 // with min-height 100%, so it always fills the window; on a short page, zoomed out, a background sized to
@@ -74,17 +82,17 @@ footer{margin-top:40px;color:var(--muted);font-size:13px}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
 `;
 
-/** A disc and eight short rays. Colored by CSS so it follows the light and dark theme. */
+/** [sunshine:design] A disc and eight short rays. Colored by CSS so it follows the light and dark theme. */
 const SUN = `<svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path d="M12 2.5V5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8"/></svg>`;
 
 /**
- * `enter` fades the heading and card in once. Pages that reload themselves (the connect page
+ * [sunshine:design] `enter` fades the heading and card in once. Pages that reload themselves (the connect page
  * while an agent is set up) leave it off, or they would replay it every few seconds.
  */
 function layout(title: string, body: string, opts: PageOptions & { refreshSeconds?: number; enter?: boolean } = {}): string {
   const refresh = opts.refreshSeconds ? `<meta http-equiv="refresh" content="${opts.refreshSeconds}">` : "";
   const product = escapeHtml((opts.brand ?? DEFAULT_BRAND).product);
-  // A branded service credits the project it runs on; the MIT license asks for nothing more.
+  // [sunshine:gateway-settings] A branded service credits the project it runs on; the MIT license asks for nothing more.
   const credit = opts.brand
     ? `${product} is built on <a href="${GITHUB_URL}" rel="noopener">Open Instinct</a> (MIT).`
     : `Open Instinct is <a href="${GITHUB_URL}" rel="noopener">open source</a> (MIT).`;
@@ -113,9 +121,9 @@ export interface LandingOptions extends PageOptions {
   requireInvite: boolean;
   errors?: Record<string, string>;
   values?: Record<string, string>;
-  /** The country selected first. Default US. */
+  /** [sunshine:signup] The country selected first. Default US. */
   defaultCountry?: string;
-  /** The gateway picks the handle, so the form does not ask for one. */
+  /** [sunshine:signup] The gateway picks the handle, so the form does not ask for one. */
   autoHandle?: boolean;
 }
 
@@ -125,6 +133,7 @@ export interface LandingOptions extends PageOptions {
  */
 const TIMEZONE_SCRIPT = `try{var tz=document.getElementById("timezone");if(tz&&!tz.value)tz.value=Intl.DateTimeFormat().resolvedOptions().timeZone||""}catch(e){}`;
 
+/** [sunshine:signup] */
 function countryOptions(picked: string): string {
   const options = SIGNUP_COUNTRIES.map(
     (c) => `<option value="${c.code}"${c.code === picked ? " selected" : ""}>${c.flag} ${escapeHtml(c.name)} (${c.dial})</option>`,
@@ -133,10 +142,11 @@ function countryOptions(picked: string): string {
   return options.join("");
 }
 
+/** [sunshine:design] One heading and the form; [sunshine:signup] the country field, no handle field when picked. */
 export function renderLanding(opts: LandingOptions): string {
   const v = (k: string) => escapeHtml(opts.values?.[k] ?? "");
   const err = (k: string) => (opts.errors?.[k] ? `<div class="error">${escapeHtml(opts.errors[k] ?? "")}</div>` : "");
-  // What the person picked before an error wins over the gateway's default.
+  // [sunshine:signup] What the person picked before an error wins over the gateway's default.
   const wanted = (opts.values?.["country"] || opts.defaultCountry || DEFAULT_SIGNUP_COUNTRY).toUpperCase();
   const picked = wanted === OTHER_COUNTRY.toUpperCase() ? OTHER_COUNTRY : wanted;
   const example = SIGNUP_COUNTRIES.find((c) => c.code === picked)?.example ?? "+47 912 34 567";
@@ -223,13 +233,13 @@ export function connectRouterFor(handle: string, shared: RouterInfo | undefined,
   return out;
 }
 
-/** Where the connect page's "save to contacts" button points. */
+/** [sunshine:contact-card] Where the connect page's "save to contacts" button points. */
 export function contactCardPath(userId: string): string {
   return `/connect/${encodeURIComponent(userId)}/contact.vcf`;
 }
 
 /**
- * Locks step 2 until the save button is tapped. The page itself never ships step 2 locked, so a
+ * [sunshine:contact-card] Locks step 2 until the save button is tapped. The page itself never ships step 2 locked, so a
  * phone without JavaScript is never stuck. The tap is remembered per person because the page
  * reloads itself while the agent is being set up. A page cannot see whether the contact was
  * really created, only that the button was tapped.
@@ -248,6 +258,7 @@ save.addEventListener("click",function(){try{localStorage.setItem(key,"1")}catch
 }
 
 /**
+ * [sunshine:design] [sunshine:contact-card] (`saveAs`)
  * The connect button, which opens Messages with the number and the text filled in. A computer has
  * no Messages to open, so the text and number wait folded under "On a computer?". Shared by the
  * connect and pending pages.
@@ -279,6 +290,7 @@ function connectBlock(handle: string, router: ConnectRouter, opts: { name: strin
   <script>${unlockAfterSaveScript(opts.saveAs.key)}</script>`;
 }
 
+/** [sunshine:design] [sunshine:signup] autoHandle [sunshine:contact-card] offerContact */
 export function renderConnect(
   user: UserRecord,
   router: ConnectRouter | undefined,
@@ -307,6 +319,7 @@ export function renderConnect(
 }
 
 /**
+ * [sunshine:design] [sunshine:signup] (no handle: no command)
  * Shown when the phone or handle already belongs to a record. It says the same
  * thing whether or not an account exists, so the form cannot be used to check
  * who has an Instinct. The connect command is built from what the caller typed;
@@ -327,7 +340,7 @@ export function renderPending(handle: string | undefined, router: ConnectRouter 
   );
 }
 
-/** Landing page after the Link OAuth redirect. The agent finishes the exchange; the person goes back to Messages. */
+/** [sunshine:design] Landing page after the Link OAuth redirect. The agent finishes the exchange; the person goes back to Messages. */
 export function renderLinkDone(ok: boolean, opts: PageOptions = {}): string {
   const agent = escapeHtml((opts.brand ?? DEFAULT_BRAND).agent);
   return layout(
@@ -339,6 +352,7 @@ export function renderLinkDone(ok: boolean, opts: PageOptions = {}): string {
   );
 }
 
+/** [sunshine:design] */
 export function renderMessage(title: string, text: string, status: "ok" | "error" = "ok", opts: PageOptions = {}): string {
   return layout(
     title,

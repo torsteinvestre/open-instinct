@@ -15,7 +15,7 @@ function looksLikePhone(s: string): boolean {
   return digits.length >= 7 && /^[+\d\s().-]+$/.test(s);
 }
 
-/** Core's normalizePhone under the name this package exports. A second copy of the rule drifted once. */
+/** [sunshine:phone] Core's normalizePhone under the name this package exports. A second copy of the rule drifted once. */
 export function phoneKey(s: string, defaultCountry?: PhoneCountry): string {
   return normalizePhone(s, defaultCountry);
 }

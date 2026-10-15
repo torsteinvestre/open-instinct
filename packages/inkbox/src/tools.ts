@@ -81,7 +81,7 @@ export function resolveTarget(to: string, deps: Pick<MessagingDeps, "contacts" |
     return { channel: "email", to: raw.toLowerCase(), label: c?.name ?? raw };
   }
   if (looksLikePhone(raw)) {
-    const phone = normalizePhone(raw, phoneCountryOf(deps.config));
+    const phone = normalizePhone(raw, phoneCountryOf(deps.config)); // [sunshine:phone]
     const c = deps.contacts.findByPhone(phone);
     return { channel: preferred === "sms" ? "sms" : "imessage", to: phone, label: c?.name ?? phone };
   }

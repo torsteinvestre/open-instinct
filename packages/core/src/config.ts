@@ -48,6 +48,7 @@ const COMPUTER_MODES = new Set<InstinctConfig["computer"]["mode"]>(["auto", "des
 export function configFromEnv(env: NodeJS.ProcessEnv): InstinctConfig {
   const cfg = defaultConfig();
   if (env.INSTINCT_OWNER_NAME?.trim()) cfg.owner.name = env.INSTINCT_OWNER_NAME.trim();
+  // [sunshine:phone] A bare .map(normalizePhone) would pass the index as the country.
   cfg.owner.phones = splitList(env.INSTINCT_OWNER_PHONE).map((p) => normalizePhone(p)).filter(Boolean);
   cfg.owner.emails = splitList(env.INSTINCT_OWNER_EMAIL).map(normalizeEmail).filter(Boolean);
   // INSTINCT_TIMEZONE is the name older .env.example files used; keep honouring it.
@@ -74,7 +75,7 @@ function withDefaults(raw: Partial<InstinctConfig>): InstinctConfig {
     owner: {
       ...d.owner,
       ...(raw.owner ?? {}),
-      phones: (raw.owner?.phones ?? []).map((p) => normalizePhone(p)).filter(Boolean),
+      phones: (raw.owner?.phones ?? []).map((p) => normalizePhone(p)).filter(Boolean), // [sunshine:phone]
       emails: (raw.owner?.emails ?? []).map(normalizeEmail).filter(Boolean),
     },
     agent: { ...d.agent, ...(raw.agent ?? {}) },

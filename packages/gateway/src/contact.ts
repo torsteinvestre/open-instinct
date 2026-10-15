@@ -1,4 +1,5 @@
 /**
+ * [sunshine:contact-card] This whole file is the fork's. Off unless GATEWAY_AGENT_NUMBER is set.
  * The "save to contacts" card on the connect page. On the shared iMessage line every
  * agent writes from the router's number, and iMessage shows only that number: Inkbox
  * shares an identity's name and photo on dedicated lines alone. A contact card gives

@@ -257,6 +257,7 @@ describe("schedule tools", () => {
     expect(localTime("2026-10-26T08:00:00Z", "Not/AZone")).toBe("2026-10-26T08:00:00Z");
   });
 
+  // [sunshine:schedule-list]
   it("lists a one-time reminder that already fired as done, so it is not scheduled again", async () => {
     const { run, text, deps } = setup();
     await run("schedule_create", { name: "timer", prompt: "Text me TIMER", at: "2026-10-04T18:00:00Z" });

@@ -7,7 +7,8 @@ This page lists what the fork adds, so each change can be found, understood and 
 
 ## Tagged changes
 
-Newer changes carry a tag in a code comment on every line or block they add. Search the
+Every change carries a tag in a code comment on every line or block it adds (the earliest ones were
+tagged afterwards, see [Earlier changes](#earlier-changes-tagged-afterwards-2026-10-15)). Search the
 repository for the tag to find all of it.
 
 ### `[sunshine:reply-guard]`: one reply per run
@@ -491,52 +492,61 @@ tapbacks (misses only the known English "Loved “…”" text and the flaky "yo
 (no machinery talk in 4 of 4). Approvals now add a section to the system prompt while one is pending,
 which costs one cache write when it appears and when it goes.
 
-## Earlier changes (not tagged; find them by commit)
+## Earlier changes (tagged afterwards, 2026-10-15)
 
-Ordered from most to least likely to cause trouble. `git show <commit>` shows a change in full;
-`git revert <commit>` undoes it.
+The fork's first changes were made before tagging started. Their code and tests now carry tags too,
+so the same search finds them. Ordered from most to least likely to cause trouble. `git show
+<commit>` shows a change in full; `git revert <commit>` undoes it (later commits build on some of
+them, so a revert may need small fixes by hand). JSON files (`package.json`, the lockfile) and the
+docs cannot carry a comment; they are listed under each change instead.
 
-### Phone numbers (`80b36b5`)
+### `[sunshine:phone]`: phone numbers outside the US (`80b36b5`, `parsePhone` in `f5edfbb`)
 - **What:** adds the `libphonenumber-js` library (pinned 1.13.14) and replaces the old rule that
   read any ten-digit number as American. Numbers written the local way are read as the owner's
   country. The three copies of the phone rule now share one function.
-- **Where:** `packages/core/package.json`, `pnpm-lock.yaml`, `core/src/principal.ts`
-  (`normalizePhone`, `parsePhone`, `phoneCountryOf`), `core/src/contacts.ts`, `core/src/config.ts`,
-  `core/src/runtime.ts` (group threads), `network/src/lookup.ts`, `inkbox/src/tools.ts`,
-  `server/src/boot.ts`, `cli/src/commands/invite.ts`.
+- **Where:** `packages/core/src/principal.ts` (`normalizePhone`, `parsePhone`, `phoneCountryOf`),
+  `core/src/contacts.ts`, `core/src/config.ts`, `core/src/runtime.ts` (group threads),
+  `network/src/lookup.ts`, `inkbox/src/tools.ts`, `server/src/boot.ts`, `cli/src/commands/invite.ts`;
+  untagged: `packages/core/package.json` and `pnpm-lock.yaml` (the library).
 - **If it breaks:** the owner or a contact is treated as a stranger, or a text goes to a wrong number.
 
-### Signup: country, picked handles, repeat signups (`f5edfbb`, `ba288a7`)
-- **What:** the country picker; handles like `sunshine-anna-k3f9` picked by the gateway; a repeat
-  signup recognized by phone alone (restarts a failed setup, reveals nothing about the record).
-- **Where:** `packages/gateway/src/validate.ts`, `gateway/src/server.ts`, `gateway/src/main.ts`.
+### `[sunshine:signup]`: country picker, picked handles, repeat signups (`f5edfbb`, `ba288a7`)
+- **What:** the country picker (`GATEWAY_DEFAULT_COUNTRY`); handles like `sunshine-anna-k3f9` picked
+  by the gateway (`GATEWAY_HANDLE_PREFIX`); a repeat signup recognized by phone alone (restarts a
+  failed setup, reveals nothing about the record).
+- **Where:** `packages/gateway/src/validate.ts`, `gateway/src/server.ts`, `gateway/src/main.ts`,
+  the form in `gateway/src/pages.ts`.
 - **If it breaks:** friends cannot sign up, see "does not look like a phone number", get a second
   agent, or stay at "Setting up".
 
-### Settings for new agents (`ba288a7`)
-- **What:** `GATEWAY_BRAND_NAME`, `GATEWAY_HANDLE_PREFIX`, `INSTINCT_AGENT_DESKTOP`, `INSTINCT_MODEL`.
-  New agents get the brand as their name, the chosen model, and the desktop setting.
-- **Where:** `packages/gateway/src/main.ts`, `gateway/src/provision.ts`, `gateway/src/brand.ts` (new).
+### `[sunshine:gateway-settings]`: settings for new agents (`ba288a7`)
+- **What:** `GATEWAY_BRAND_NAME`, `INSTINCT_AGENT_DESKTOP`, `INSTINCT_MODEL`. New agents get the brand
+  as their name (Inkbox display name, `INSTINCT_AGENT_NAME`, Maritime persona), the chosen model, and
+  the desktop setting; every page shows the brand.
+- **Where:** `packages/gateway/src/brand.ts` (whole file), `gateway/src/main.ts`,
+  `gateway/src/provision.ts`, `gateway/src/server.ts`, `gateway/src/pages.ts`.
 - **If it breaks:** new agents fail to be created at Maritime, or run the wrong model or name.
 
-### Schedule list wording (`704d137`)
+### `[sunshine:schedule-list]`: finished reminders read as done (`704d137`)
 - **What:** finished one-time jobs read "done, already sent at ...". Only the list text changed.
 - **Where:** `packages/core/src/core-tools.ts` (`schedule_list`).
 - **If it breaks:** the agent misreads its reminders. Low risk.
 
-### Contact card, switched off (`08d5728`, `f82b1bd`)
+### `[sunshine:contact-card]`: "save to contacts", switched off (`08d5728`, `f82b1bd`)
 - **What:** a "save to contacts" step with a sun picture. Off unless `GATEWAY_AGENT_NUMBER` is set.
-- **Where:** `packages/gateway/src/contact.ts` (new), the `/connect/:id/contact.vcf` route in
-  `gateway/src/server.ts`, the save step in `gateway/src/pages.ts`.
+- **Where:** `packages/gateway/src/contact.ts` (whole file), the `/connect/:id/contact.vcf` route in
+  `gateway/src/server.ts`, `GATEWAY_AGENT_NUMBER` in `gateway/src/main.ts`, the save step in
+  `gateway/src/pages.ts`.
 - **If it breaks:** nothing while it is off.
 
-### Page design (`ba288a7`, `08d5728`, `f82b1bd`)
+### `[sunshine:design]`: the page design (`ba288a7`, `08d5728`, `f82b1bd`)
 - **What:** minimal signup and connect pages, always dark, top-left sunlight, sun mark,
   animations (off with Reduce Motion), flags, one "Connect to Sunshine" button.
-- **Where:** `packages/gateway/src/pages.ts`.
+- **Where:** `packages/gateway/src/pages.ts`: the fork rewrote most of the file, so a note at its top
+  says which parts are upstream's (the URL and router helpers) and the rest is tagged by block.
 - **If it breaks:** only how the two web pages look or behave; the agent is not affected.
 
-### Docs
+### Docs (untagged)
 - Gateway README, `docs/ARCHITECTURE.md`, `docs/DEPLOY-MARITIME.md`, this file. No effect on behavior.
 
 ## Outside the code

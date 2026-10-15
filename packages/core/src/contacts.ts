@@ -3,7 +3,7 @@
  * them. Stored as a plain JSON array in contacts.json so the owner can edit it.
  */
 import type { StateDir } from "./state.js";
-import { isReservedHandle, normalizeEmail, normalizeHandle, normalizePhone, type PhoneCountry } from "./principal.js";
+import { isReservedHandle, normalizeEmail, normalizeHandle, normalizePhone, type PhoneCountry } from "./principal.js"; // [sunshine:phone] PhoneCountry
 import type { Contact, Tier } from "./types.js";
 
 const FILE = "contacts.json";
@@ -28,6 +28,8 @@ function copy(c: Contact): Contact {
   return structuredClone(c);
 }
 
+// [sunshine:phone] The store reads contacts' numbers in the owner's country; every phone comparison
+// below goes through phone(), which upstream did with normalizePhone alone.
 export interface ContactStoreOptions {
   /** How numbers written without a country code are read. Pass `phoneCountryOf(config)`. */
   phoneCountry?: PhoneCountry;
@@ -35,14 +37,15 @@ export interface ContactStoreOptions {
 
 export class ContactStore {
   private readonly state: StateDir;
-  private readonly phoneCountry: PhoneCountry | undefined;
+  private readonly phoneCountry: PhoneCountry | undefined; // [sunshine:phone]
   private cache: Contact[] | undefined;
 
   constructor(state: StateDir, opts: ContactStoreOptions = {}) {
     this.state = state;
-    this.phoneCountry = opts.phoneCountry;
+    this.phoneCountry = opts.phoneCountry; // [sunshine:phone]
   }
 
+  /** [sunshine:phone] */
   private phone(s: string): string {
     return normalizePhone(s, this.phoneCountry);
   }

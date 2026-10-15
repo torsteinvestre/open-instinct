@@ -1,11 +1,11 @@
-import { parsePhone, type PhoneCountry } from "@open-instinct/core";
+import { parsePhone, type PhoneCountry } from "@open-instinct/core"; // [sunshine:contact-card] parsePhone, [sunshine:signup] PhoneCountry
 import { InkboxProvisioner } from "@open-instinct/inkbox";
-import { type Brand, brandFrom } from "./brand.js";
+import { type Brand, brandFrom } from "./brand.js"; // [sunshine:gateway-settings]
 import { consoleLogger } from "./logger.js";
 import type { LinkPassthrough } from "./provision.js";
 import { type GatewayServer, createGateway } from "./server.js";
 import { UserStore } from "./store.js";
-import { SIGNUP_COUNTRIES, signupCountry } from "./validate.js";
+import { SIGNUP_COUNTRIES, signupCountry } from "./validate.js"; // [sunshine:signup]
 
 export const DEFAULT_AGENT_IMAGE = "ghcr.io/mariagorskikh/open-instinct-agent:latest";
 
@@ -19,17 +19,17 @@ export interface GatewayEnv {
   maritimeBaseUrl?: string;
   agentImage: string;
   signupSecret?: string;
-  /** GATEWAY_DEFAULT_COUNTRY: the signup form's preselected country (NO, SE, GB, US). Default US. */
+  /** [sunshine:signup] GATEWAY_DEFAULT_COUNTRY: the signup form's preselected country (NO, SE, GB, US). Default US. */
   defaultCountry?: PhoneCountry;
-  /** GATEWAY_BRAND_NAME: the service's name on every page and every agent's name. Default Open Instinct. */
+  /** [sunshine:gateway-settings] GATEWAY_BRAND_NAME: the service's name on every page and every agent's name. Default Open Instinct. */
   brand?: Brand;
-  /** GATEWAY_HANDLE_PREFIX: pick handles like "<prefix>-anna-k3f9" instead of asking for one. */
+  /** [sunshine:signup] GATEWAY_HANDLE_PREFIX: pick handles like "<prefix>-anna-k3f9" instead of asking for one. */
   handlePrefix?: string;
-  /** GATEWAY_AGENT_NUMBER: the fixed number agents text from (a dedicated line); turns on "save to contacts". */
+  /** [sunshine:contact-card] GATEWAY_AGENT_NUMBER: the fixed number agents text from (a dedicated line); turns on "save to contacts". */
   agentNumber?: string;
-  /** INSTINCT_AGENT_DESKTOP=0: create agents without a desktop, which Maritime's free plan needs. Default on. */
+  /** [sunshine:gateway-settings] INSTINCT_AGENT_DESKTOP=0: create agents without a desktop, which Maritime's free plan needs. Default on. */
   agentDesktop: boolean;
-  /** INSTINCT_MODEL: the model every new agent uses, for example anthropic/claude-sonnet-5-5. */
+  /** [sunshine:gateway-settings] INSTINCT_MODEL: the model every new agent uses, for example anthropic/claude-sonnet-5-5. */
   agentModel?: string;
   /** GATEWAY_ALLOW_OPEN_SIGNUP=1: run the signup form without an invite code. Off by default. */
   allowOpenSignup: boolean;
@@ -65,6 +65,7 @@ function truthy(v: string | undefined): boolean {
   return v !== undefined && /^(1|true|yes)$/i.test(v.trim());
 }
 
+/** [sunshine:gateway-settings] For INSTINCT_AGENT_DESKTOP=0. */
 function falsy(v: string | undefined): boolean {
   return v !== undefined && /^(0|false|no|off)$/i.test(v.trim());
 }
@@ -76,13 +77,14 @@ export function readEnv(env: NodeJS.ProcessEnv): GatewayEnv {
   if (!maritimeApiKey) throw new Error("MARITIME_API_KEY is required (the gateway forwards every message through Maritime).");
   const publicUrl = env["GATEWAY_PUBLIC_URL"] ?? `http://localhost:${port}`;
   const idle = env["INSTINCT_IDLE_TTL_SECONDS"] ? Number(env["INSTINCT_IDLE_TTL_SECONDS"]) : undefined;
+  // [sunshine:signup] GATEWAY_DEFAULT_COUNTRY.
   const countryRaw = env["GATEWAY_DEFAULT_COUNTRY"]?.trim();
   const defaultCountry = countryRaw ? signupCountry(countryRaw) : undefined;
   // A typo here would silently read every local number as US, the bug this setting exists to avoid.
   if (countryRaw && !defaultCountry) {
     throw new Error(`GATEWAY_DEFAULT_COUNTRY must be one of ${SIGNUP_COUNTRIES.map((c) => c.code).join(", ")} (got "${countryRaw}").`);
   }
-  // Every saved contact would carry this number, so a malformed one stops the gateway instead.
+  // [sunshine:contact-card] Every saved contact would carry this number, so a malformed one stops the gateway instead.
   const agentNumberRaw = env["GATEWAY_AGENT_NUMBER"]?.trim();
   const agentDialed = agentNumberRaw?.replace(/^00/, "+");
   const agentNumber = agentDialed?.startsWith("+") ? parsePhone(agentDialed) : undefined;
@@ -107,12 +109,12 @@ export function readEnv(env: NodeJS.ProcessEnv): GatewayEnv {
     maritimeBaseUrl: env["MARITIME_API_URL"] || undefined,
     agentImage: env["INSTINCT_AGENT_IMAGE"] || DEFAULT_AGENT_IMAGE,
     signupSecret: env["GATEWAY_SIGNUP_SECRET"] || undefined,
-    defaultCountry,
-    brand: brandFrom(env["GATEWAY_BRAND_NAME"]),
-    handlePrefix: env["GATEWAY_HANDLE_PREFIX"]?.trim() || undefined,
-    agentNumber,
-    agentDesktop: !falsy(env["INSTINCT_AGENT_DESKTOP"]),
-    agentModel: env["INSTINCT_MODEL"]?.trim() || undefined,
+    defaultCountry, // [sunshine:signup]
+    brand: brandFrom(env["GATEWAY_BRAND_NAME"]), // [sunshine:gateway-settings]
+    handlePrefix: env["GATEWAY_HANDLE_PREFIX"]?.trim() || undefined, // [sunshine:signup]
+    agentNumber, // [sunshine:contact-card]
+    agentDesktop: !falsy(env["INSTINCT_AGENT_DESKTOP"]), // [sunshine:gateway-settings]
+    agentModel: env["INSTINCT_MODEL"]?.trim() || undefined, // [sunshine:gateway-settings]
     allowOpenSignup: truthy(env["GATEWAY_ALLOW_OPEN_SIGNUP"]) || truthy(env["GATEWAY_OPEN_SIGNUP"]),
     trustProxy: truthy(env["GATEWAY_TRUST_PROXY"]),
     anthropicApiKey: env["ANTHROPIC_API_KEY"] || undefined,
@@ -162,7 +164,7 @@ export function agentExtraEnv(cfg: Pick<GatewayEnv, "contextDevApiKey" | "ampleS
   // [sunshine:watcher] The operator's agent settings first; the keys below are the gateway's own.
   const env: Record<string, string> = { ...(cfg.agentSettings ?? {}) };
   if (cfg.composioMode) env["COMPOSIO_MODE"] = cfg.composioMode;
-  // Without this every agent runs core's default model. Maritime's metered proxy sets its own and wins.
+  // [sunshine:gateway-settings] Without this every agent runs core's default model. Maritime's metered proxy sets its own and wins.
   if (cfg.agentModel) env["INSTINCT_MODEL"] = cfg.agentModel;
   if (cfg.contextDevApiKey) env["CONTEXT_DEV_API_KEY"] = cfg.contextDevApiKey;
   if (cfg.ampleSignup) env["AMPLE_SIGNUP"] = "1";
@@ -201,16 +203,16 @@ export function startGateway(cfg: GatewayEnv): GatewayServer {
       baseUrl: cfg.maritimeBaseUrl,
       agentImage: cfg.agentImage,
       idleTtlSeconds: cfg.idleTtlSeconds,
-      desktop: cfg.agentDesktop,
+      desktop: cfg.agentDesktop, // [sunshine:gateway-settings]
       useMaritimeLlm: cfg.useMaritimeLlm,
       maritimeModel: cfg.maritimeModel,
       extraEnv: agentExtraEnv(cfg),
     },
     signupSecret: cfg.signupSecret,
-    defaultCountry: cfg.defaultCountry,
-    brand: cfg.brand,
-    handlePrefix: cfg.handlePrefix,
-    agentNumber: cfg.agentNumber,
+    defaultCountry: cfg.defaultCountry, // [sunshine:signup]
+    brand: cfg.brand, // [sunshine:gateway-settings]
+    handlePrefix: cfg.handlePrefix, // [sunshine:signup]
+    agentNumber: cfg.agentNumber, // [sunshine:contact-card]
     anthropicApiKey: cfg.anthropicApiKey,
     composioApiKey: cfg.composioApiKey,
     composioToolkits: cfg.composioToolkits,

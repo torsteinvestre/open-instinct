@@ -14,6 +14,7 @@ describe("normalizePhone", () => {
     expect(normalizePhone("abc")).toBe("");
   });
 
+  // [sunshine:phone] the next three tests
   it("keeps the country of a number written with +, even when it has ten digits", () => {
     // A Norwegian number is ten digits with its 47. It used to become +1 474...
     expect(normalizePhone("+4745775184")).toBe("+4745775184");
@@ -44,6 +45,7 @@ describe("normalizePhone", () => {
   });
 });
 
+// [sunshine:phone]
 describe("parsePhone", () => {
   it("answers undefined instead of guessing when the number does not fit", () => {
     expect(parsePhone("457 75 184", "NO")).toBe("+4745775184");
@@ -53,6 +55,7 @@ describe("parsePhone", () => {
   });
 });
 
+// [sunshine:phone]
 describe("phoneCountryOf", () => {
   it("takes the country from the owner's phone and falls back to US", () => {
     const owner = (phones: string[]) => ({ owner: { ...testConfig().owner, phones } });
@@ -97,6 +100,7 @@ describe("resolvePrincipal", () => {
     }
   });
 
+  // [sunshine:phone]
   it("recognises an owner outside the US by their real number, not a US look-alike", () => {
     const norwegian = { ...config, owner: { ...config.owner, phones: ["+4745775184"] } };
     const c = contacts();

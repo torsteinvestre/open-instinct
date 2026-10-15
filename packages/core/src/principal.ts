@@ -10,16 +10,17 @@
  * forged and the mail webhook carries no SPF/DKIM/DMARC result. The literal sender
  * `owner` is never a sentinel on a network channel.
  */
-import { parsePhoneNumberFromString, type CountryCode } from "libphonenumber-js";
+import { parsePhoneNumberFromString, type CountryCode } from "libphonenumber-js"; // [sunshine:phone]
 import type { ContactStore } from "./contacts.js";
 import type { Contact, InboundMessage, InstinctConfig, Principal } from "./types.js";
 
-/** ISO 3166 country code ("NO", "SE", "GB", "US") used to read numbers written without one. */
+/** [sunshine:phone] ISO 3166 country code ("NO", "SE", "GB", "US") used to read numbers written without one. */
 export type PhoneCountry = CountryCode;
 
-export const DEFAULT_PHONE_COUNTRY: PhoneCountry = "US";
+export const DEFAULT_PHONE_COUNTRY: PhoneCountry = "US"; // [sunshine:phone]
 
 /**
+ * [sunshine:phone] Upstream read any ten digits as a US number, so Norwegian owners were strangers.
  * E.164 with a leading `+`. A number written with `+` or an international prefix keeps its
  * own country. One written the local way ("070-123 45 67", "457 75 184") is read as
  * `defaultCountry`. A digit count cannot tell these apart: a Norwegian number is ten digits
@@ -34,7 +35,7 @@ export function normalizePhone(s: string, defaultCountry: PhoneCountry = DEFAULT
 }
 
 /**
- * E.164 when the number has a possible length for its country, else undefined. For places
+ * [sunshine:phone] E.164 when the number has a possible length for its country, else undefined. For places
  * where a wrong guess is worse than an error, such as a signup form. isPossible checks length
  * only, so reserved test ranges and newly issued ones still pass.
  */
@@ -43,7 +44,7 @@ export function parsePhone(s: string, defaultCountry: PhoneCountry = DEFAULT_PHO
   return parsed?.isPossible() ? parsed.number : undefined;
 }
 
-/** The owner's country, from the first owner phone that names one. Local numbers are read as this. */
+/** [sunshine:phone] The owner's country, from the first owner phone that names one. Local numbers are read as this. */
 export function phoneCountryOf(config: Pick<InstinctConfig, "owner">): PhoneCountry {
   for (const phone of config.owner.phones) {
     const country = parsePhoneNumberFromString(phone)?.country;
@@ -175,7 +176,7 @@ export function resolvePrincipal(msg: InboundMessage, config: InstinctConfig, co
   }
 
   if (looksLikePhone(from)) {
-    const country = phoneCountryOf(config);
+    const country = phoneCountryOf(config); // [sunshine:phone] local numbers read as the owner's country
     const phone = normalizePhone(from, country);
     if (config.owner.phones.some((p) => normalizePhone(p, country) === phone)) return ownerPrincipalOf(config);
     const contact = contacts.findByPhone(phone);

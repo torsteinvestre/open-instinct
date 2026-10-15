@@ -1,4 +1,5 @@
 /**
+ * [sunshine:gateway-settings] This whole file is the fork's (GATEWAY_BRAND_NAME).
  * The names a deployment shows people. Unset, the gateway speaks as Open Instinct and each
  * agent is "Maria's Instinct". A brand renames both, for operators who run it as their own service.
  */

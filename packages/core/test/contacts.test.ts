@@ -11,6 +11,7 @@ describe("slugify", () => {
 });
 
 describe("ContactStore", () => {
+  // [sunshine:phone]
   it("reads local numbers as the owner's country and finds them in any format", () => {
     const store = new ContactStore(tempState(), { phoneCountry: "SE" });
     const c = store.upsert({ name: "Anna Berg", phones: ["070-123 45 67"] });

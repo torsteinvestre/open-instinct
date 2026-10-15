@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { InkboxProvisioner } from "@open-instinct/inkbox";
-import { type Brand, DEFAULT_BRAND } from "./brand.js";
+import { type Brand, DEFAULT_BRAND } from "./brand.js"; // [sunshine:gateway-settings]
 import { type Logger, silentLogger } from "./logger.js";
 import { type UserRecord, type UserStore } from "./store.js";
 
@@ -34,7 +34,7 @@ export interface MaritimeProvisionOptions {
   /** Extra env vars for every agent (model keys, feature flags). Keys that look like secrets are marked secret. */
   extraEnv?: Record<string, string>;
   idleTtlSeconds?: number;
-  /** Give each agent a Linux desktop. Maritime only allows it on a paid plan. Default true. */
+  /** [sunshine:gateway-settings] Give each agent a Linux desktop. Maritime only allows it on a paid plan. Default true. */
   desktop?: boolean;
   /** Ask Maritime to inject its metered LLM credentials and point INSTINCT_MODEL at them. */
   useMaritimeLlm?: boolean;
@@ -61,7 +61,7 @@ export interface ProvisionDeps {
   /** Comma-separated Composio toolkit slugs. Only sent with composioApiKey. Default DEFAULT_COMPOSIO_TOOLKITS. */
   composioToolkits?: string;
   link?: LinkPassthrough;
-  /** Names shown to people. Unset keeps "Maria's Instinct" and core's default agent name. */
+  /** [sunshine:gateway-settings] Names shown to people. Unset keeps "Maria's Instinct" and core's default agent name. */
   brand?: Brand;
   fetchImpl?: typeof fetch;
   logger?: Logger;
@@ -70,6 +70,7 @@ export interface ProvisionDeps {
 }
 
 /** What agentEnvFor and maritimeCreateBody need from the deps. */
+// [sunshine:gateway-settings] "brand"
 export type AgentEnvDeps = Pick<ProvisionDeps, "anthropicApiKey" | "composioApiKey" | "composioToolkits" | "maritime" | "link" | "inkboxBaseUrl" | "brand"> & {
   publicUrl?: string;
 };
@@ -95,7 +96,8 @@ export function linkRedirectUriFor(publicUrl: string, userId: string): string {
 
 /** The persona Maritime shows in its dashboard. The agent's real prompt is built in core. */
 export function personaFor(input: { name: string; handle: string }, brand?: Brand): string {
-  // A branded service gives every agent the same name; the default names it after its owner.
+  // [sunshine:gateway-settings] A branded service gives every agent the same name; the default names it after its owner.
+  // Upstream's line said "the Instincts of people"; the fork says "the agents of people" for every brand.
   const who = brand ? `${brand.agent}, ${input.name}'s personal agent (@${input.handle}),` : `${input.name}'s Instinct (@${input.handle}), a personal agent`;
   return (
     `You are ${who} reached over iMessage, SMS and email. ` +
@@ -120,7 +122,7 @@ export function agentEnvFor(user: UserRecord, deps: AgentEnvDeps): EnvVarInput[]
   if (user.email) env.push({ key: "INSTINCT_OWNER_EMAIL", value: user.email, isSecret: false });
   // [sunshine:timezone] Without it the agent takes the server's zone (UTC), as `instinct deploy` already avoids.
   if (user.timezone) env.push({ key: "INSTINCT_OWNER_TIMEZONE", value: user.timezone, isSecret: false });
-  // Only a brand names the agent; without one, core's default name stays.
+  // [sunshine:gateway-settings] Only a brand names the agent; without one, core's default name stays.
   if (deps.brand) env.push({ key: "INSTINCT_AGENT_NAME", value: deps.brand.agent, isSecret: false });
   if (deps.anthropicApiKey) env.push({ key: "ANTHROPIC_API_KEY", value: deps.anthropicApiKey, isSecret: true });
   if (deps.composioApiKey) {
@@ -152,10 +154,10 @@ export function maritimeCreateBody(user: UserRecord, deps: AgentEnvDeps): Record
     imageName: deps.maritime.agentImage,
     exposedPort: MARITIME_AGENT_PORT,
     healthCheckPath: "/health",
-    desktop: deps.maritime.desktop ?? true,
+    desktop: deps.maritime.desktop ?? true, // [sunshine:gateway-settings]
     externalId: user.id,
     idleTtlSeconds: deps.maritime.idleTtlSeconds ?? DEFAULT_IDLE_TTL_SECONDS,
-    instructions: personaFor(user, deps.brand),
+    instructions: personaFor(user, deps.brand), // [sunshine:gateway-settings]
     initialEnvVars: agentEnvFor(user, deps),
     ...(deps.maritime.useMaritimeLlm ? { useMaritimeLlm: true } : {}),
   };
@@ -271,7 +273,7 @@ export async function provisionUser(input: ProvisionInput, deps: ProvisionDeps):
       const brand = deps.brand ?? DEFAULT_BRAND;
       const identity = await deps.inkbox.provisionIdentity({
         handle: user.handle,
-        // A branded service gives every agent the same name, the way Instinct does.
+        // [sunshine:gateway-settings] A branded service gives every agent the same name, the way Instinct does.
         displayName: deps.brand ? brand.agent : `${user.name}'s ${brand.agent}`,
         description: `${brand.product} for ${user.name}`,
         imessage: true,

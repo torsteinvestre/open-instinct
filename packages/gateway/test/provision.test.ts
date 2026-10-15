@@ -109,6 +109,7 @@ describe("provisionUser", () => {
     expect(env.some((e) => e.value === "whsec_maria")).toBe(false);
   });
 
+  // [sunshine:gateway-settings]
   it("names every agent after the brand and can leave the desktop off", async () => {
     const d = deps();
     type IdentityInput = Parameters<InkboxProvisioner["provisionIdentity"]>[0];

@@ -229,6 +229,7 @@ describe("gateway http", () => {
     expect(ink.calls.filter((c) => c === "provisionIdentity")).toHaveLength(1);
   });
 
+  // [sunshine:signup] [sunshine:gateway-settings]
   it("with a brand and picked handles, asks for no handle and knows a repeat by phone alone", async () => {
     const { base, store, ink, mar } = await boot({ brand: { product: "Sunshine", agent: "Sunshine" }, handlePrefix: "sunshine", desktop: false });
     const landing = await (await fetch(base)).text();
@@ -269,6 +270,7 @@ describe("gateway http", () => {
     expect(ink.calls.filter((c) => c === "provisionIdentity")).toHaveLength(1);
   });
 
+  // [sunshine:contact-card] the next two tests
   it("offers no contact card on the shared line, where the number the agent answers from is unknown", async () => {
     const { base } = await boot({ brand: { product: "Sunshine", agent: "Sunshine" }, seed: [readyUser({ id: "usr_c", handle: "sunshine-maria-abcd" })] });
     const page = await (await fetch(`${base}/connect/usr_c`)).text();
@@ -302,6 +304,7 @@ describe("gateway http", () => {
     expect((await fetch(`${base}/connect/usr_nobody/contact.vcf`)).status).toBe(404);
   });
 
+  // [sunshine:signup]
   it("with picked handles, signing up again restarts a setup that failed", async () => {
     const failed = readyUser({ id: "usr_failed", handle: "sunshine-maria-abcd", phone: "+14155550123", status: "error", identityId: "", identityApiKey: "", signingKey: "", maritimeAgentId: undefined });
     const { base, store } = await boot({ handlePrefix: "sunshine", seed: [failed] });

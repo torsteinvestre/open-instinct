@@ -1,3 +1,4 @@
+// [sunshine:contact-card] This whole file is the fork's.
 import { inflateSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { contactCard, sunPng } from "../src/contact.js";

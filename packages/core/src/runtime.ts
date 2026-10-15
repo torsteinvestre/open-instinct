@@ -1150,7 +1150,7 @@ export class AgentRuntime {
    * tier present. Unknown participants are strangers; an unknown member list caps to stranger.
    */
   private capForGroup(sender: Principal, msg: InboundMessage): Principal {
-    const country = phoneCountryOf(this.deps.config);
+    const country = phoneCountryOf(this.deps.config); // [sunshine:phone]
     const ownerPhones = new Set(this.deps.config.owner.phones.map((p) => normalizePhone(p, country)));
     const participants = Array.isArray(msg.meta?.participants) ? (msg.meta!.participants as unknown[]).filter((p): p is string => typeof p === "string") : [];
     let lowest: Tier = sender.tier;

@@ -1472,7 +1472,9 @@ export function pruneToolResults(messages: AgentMessage[]): { messages: AgentMes
     if (text.length <= PRUNE_MIN_CHARS && images === 0) return m;
     const head = clipAt(text, PRUNE_KEEP_CHARS);
     const left = [text.length > head.length ? `${text.length - head.length} more characters` : "", images ? `${images} image${images === 1 ? "" : "s"}` : ""].filter(Boolean).join(" and ");
-    const note = `[Older tool result shortened to save space: ${left} left out. Run the tool again if you need it.]`;
+    // Says it was cut afterwards: "Older tool result shortened" read as if it had been cut when used, and
+    // the model told the owner its earlier, correct list came from a cut-off result (scenarios/prune.mjs).
+    const note = `[Shortened later to save space; you saw all of it when you used it. ${left} left out here. Run the tool again if you need them.]`;
     results++;
     chars += text.length - head.length;
     return { ...m, content: [{ type: "text" as const, text: head ? `${head}\n${note}` : note }] };

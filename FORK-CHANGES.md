@@ -469,9 +469,12 @@ all in the 9 results over 2,000 characters. A message after a pause would have c
 
 - `pruneToolResults` (`packages/core/src/runtime.ts`): every tool result before the last turn that is
   longer than 2,000 characters (`PRUNE_MIN_CHARS`), or holds an image, keeps its first 600
-  (`PRUNE_KEEP_CHARS`) and a note: "[Older tool result shortened to save space: N more characters left
-  out. Run the tool again if you need it.]". The call, its id and its place stay, so the history stays
-  valid for the API; running it again changes nothing. Conversation text is never touched, and nothing
+  (`PRUNE_KEEP_CHARS`) and a note: "[Shortened later to save space; you saw all of it when you used it.
+  N more characters left out here. Run the tool again if you need them.]". The call, its id and its
+  place stay, so the history stays valid for the API; running it again changes nothing.
+  The note says the cut came later on purpose: worded "Older tool result shortened", the real model read
+  it as cut when used and told the owner its earlier, correct list "was written from a result that had
+  been cut off" (`packages/server/scenarios/prune.mjs`, 2026-10-15). Conversation text is never touched, and nothing
   else reads old results (the memory notes and the news writer read only messages and replies).
 - The last turn (from the message that began the last model run) stays whole, so "reply to the second
   one" still finds what was just looked up. A reminder's note and copy added since do not move it.

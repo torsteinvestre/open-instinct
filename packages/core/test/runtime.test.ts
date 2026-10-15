@@ -450,7 +450,7 @@ describe("AgentRuntime.handleInbound", () => {
     const ask = (h: Harness, i: number) => h.runtime.handleInbound(inbound({ channel: "chat", from: "owner", conversationKey: "chat:main", text: `question ${i}`, id: `q${i}` }));
     const resultTexts = (msgs: AgentMessage[]) => msgs.filter((m) => m.role === "toolResult").map((m) => m.content.map((c) => (c.type === "text" ? c.text : `[${c.type}]`)).join(""));
     const live = (h: Harness) => h.runtime.conversation("chat:main", h.runtime.ownerPrincipal()).agent.state.messages;
-    const NOTE = /\n\[Older tool result shortened to save space: \d+ more characters left out\. Run the tool again if you need it\.\]$/;
+    const NOTE = /\n\[Shortened later to save space; you saw all of it when you used it\. \d+ more characters left out here\. Run the tool again if you need them\.\]$/;
     const usage = { input: 100, output: 10, cacheRead: 0, cacheWrite: 0, totalTokens: 110, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
     /** A reply as the model sends it: with token usage (fauxAssistantMessage alone has none, like a mirrored copy). */
     const modelReply = (content: Parameters<typeof fauxAssistantMessage>[0], at = 0) => ({ ...fauxAssistantMessage(content, { stopReason: typeof content === "string" ? "stop" : "toolUse" }), usage, timestamp: at }) as AgentMessage;
@@ -536,7 +536,7 @@ describe("AgentRuntime.handleInbound", () => {
       const texts = resultTexts(pruned.messages);
       expect(texts[0]).toMatch(NOTE);
       expect(pruned.messages[3]).toBe(msgs[3]); // small: the very same message
-      expect(texts[2]).toBe("screenshot\n[Older tool result shortened to save space: 1 image left out. Run the tool again if you need it.]");
+      expect(texts[2]).toBe("screenshot\n[Shortened later to save space; you saw all of it when you used it. 1 image left out here. Run the tool again if you need them.]");
       expect(texts[3]).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])/); // no half of an emoji left at the cut
       expect(texts[4]).toBe(BIG);
       expect(pruned.messages.map((m) => (m.role === "toolResult" ? m.toolCallId : m.role))).toEqual(msgs.map((m) => (m.role === "toolResult" ? m.toolCallId : m.role)));

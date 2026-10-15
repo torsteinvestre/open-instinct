@@ -209,9 +209,14 @@ both in `core/src/types.ts` and `runtime.ts`. `server/src/boot.ts` creates the w
 `INSTINCT_WATCHER=1`; unset, the agent is unchanged. On first boot with the switch on, the
 owner's checks start by themselves; with no interests after a day, it asks once.
 
-**Not done yet.** The gateway passing `INSTINCT_WATCHER` and `TYPESAFE_API_KEY` to new agents.
-Opening the article itself: Google News links lead to a consent page in Europe, so the writer
-uses a web search instead.
+**For friends' agents** (2026-10-15). The gateway passes `INSTINCT_WATCHER`, `TYPESAFE_API_KEY` (as a
+secret), the `WATCHER_*_MODEL` settings and `MEMORY_PASS_MODEL` to every new agent when they are set on
+the gateway (`AGENT_SETTINGS`, `agentExtraEnv` in `packages/gateway/src/main.ts`; nothing else of the
+gateway's own settings is passed). Agents created before keep what they had: change those with
+`agent-env.sh` or Maritime's dashboard.
+
+**Not done yet.** Opening the article itself: Google News links lead to a consent page in Europe, so
+the writer uses a web search instead.
 
 **To remove.** Delete `packages/watcher` and `skills/news-watch`, and every block tagged
 `[sunshine:watcher]` (`boot.ts`, `server/src/watcher-writer.ts`, `server/package.json`, `types.ts`,

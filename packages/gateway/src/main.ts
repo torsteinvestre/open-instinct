@@ -49,7 +49,17 @@ export interface GatewayEnv {
   useMaritimeLlm: boolean;
   maritimeModel?: string;
   link?: LinkPassthrough;
+  /**
+   * [sunshine:watcher] Agent settings the operator sets once on the gateway, passed to every new agent
+   * as they are: keeping up with the news (INSTINCT_WATCHER=1, the Jev key TYPESAFE_API_KEY, the news
+   * step models) and the nightly memory notes' model. Unset ones are not passed, so agents keep their
+   * own defaults.
+   */
+  agentSettings?: Record<string, string>;
 }
+
+/** [sunshine:watcher] The agent settings a gateway passes on when set (see GatewayEnv.agentSettings). */
+export const AGENT_SETTINGS = ["INSTINCT_WATCHER", "TYPESAFE_API_KEY", "WATCHER_SCREEN_MODEL", "WATCHER_DECIDE_MODEL", "WATCHER_WRITE_MODEL", "MEMORY_PASS_MODEL"] as const;
 
 function truthy(v: string | undefined): boolean {
   return v !== undefined && /^(1|true|yes)$/i.test(v.trim());
@@ -116,7 +126,18 @@ export function readEnv(env: NodeJS.ProcessEnv): GatewayEnv {
     useMaritimeLlm: truthy(env["INSTINCT_USE_MARITIME_LLM"]),
     maritimeModel: env["INSTINCT_MARITIME_MODEL"] || undefined,
     link,
+    agentSettings: agentSettingsFrom(env), // [sunshine:watcher]
   };
+}
+
+/** [sunshine:watcher] The AGENT_SETTINGS that are set (trimmed, non-empty); undefined when none is. */
+function agentSettingsFrom(env: NodeJS.ProcessEnv): Record<string, string> | undefined {
+  const out: Record<string, string> = {};
+  for (const key of AGENT_SETTINGS) {
+    const value = env[key]?.trim();
+    if (value) out[key] = value;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 /**
@@ -137,8 +158,9 @@ export function checkSignupPolicy(cfg: Pick<GatewayEnv, "inkboxAdminApiKey" | "s
 }
 
 /** Settings every agent gets. Only keys safe to share across people belong here. */
-export function agentExtraEnv(cfg: Pick<GatewayEnv, "contextDevApiKey" | "ampleSignup" | "composioMode" | "agentModel">): Record<string, string> | undefined {
-  const env: Record<string, string> = {};
+export function agentExtraEnv(cfg: Pick<GatewayEnv, "contextDevApiKey" | "ampleSignup" | "composioMode" | "agentModel" | "agentSettings">): Record<string, string> | undefined {
+  // [sunshine:watcher] The operator's agent settings first; the keys below are the gateway's own.
+  const env: Record<string, string> = { ...(cfg.agentSettings ?? {}) };
   if (cfg.composioMode) env["COMPOSIO_MODE"] = cfg.composioMode;
   // Without this every agent runs core's default model. Maritime's metered proxy sets its own and wins.
   if (cfg.agentModel) env["INSTINCT_MODEL"] = cfg.agentModel;

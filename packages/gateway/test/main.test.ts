@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_AGENT_IMAGE, agentExtraEnv, checkSignupPolicy, readEnv } from "../src/main.js";
+import { agentEnvFor } from "../src/provision.js";
 
 describe("readEnv", () => {
   it("requires MARITIME_API_KEY and reads the signup, Composio, Maritime LLM and Link settings", () => {
@@ -94,6 +95,33 @@ describe("Ample for every agent", () => {
     expect(cfg.ampleSignup).toBe(false);
     expect(cfg.ampleSharedCredential).toBe(false);
     expect(agentExtraEnv(cfg)).toBeUndefined();
+  });
+});
+
+// [sunshine:watcher] Keeping up with the news (and the memory notes' model) reach friends' agents
+// when the operator sets them once on the gateway.
+describe("agent settings from the gateway", () => {
+  it("passes the set ones to every new agent, the Jev key as a secret, and nothing else of the gateway's", () => {
+    const cfg = readEnv({
+      MARITIME_API_KEY: "mk",
+      INSTINCT_MODEL: "anthropic/claude-sonnet-5-5",
+      INSTINCT_WATCHER: "1",
+      TYPESAFE_API_KEY: " tk_test ",
+      MEMORY_PASS_MODEL: "off",
+      WATCHER_DECIDE_MODEL: "  ",
+      GATEWAY_SIGNUP_SECRET: "invite",
+      INKBOX_ADMIN_API_KEY: "admin",
+    });
+    expect(cfg.agentSettings).toEqual({ INSTINCT_WATCHER: "1", TYPESAFE_API_KEY: "tk_test", MEMORY_PASS_MODEL: "off" });
+    const extra = agentExtraEnv(cfg)!;
+    expect(extra).toEqual({ INSTINCT_WATCHER: "1", TYPESAFE_API_KEY: "tk_test", MEMORY_PASS_MODEL: "off", INSTINCT_MODEL: "anthropic/claude-sonnet-5-5" });
+    const user = { id: "usr_1", identityApiKey: "ik", handle: "sunshine-anna-k3f9", identityId: "id_1", name: "Anna", phone: "+4790000001" } as never;
+    const env = agentEnvFor(user, { maritime: { apiKey: "mk", agentImage: "img", extraEnv: extra } });
+    expect(env.find((e) => e.key === "TYPESAFE_API_KEY")).toEqual({ key: "TYPESAFE_API_KEY", value: "tk_test", isSecret: true });
+    expect(env.find((e) => e.key === "INSTINCT_WATCHER")).toEqual({ key: "INSTINCT_WATCHER", value: "1", isSecret: false });
+    expect(JSON.stringify(env)).not.toContain("invite");
+    expect(JSON.stringify(env)).not.toContain("admin");
+    expect(readEnv({ MARITIME_API_KEY: "mk" }).agentSettings).toBeUndefined();
   });
 });
 

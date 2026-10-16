@@ -4,7 +4,7 @@ import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { AuditLog, MemoryStore, Scheduler, StateDir, defaultConfig, writeSession } from "@open-instinct/core";
+import { AuditLog, HistoryArchive, MemoryStore, Scheduler, StateDir, defaultConfig, writeSession } from "@open-instinct/core";
 import type { ModelCall } from "@open-instinct/watcher";
 import { MEMORY_GATE, MEMORY_MAX_CHARS, MEMORY_PASS_CRON, createMemoryPass, parseNotes } from "../src/memory-pass.js";
 
@@ -31,7 +31,7 @@ function fakeModel(replies: Array<string | Error>): ModelCall & { asked: Array<{
   return call;
 }
 
-function setup(call?: ModelCall, now: () => Date = () => NOW) {
+function setup(call?: ModelCall, now: () => Date = () => NOW, opts: { history?: boolean } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "memory-pass-"));
   dirs.push(dir);
   const state = new StateDir(dir);
@@ -42,12 +42,13 @@ function setup(call?: ModelCall, now: () => Date = () => NOW) {
   const memory = new MemoryStore(state);
   const scheduler = new Scheduler(state, { now });
   const audit = new AuditLog(state);
-  const pass = createMemoryPass({ state, memory, config, scheduler, audit, now, ...(call ? { call } : {}) });
+  const history = opts.history ? new HistoryArchive(state, { now }) : undefined; // [sunshine:history]
+  const pass = createMemoryPass({ state, memory, config, scheduler, audit, now, ...(call ? { call } : {}), ...(history ? { history } : {}) });
   const thread = (messages: unknown[]) => {
     state.writeJson("owner-route.json", { conversationKey: "imessage:c1", channel: "imessage" });
     writeSession(join(state.path("sessions"), `${encodeURIComponent("imessage:c1")}.jsonl`), messages as never);
   };
-  return { state, memory, scheduler, audit, pass, thread, dir };
+  return { state, memory, scheduler, audit, pass, thread, dir, history };
 }
 
 const DAY = [
@@ -131,6 +132,23 @@ describe("the nightly memory notes", () => {
     await pass.run();
     expect(call.asked[0]!.user).toContain("Shortened earlier part of the conversation:");
     expect(call.asked[0]!.user).toContain("got tickets to J. Cole in November");
+  });
+
+  // [sunshine:history] With the kept history the notes read whole messages, also the ones a trim removed.
+  it("read whole messages from the kept history, not the trim's highlights, each message once", async () => {
+    const call = fakeModel(["NO_CHANGE"]);
+    const { pass, thread, history } = setup(call, () => NOW, { history: true });
+    const early = [
+      user("[Thu 15 Oct 2026, 08:10 Europe/Oslo, UTC+02:00]\ngot tickets to J. Cole in November, the 14th, with Martin", at("2026-10-15T06:10:00Z")),
+      asst("Nice, that's a good one.", at("2026-10-15T06:10:05Z")),
+    ];
+    history!.record("imessage:c1", [...early, ...DAY]);
+    thread([user("[Conversation summary] 2 earlier messages were trimmed to save space. Highlights, oldest first:\n- user: [Thu 15 Oct, 08:10] got tickets to J. Cole in Nov", at("2026-10-15T09:00:00Z")), ...DAY]);
+    await pass.run();
+    const read = call.asked[0]!.user;
+    expect(read).toContain("Torstein: got tickets to J. Cole in November, the 14th, with Martin");
+    expect(read).not.toContain("Shortened earlier part of the conversation:");
+    expect(read.split("About 1,5 million NOK").length - 1).toBe(1);
   });
 
   it("keep everything when the model fails, and say so", async () => {

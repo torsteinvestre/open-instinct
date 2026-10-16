@@ -11,9 +11,9 @@
  * memory_write during the day; it saved 3 things in 3 days (2026-10-15).
  */
 import { readdirSync, rmSync } from "node:fs";
-import type { AuditLog, InstinctConfig, MemoryStore, Scheduler, StateDir } from "@open-instinct/core";
+import type { AuditLog, HistoryArchive, InstinctConfig, MemoryStore, Scheduler, StateDir } from "@open-instinct/core";
 import type { ModelCall } from "@open-instinct/watcher";
-import { ownerThreadEntries, threadLine } from "./watcher-writer.js";
+import { historyThreadEntries, ownerThreadEntries, threadLine, type ThreadEntry } from "./watcher-writer.js";
 
 export const MEMORY_GATE = "memory";
 export const MEMORY_PASS_FILE = "memory-pass.json";
@@ -85,6 +85,8 @@ export interface MemoryPassDeps {
   /** Undefined: the notes are off (MEMORY_PASS_MODEL=off). */
   call?: ModelCall;
   now?: () => Date;
+  /** [sunshine:history] The kept conversations: with them the notes read the whole day, not what the last trim left. */
+  history?: HistoryArchive;
 }
 
 export interface MemoryPass {
@@ -125,7 +127,14 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     const s = read();
     const since = s.lastPassAt ?? 0;
     const { entries, summary } = ownerThreadEntries(deps.state, deps.config);
-    const fresh = entries.filter((e) => e.ts > since);
+    // [sunshine:history] The kept history has the whole day, also what a trim took out of the live
+    // thread; the live thread adds anything not kept yet. One entry per message (who and when).
+    const archived = deps.history ? historyThreadEntries(deps.history, deps.state, deps.config, since) : [];
+    const byMessage = new Map<string, ThreadEntry>();
+    for (const e of [...archived, ...entries.filter((x) => x.ts > since)]) byMessage.set(`${e.who}|${e.ts}`, byMessage.get(`${e.who}|${e.ts}`) ?? e);
+    const fresh = [...byMessage.values()].sort((a, b) => a.ts - b.ts);
+    // The trim summary is only needed where the kept history does not reach back as far as the live thread.
+    const archiveCovers = archived.length > 0 && archived[0]!.ts <= (entries[0]?.ts ?? Number.POSITIVE_INFINITY);
     // Nothing the owner said since the last pass: no model call.
     if (!fresh.some((e) => e.who === "owner")) return record("nothing new");
     const newest = Math.max(...fresh.map((e) => e.ts));
@@ -133,7 +142,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     // What they said since the last pass, newest kept within the budget; a fold since then left part
     // of it only in the trimmed conversation's summary, so that comes first.
     const lines = fresh.map((e) => threadLine(e, LINE_MAX_CHARS));
-    if (summary && summary.ts > since) lines.unshift("Shortened earlier part of the conversation:", summary.text, "", "Then:");
+    if (summary && summary.ts > since && !archiveCovers) lines.unshift("Shortened earlier part of the conversation:", summary.text, "", "Then:"); // [sunshine:history] !archiveCovers
     const kept: string[] = [];
     let size = 0;
     for (let i = lines.length - 1; i >= 0 && size + lines[i]!.length + 1 <= CONVERSATION_MAX_CHARS; i--) {

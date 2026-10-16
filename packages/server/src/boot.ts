@@ -18,6 +18,7 @@ import {
   Scheduler,
   StateDir,
   ToolRegistry,
+  HistoryArchive,
   coreTools,
   ensurePersona,
   loadConfig,
@@ -104,6 +105,8 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
   const scheduler = new Scheduler(state);
   const contacts = new ContactStore(state, { phoneCountry: phoneCountryOf(config) }); // [sunshine:phone]
   const memory = new MemoryStore(state);
+  // [sunshine:history] The owner's conversations, kept for searching; off with features.history = false.
+  const history = config.features?.history === false ? undefined : new HistoryArchive(state);
   const a2aStore = new A2AStore(state);
 
   const model = opts.model ?? resolveModel(config.model.primary, env);
@@ -159,6 +162,7 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
       config,
       outbox,
       workspaceDir: state.path("workspace"),
+      ...(history ? { history } : {}), // [sunshine:history]
       onApprovalSettled: (approval, approved) => runtime.afterApproval(approval, approved),
       // Image generation rides on an OpenAI-compatible key: a dedicated IMAGE_API_KEY, else the model key
       // (an OpenAI-compatible proxy that forwards /images/generations works too). The shell never sees either.
@@ -358,7 +362,7 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
     const apiKey = m ? apiKeyFor(m.provider, env) : undefined;
     if (m && apiKey) call = modelCall(m, { reasoning: "low", apiKey });
     log(`memory notes: ${call ? `nightly, ${spec}` : spec ? `off (no key for ${m?.provider})` : "off"}`);
-    return createMemoryPass({ state, memory, config, scheduler, audit, ...(call ? { call } : {}) });
+    return createMemoryPass({ state, memory, config, scheduler, audit, ...(call ? { call } : {}), ...(history ? { history } : {}) }); // [sunshine:history] history
   });
 
   // Payments: a Stripe Link agent wallet, when the Link OAuth client and Stripe key are set.
@@ -434,6 +438,7 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
     },
     // [sunshine:onboarding] The welcome guide goes with a new owner's very first text.
     firstContactGuide: () => skillGuide(skillList, "onboarding"),
+    ...(history ? { history } : {}), // [sunshine:history]
     // [sunshine:prune] Pi keeps the prompt cache an hour with PI_CACHE_RETENTION=long; pruning waits that long then.
     ...(env.PI_CACHE_RETENTION?.trim() === "long" ? { promptCacheMs: 60 * 60 * 1000 } : {}),
   });

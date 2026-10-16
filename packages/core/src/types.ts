@@ -272,6 +272,11 @@ export interface InstinctConfig {
      * prompt cache has lapsed anyway, so big email lists and search results stop riding along.
      */
     pruneToolResults?: boolean;
+    /**
+     * [sunshine:history] On unless false: the owner's conversations are kept (a year) and can be
+     * searched with history_search after the live history is trimmed.
+     */
+    history?: boolean;
   };
 }
 

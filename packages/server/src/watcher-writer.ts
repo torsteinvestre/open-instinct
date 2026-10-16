@@ -4,7 +4,7 @@
  * then texts as the agent would, instead of from the headline alone.
  */
 import { join } from "node:path";
-import { DEFAULT_PERSONA, readPersona, readSession, type InstinctConfig, type MemoryStore, type Principal, type StateDir, type ToolRegistry } from "@open-instinct/core";
+import { DEFAULT_PERSONA, readPersona, readSession, type HistoryArchive, type InstinctConfig, type MemoryStore, type Principal, type StateDir, type ToolRegistry } from "@open-instinct/core";
 import type { WriterContext } from "@open-instinct/watcher";
 
 /** Messages from the end of the owner's thread the writer sees. */
@@ -61,6 +61,26 @@ export function ownerThreadEntries(state: StateDir, config: InstinctConfig): { e
     entries.push({ ts: m.timestamp, who, name, when, text });
   }
   return summary ? { entries, summary } : { entries };
+}
+
+/**
+ * [sunshine:history] The owner's own thread from the kept history (whole messages, also the ones a
+ * trim removed from the live thread), newer than `since`, as entries like ownerThreadEntries gives.
+ */
+export function historyThreadEntries(history: HistoryArchive, state: StateDir, config: InstinctConfig, since: number): ThreadEntry[] {
+  const route = state.readJson<{ conversationKey?: unknown }>("owner-route.json", {});
+  if (typeof route.conversationKey !== "string") return [];
+  const tz = config.owner.timezone || "UTC";
+  return history
+    .between({ since })
+    .filter((e) => e.key === route.conversationKey)
+    .map((e) => ({
+      ts: e.ts,
+      who: e.who,
+      name: e.who === "agent" ? config.agent.name : e.who === "note" ? "(note)" : config.owner.name,
+      when: new Intl.DateTimeFormat("en-GB", { timeZone: tz, weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).format(new Date(e.ts)),
+      text: e.text,
+    }));
 }
 
 /** An entry as one plain line, "[Wed 14 Oct, 14:58] Torstein: …", its text clipped to `max`. */

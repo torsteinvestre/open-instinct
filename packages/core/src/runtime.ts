@@ -18,6 +18,7 @@ import type { ApprovalMatch, ApprovalStore } from "./approvals.js";
 import type { AuditLog } from "./audit.js";
 import type { ContactStore } from "./contacts.js";
 import type { MemoryStore } from "./memory.js";
+import type { HistoryArchive } from "./history.js"; // [sunshine:history]
 import { OwnerNotifier } from "./notifier.js";
 import { DEFAULT_TIER_TABLE, SPEND_CAPABILITIES, type PolicyEngine } from "./policy.js";
 import { normalizePhone, phoneCountryOf, resolvePrincipal } from "./principal.js";
@@ -93,6 +94,11 @@ export interface RuntimeDeps {
    * the same way for the same reason. Unset: no welcome note.
    */
   firstContactGuide?: () => string | undefined;
+  /**
+   * [sunshine:history] Where the owner's conversations are kept for searching after the live history
+   * is trimmed (the owner's own text threads and the dashboard chat). Unset: nothing is kept.
+   */
+  history?: HistoryArchive;
 }
 
 export interface HandleResult {
@@ -206,6 +212,8 @@ interface ConversationOptions {
   pruneAfterMs?: number;
   /** [sunshine:prune] Told how many results were removed and how many characters they held. */
   onPrune?: (pruned: { results: number; chars: number }) => void;
+  /** [sunshine:history] Called with the whole history each time it is saved, to keep the conversation. */
+  onPersist?: (messages: AgentMessage[]) => void;
 }
 
 export class Conversation {
@@ -234,6 +242,7 @@ export class Conversation {
   private readonly stableCache?: { timeZone: string };
   private readonly pruneAfterMs?: number; // [sunshine:prune]
   private readonly onPrune?: (pruned: { results: number; chars: number }) => void; // [sunshine:prune]
+  private readonly onPersist?: (messages: AgentMessage[]) => void; // [sunshine:history]
 
   constructor(opts: ConversationOptions) {
     this.key = opts.key;
@@ -248,6 +257,7 @@ export class Conversation {
     this.stableCache = opts.stableCache;
     this.pruneAfterMs = opts.pruneAfterMs; // [sunshine:prune]
     this.onPrune = opts.onPrune; // [sunshine:prune]
+    this.onPersist = opts.onPersist; // [sunshine:history]
   }
 
   /** [sunshine:stable-cache] The message as the model sees it: with the time it was sent in front. */
@@ -326,6 +336,7 @@ export class Conversation {
   /** Write the transcript (without system messages, which are rebuilt) as JSON lines. */
   persist(): void {
     writeSession(this.sessionFile, this.agent.state.messages);
+    this.onPersist?.(this.agent.state.messages); // [sunshine:history]
   }
 
   /** The prompt carries the date, memory and pending approvals, so it is rebuilt per run. */
@@ -470,6 +481,18 @@ export class AgentRuntime {
             pruneAfterMs: this.deps.promptCacheMs ?? PROMPT_CACHE_MS,
             onPrune: (pruned: { results: number; chars: number }) =>
               this.deps.audit.append({ kind: "policy", conversationKey: key, principal: principal.id, detail: { prunedToolResults: pruned.results, prunedChars: pruned.chars } }),
+          }
+        : {}),
+      // [sunshine:history] The owner's own threads are kept for searching; a failure never fails a save.
+      ...(this.deps.history && principal.kind === "owner" && (channel === "imessage" || channel === "sms" || channel === "chat")
+        ? {
+            onPersist: (messages: AgentMessage[]) => {
+              try {
+                this.deps.history!.record(key, messages);
+              } catch (error) {
+                this.deps.audit.append({ kind: "error", conversationKey: key, principal: principal.id, detail: { message: `history not kept: ${errorMessage(error)}` } });
+              }
+            },
           }
         : {}),
     });

@@ -13,6 +13,7 @@ import { coreTools } from "../src/core-tools.js";
 import { A2AStore } from "../src/a2a-state.js";
 import { AgentRuntime, FOLD_HIGH_MESSAGES, FOLD_LOW_CHARS, FOLD_LOW_MESSAGES, InboundUncertainError, PROMPT_CACHE_MS, PRUNED_RESULT, SESSION_KEEP_MESSAGES, cacheLapsed, foldInSteps, hashArgs, pruneToolResults, readSession, restoreMessages, runtimeKey, stableJson, type Outbox, type RuntimeDeps } from "../src/runtime.js";
 import { Scheduler } from "../src/scheduler.js";
+import { HistoryArchive } from "../src/history.js"; // [sunshine:history]
 import { ToolRegistry, defineTool, textResult, type RegisteredTool } from "../src/tools.js";
 import type { InboundMessage, OutboundMessage, Policy, Principal } from "../src/types.js";
 import { inbound, tempState, testConfig } from "./helpers.js";
@@ -547,6 +548,30 @@ describe("AgentRuntime.handleInbound", () => {
       expect(cacheLapsed(msgs, new Date(at + 4 * 60_000), PROMPT_CACHE_MS)).toBe(false);
       expect(cacheLapsed(msgs, new Date(at + 10 * 60_000), PROMPT_CACHE_MS)).toBe(true); // the copy at +9 min used no cache
       expect(cacheLapsed([user("q")], new Date(at), PROMPT_CACHE_MS)).toBe(true);
+    });
+  });
+
+  // [sunshine:history] The owner's conversation stays searchable after a trim removes it from view.
+  describe("kept history", () => {
+    it("keeps the owner's thread, also what a fold removes, and not other people's threads", async () => {
+      const history = new HistoryArchive(tempState());
+      const h = harness({ deps: { history } });
+      const turns = FOLD_HIGH_MESSAGES / 2 + 2;
+      h.faux.setResponses(Array.from({ length: turns }, (_, i) => textTurn(`answer ${i}`)));
+      for (let i = 0; i < turns; i++) {
+        await h.runtime.handleInbound(inbound({ channel: "imessage", from: OWNER_PHONE, conversationKey: "imessage:c1", text: i === 0 ? "my bike code is 4471" : `question ${i}`, id: `q${i}` }));
+      }
+      const live = h.runtime.conversation("imessage:c1", h.runtime.ownerPrincipal()).agent.state.messages;
+      const whole = live.filter((m) => m.role === "user" && !JSON.stringify(m.content).includes("[Conversation summary]"));
+      expect(JSON.stringify(whole)).not.toContain("my bike code is 4471"); // folded out of view (a summary line at most)
+      const found = history.search("bike code");
+      expect(found.matches.map((m) => [m.entry.text, m.next?.text])).toEqual([["my bike code is 4471", "answer 0"]]);
+      expect(history.all()).toHaveLength(turns * 2);
+
+      h.deps.contacts.upsert({ name: "Sam Lee", tier: "friend", phones: [SAM_PHONE] });
+      h.faux.setResponses([textTurn("hi Sam")]);
+      await h.runtime.handleInbound(inbound({ channel: "imessage", from: SAM_PHONE, conversationKey: "imessage:sam", text: "hey it's Sam", id: "s1" }));
+      expect(history.search("Sam").matches).toHaveLength(0);
     });
   });
 

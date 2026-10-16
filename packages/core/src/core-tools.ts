@@ -8,6 +8,7 @@ import { Type } from "typebox";
 import type { ApprovalStore } from "./approvals.js";
 import type { AuditLog } from "./audit.js";
 import type { MemoryStore } from "./memory.js";
+import type { HistoryArchive, HistoryEntry, HistoryRange } from "./history.js"; // [sunshine:history]
 import { checkPublicTarget, type Lookup } from "./net-guard.js";
 import { pdfPageCount, renderMarkdownToPdf } from "./pdf.js";
 import { wrapUntrusted } from "./prompt.js";
@@ -34,6 +35,8 @@ export interface CoreToolDeps {
   onApprovalSettled?: (approval: Approval, approved: boolean) => Promise<void> | void;
   /** An OpenAI-compatible images endpoint (`POST {baseUrl}/images/generations`). Without it image_generate explains what to set. */
   images?: { apiKey: string; baseUrl?: string; model?: string };
+  /** [sunshine:history] The owner's kept conversations; with it, history_search and history_forget. */
+  history?: HistoryArchive;
 }
 
 export const DEFAULT_IMAGE_BASE_URL = "https://api.openai.com/v1";
@@ -51,6 +54,7 @@ const SEARCH_RESULTS = 8;
 export function coreTools(deps: CoreToolDeps): RegisteredTool[] {
   return [
     ...memoryTools(deps),
+    ...historyTools(deps), // [sunshine:history]
     ...scheduleTools(deps),
     ...ownerTools(deps),
     auditTool(deps),
@@ -112,6 +116,70 @@ function memoryTools({ memory }: CoreToolDeps): RegisteredTool[] {
   });
 
   return [memoryRead, memoryWrite, journalAppend];
+}
+
+// ---------------------------------------------------------------------------
+// [sunshine:history] Earlier conversations
+// ---------------------------------------------------------------------------
+
+const HISTORY_LINE_MAX = 500;
+
+/** "2026-10-15" as the start (or, with `end`, the end) of that day in the owner's timezone, in ms. */
+function dayBound(day: string | undefined, tz: string, end = false): number | undefined {
+  if (!day || !/^\d{4}-\d{2}-\d{2}$/.test(day.trim())) return undefined;
+  const utc = Date.parse(`${day.trim()}T${end ? "23:59:59.999" : "00:00:00.000"}Z`);
+  if (Number.isNaN(utc)) return undefined;
+  // Shift by the zone's offset on that day, so the day starts at local midnight.
+  const local = new Date(new Date(utc).toLocaleString("en-US", { timeZone: tz }));
+  const asUtc = new Date(new Date(utc).toLocaleString("en-US", { timeZone: "UTC" }));
+  return utc - (local.getTime() - asUtc.getTime());
+}
+
+function historyTools({ history, config }: CoreToolDeps): RegisteredTool[] {
+  if (!history) return [];
+  const tz = () => config.owner.timezone || "UTC";
+  const name = (e: HistoryEntry) => (e.who === "owner" ? config.owner.name : e.who === "agent" ? config.agent.name : "(note)");
+  const line = (e: HistoryEntry) => `[${localTime(new Date(e.ts).toISOString(), tz()).replace(/ \S+$/, "")}] ${name(e)}: ${clip(e.text.replace(/\s+/g, " "), HISTORY_LINE_MAX)}`;
+  const range = (since?: string, until?: string): HistoryRange => ({ since: dayBound(since, tz()), until: dayBound(until, tz(), true) });
+  const search = defineTool({
+    name: "history_search",
+    label: "Search earlier conversations",
+    description: "Search all earlier conversations with the owner by words, also older than you can see. Results are dated; things may have changed since.",
+    parameters: Type.Object({
+      query: Type.String({ description: "Words, e.g. \"fund apartment\"" }),
+      since: Type.Optional(Type.String({ description: "YYYY-MM-DD" })),
+      until: Type.Optional(Type.String({ description: "YYYY-MM-DD" })),
+    }),
+    meta: { capabilities: ["memory.write"], group: "memory", describe: (a) => `search earlier conversations: ${argText(a, "query")}` },
+    execute: async ({ query, since, until }) => {
+      const { matches, partial } = history.search(query, range(since, until));
+      if (matches.length === 0) {
+        const first = history.all()[0];
+        const from = first ? ` (kept from ${localTime(new Date(first.ts).toISOString(), tz()).replace(/ \S+$/, "")})` : "";
+        return textResult(`Nothing found for "${query}" in your earlier conversations${from}.`);
+      }
+      const lines = matches.map((m) => (m.next ? `${line(m.entry)}\n  ${line(m.next)}` : line(m.entry)));
+      const head = partial ? `No message has all of "${query}"; the closest, newest first:` : "Newest first:";
+      return textResult(`${head}\n${lines.join("\n")}`);
+    },
+  });
+
+  const forget = defineTool({
+    name: "history_forget",
+    label: "Forget earlier messages",
+    description: "When the owner asks you to forget something: remove earlier messages containing all the words. First call lists them; confirm true removes.",
+    parameters: Type.Object({ query: Type.String(), confirm: Type.Optional(Type.Boolean()) }),
+    meta: { capabilities: ["memory.write"], group: "memory", describe: (a) => `forget earlier messages: ${argText(a, "query")}` },
+    execute: async ({ query, confirm }) => {
+      const gone = history.forget(query, {}, confirm === true);
+      if (gone.length === 0) return textResult(`No earlier message has all of "${query}".`);
+      const sample = gone.slice(-5).map(line).join("\n");
+      if (confirm !== true) return textResult(`${gone.length} message(s) would be removed, for example:\n${sample}\nCall again with confirm true to remove them.`);
+      return textResult(`Removed ${gone.length} message(s); they will not be kept again. Messages still in the current conversation stay until it is trimmed.`);
+    },
+  });
+
+  return [search, forget];
 }
 
 // ---------------------------------------------------------------------------

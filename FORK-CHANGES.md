@@ -546,6 +546,47 @@ The opening follows the skill's example almost word for word, so that example is
 **To remove.** Revert the commits (`git log --grep "sunshine:onboarding"`) or delete the tagged blocks
 in `runtime.ts`, `boot.ts`, `skills.ts` and their tests; restore upstream's `skills/onboarding/SKILL.md`.
 
+### `[sunshine:history]`: the owner's conversations stay searchable after a trim
+
+**Problem** (seen live 2026-10-16). Upstream folds older messages into a short summary and deletes
+them from disk. The owner's agent could see whole messages back to the day before, 200-character
+highlights for one more day, and nothing older: what was said on the first days survived only as the
+few facts in `MEMORY.md`. The nightly notes had the same gap on busy days (only the highlights of
+what a trim removed). OpenClaw keeps transcripts searchable (`memory_search`).
+
+**What the fork adds.**
+
+- `HistoryArchive` (`packages/core/src/history.ts`): each time an owner thread (their own iMessage/SMS
+  threads and the dashboard chat) is saved, its conversation is added to `history/owner.jsonl`: the
+  owner's texts, the agent's replies, and the runtime's notes (kept to 300 characters), with the time;
+  each message once. Not kept: tool calls and results (they can be fetched again), trim summaries,
+  other people's threads. Entries older than 365 days (`HISTORY_KEEP_DAYS`) are dropped.
+- Two owner-only tools (`packages/core/src/core-tools.ts`, capability `memory.write`):
+  `history_search` (words, optional days in the owner's timezone; newest first, each with the answer
+  that followed; dated, "things may have changed since") and `history_forget` (lists what contains the
+  words, removes it on `confirm`; removed messages are remembered by fingerprint in
+  `history/forgotten.json`, no text, so the live thread cannot write them back).
+- The nightly notes (`packages/server/src/memory-pass.ts`) read the whole day from the archive, merged
+  with the live thread; the trim summary is used only where the archive does not reach back.
+- Off switch: `config.features.history = false` (no archive, no tools).
+
+**Cost.** The two tools add about 246 tokens to every message (measured with Anthropic's token count),
+about $0.08 per owner per month; a search is one extra model call when the past is asked about. Storage
+is text on the agent's disk, about 1 MB a month.
+
+**Tested.** Unit tests (`packages/core/test/history.test.ts`, the "kept history" test in
+`runtime.test.ts`, `memory-pass.test.ts`): kept once, stamps dropped, notes short, no tool traffic;
+words in any order, newest first, a reply shown under its question; days in the owner's zone; forget
+lists then removes and never re-adds; the age limit; a fold removes a message from view but search finds
+it; other people's threads not kept; the notes read whole messages from the archive. Real model
+(`packages/server/scenarios/history.mjs`, $0.027): with nothing in view, it searched and answered "Your
+bike lock code is 4471. You told me on Monday."; reproduced Thursday's four fund-vs-apartment points;
+for a birthday never mentioned it searched twice and said it could not find it, without inventing one.
+
+**To remove.** `features.history = false`, or revert the commit (`git log --grep "sunshine:history"`)
+or delete `history.ts`, its tools and the tagged blocks in `runtime.ts`, `types.ts`, `index.ts`,
+`boot.ts`, `memory-pass.ts`, `watcher-writer.ts` and the tests.
+
 ### Long replies (investigated 2026-10-15, nothing changed)
 
 A money question ("what should be considered: fund vs apartment") got a 1,435-character, seven-point

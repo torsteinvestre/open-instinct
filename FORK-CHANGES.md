@@ -452,9 +452,8 @@ offered. Router mode then adds about **6,200 tokens** a message (search 2,613, r
 915, tool schemas 534, apps_list and guidance). The agent runs with `COMPOSIO_MODE=router` and
 `COMPOSIO_TOOLKITS=gmail,googlecalendar` (Maritime settings), so apps are the owner's only.
 
-**Next** (planned): tools loaded only when needed, so apps cost nothing until used, and a short list
-of direct actions chosen from what is actually used. Pi already supports adding tools mid-conversation
-without breaking the prompt cache (`tool_addition`, Sonnet 5.5 supports it).
+**Loaded only when needed** since `[sunshine:tool-loader]`: the router's tools come with `load_tools`
+("apps") instead of riding along with every message.
 
 **To remove.** Delete `LEFT_OUT_TOOLS` and its filter in `tools()`, and the test next to it.
 
@@ -586,6 +585,79 @@ for a birthday never mentioned it searched twice and said it could not find it, 
 **To remove.** `features.history = false`, or revert the commit (`git log --grep "sunshine:history"`)
 or delete `history.ts`, its tools and the tagged blocks in `runtime.ts`, `types.ts`, `index.ts`,
 `boot.ts`, `memory-pass.ts`, `watcher-writer.ts` and the tests.
+
+### `[sunshine:tool-loader]`: email, desktop, file and people tools load when a request needs them
+
+**Problem** (measured 2026-10-16, a local boot with the live agent's settings, Anthropic's token
+counter). Every message carried 23,700 tokens before the conversation: 5,700 of instructions and 51
+tools (18,000). Most of the tools are for things most messages never touch: Gmail and Calendar through
+Composio's router (6,000), the desktop (2,900, plus 350 of instructions), files and shell (2,100),
+contacts, trust and other people's assistants (2,600). They are paid again on every message after a
+pause and on every scheduled run.
+
+**What the fork adds** (Pi's mid-conversation tool changes, which Sonnet 5.5 supports).
+
+- `packages/core/src/tool-loader.ts`: four loadable groups by `meta.group` (`apps`; `computer`;
+  `files`; `people` = `contacts` + `network`) and the `load_tools` tool, which lists them with one line
+  each. The owner's conversations start without those groups; `load_tools` adds one, and its result
+  carries the group's guidance (the desktop and apps text that `boot.ts` otherwise puts in every
+  prompt).
+- `packages/core/src/runtime.ts`:
+  - `bindTools` gives the owner's own conversations the base tools, `load_tools` and the loaded groups;
+    everyone else sees what policy allows, as before.
+  - `loadToolGroups` marks a group loaded, and `prepareNextTurnWithContext` hands the new list to the
+    next model call. Pi then announces the added tools in a system message after the load (a
+    `tool_addition` block), so the tool list and instructions at the start stay as they were and the
+    cache is read back.
+  - `applySystemPrompt` builds the opening from the base tools only and keeps those announcements in
+    place. Before, it rebuilt the opening from the current tool list and threw the announcements away,
+    so every message after a load would have paid for the whole prompt again.
+  - `foldInSteps` keeps announcements where they are. Before, it moved every system message to the
+    front before each request, which would have put them ahead of the whole history and broken the
+    cache. In a fold they stay in place, or go right after the summary if what followed them was
+    folded away, so a fold in the middle of a desktop session does not take the tools away.
+  - `unloadIfPaidAnyway` drops the loaded groups and their announcements at the moments
+    `[sunshine:prune]` uses: the cache has lapsed (5 minutes after the last model call, an hour with
+    `PI_CACHE_RETENTION=long`) or the history was folded. The start is paid in full then anyway. A
+    restart starts from the base list too (announcements are not saved). The calls made with a dropped
+    group stay in the history; Anthropic accepts tools that are no longer declared there.
+  - `systemPromptFor` lists capabilities and tool groups from everything the person may use, loaded or
+    not, so a load never changes the prompt.
+  - Audit `policy` entries: `toolsLoaded`, `toolsUnloaded`.
+- `packages/server/src/boot.ts`: with the loader on, the desktop and apps guidance go to the loader
+  instead of the prompt.
+- Off switch: `config.features.toolLoader = false`. It also needs `stableCache`; without it the
+  prompt changes every run anyway.
+
+**Measured** (free). The owner's thread: 23,703 tokens before the conversation, now 9,813 (instructions
+5,013, 23 tools 4,800, of which `load_tools` is 414). About $3.90 per owner per month with email,
+about $2.10 for a friend without email (each 1,000 tokens is about $0.28 per user per month).
+
+**Checked without a model run.**
+- Pi's own Anthropic requests for a conversation that loads the file tools mid-reply (scratchpad
+  `loader-wire2.mjs`, built by Pi and stopped before sending): the same tool list and system in all 5
+  requests, each request only adding to the one before, the `tool_addition` blocks right after the
+  load's result, and every request accepted by Anthropic's token counter.
+- A history using a tool no longer declared, and a `tool_removal`, are accepted too.
+
+**Tests** (`packages/core/test/runtime.test.ts`, "tools loaded when needed"):
+- the opening leaves the groups out and never changes across messages and loads; every request only
+  adds to the one before;
+- a warm second message keeps the group, and a cold one drops it;
+- a restart starts from the base list;
+- "already loaded";
+- other people's conversations are unchanged, and the switch and stableCache-off restore everything;
+- a fold keeps the announcements.
+
+Two checks were made by putting the old behaviour back on purpose: the tests fail for both traps. The
+smoke test loads `files` before making its PDF.
+
+**Real model** (`packages/server/scenarios/tool-loader.mjs`, 18 requests, canned tool answers, about
+40-60 cents a round): not run yet.
+
+**To remove.** `features.toolLoader = false`, or revert the commit (`git log --grep "tool-loader"`) or
+delete `tool-loader.ts` and the tagged blocks in `runtime.ts`, `tools.ts`, `types.ts`, `index.ts`,
+`boot.ts`, `smoke.ts` and the tests.
 
 ### `[sunshine:search]`: friends' agents get the web search key
 

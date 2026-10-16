@@ -1933,3 +1933,151 @@ describe("[sunshine:reply-guard] system tasks", () => {
     expect(h.deps.audit.read({ kinds: ["policy"] }).some((a) => a.detail["replyGuard"])).toBe(true);
   });
 });
+
+// [sunshine:tool-loader] The owner's email, desktop, file and people tools come only when a request
+// loads them, and the start of what is sent (instructions and tool list) never changes for it.
+describe("[sunshine:tool-loader] tools loaded when needed", () => {
+  const desk = defineTool({ name: "desk", label: "Desk", description: "uses the desktop", parameters: Type.Object({}), meta: { capabilities: ["computer.use"], group: "computer" }, execute: async () => textResult("screen") });
+  const contactAdd = defineTool({ name: "contact_add", label: "Add contact", description: "saves a contact", parameters: Type.Object({ name: Type.String() }), meta: { capabilities: ["trust.manage"], group: "contacts" }, execute: async () => textResult("saved") });
+  const BASE = ["echo", "slow", "load_tools"];
+  const ALL = ["echo", "slow", "calendar_add", "email_read", "buy", "desk", "contact_add"];
+  type Request = { messages: Array<AgentMessage & { toolsAdded?: Array<{ name: string }>; toolsRemoved?: Array<{ name: string }> }> };
+
+  /** A harness that keeps a copy of every request the model gets. */
+  function loaderHarness(opts: { now?: () => Date; config?: ReturnType<typeof testConfig>; toolLoader?: boolean } = {}) {
+    const requests: Request[] = [];
+    const streamFn: StreamFn = (model, context, options) => {
+      requests.push(JSON.parse(JSON.stringify(context)) as Request);
+      return (streamSimple as StreamFn)(model, context, options);
+    };
+    const h = harness({
+      extraTools: [desk, contactAdd],
+      deps: {
+        streamFn,
+        ...(opts.toolLoader === false ? {} : { toolLoader: { guidance: { apps: "## Apps\nUse the app tools." } } }),
+        ...(opts.now ? { now: opts.now } : {}),
+        ...(opts.config ? { config: opts.config } : {}),
+      },
+    });
+    return { h, requests };
+  }
+  const ask = (h: Harness, text: string, id: string) => h.runtime.handleInbound(inbound({ channel: "chat", from: "owner", conversationKey: "chat:main", text, id }));
+  const live = (h: Harness) => h.runtime.conversation("chat:main", h.runtime.ownerPrincipal());
+  /** The start of a request: the instructions and the tool list. */
+  const opening = (r: Request) => ({ prompt: JSON.stringify(r.messages[0]!.content), tools: (r.messages[0]!.toolsAdded ?? []).map((t) => t.name) });
+  /** Later system messages: Pi's announcements of added and removed tools. */
+  const announcements = (r: Request) =>
+    r.messages.slice(1).filter((m) => m.role === "system").map((m) => ({ added: (m.toolsAdded ?? []).map((t) => t.name), removed: (m.toolsRemoved ?? []).map((t) => t.name) }));
+  const calledEmail = (r: Request) => r.messages.some((m) => m.role === "assistant" && m.content.some((c) => c.type === "toolCall" && c.name === "email_read"));
+  const loadResults = (h: Harness) =>
+    live(h).agent.state.messages.filter((m) => m.role === "toolResult" && m.toolName === "load_tools").map((m) => (m.role === "toolResult" ? m.content.map((c) => (c.type === "text" ? c.text : "")).join("") : ""));
+  const audited = (h: Harness, key: string) => h.deps.audit.read({ kinds: ["policy"] }).filter((e) => e.detail[key]).map((e) => e.detail[key]);
+
+  it("keeps loadable groups out of the owner's opening and loads one mid-reply without changing it", async () => {
+    const { h, requests } = loaderHarness();
+    h.faux.setResponses([textTurn("Hi!"), toolTurn("load_tools", { groups: ["apps"] }), toolTurn("email_read", {}), textTurn("Three new emails.")]);
+    await ask(h, "hi", "m0");
+    await ask(h, "check my inbox", "m1");
+    expect(requests).toHaveLength(4);
+    const first = opening(requests[0]!);
+    expect(first.tools).toEqual(BASE);
+    // The instructions still name every group they may use, loaded or not.
+    expect(first.prompt).toMatch(/Tool groups available: [^\n]*apps/);
+    expect(first.prompt).toMatch(/Tool groups available: [^\n]*computer/);
+    for (const r of requests) expect(opening(r)).toEqual(first);
+    expect(announcements(requests[1]!)).toEqual([]);
+    expect(announcements(requests[2]!)).toEqual([{ added: ["calendar_add", "email_read", "buy"], removed: [] }]);
+    expect(announcements(requests[3]!)).toEqual([{ added: ["calendar_add", "email_read", "buy"], removed: [] }]);
+    // Each request only adds to the one before (the announcement comes after the load, not at the
+    // front), so the cached start is read back.
+    for (let i = 1; i < requests.length; i++) expect(requests[i]!.messages.slice(0, requests[i - 1]!.messages.length), `request ${i}`).toEqual(requests[i - 1]!.messages);
+    expect(h.calls.map((c) => c.tool)).toEqual(["email_read"]);
+    expect(loadResults(h)).toEqual(["Loaded apps, ready from your next step: calendar_add, email_read, buy.\n\n## Apps\nUse the app tools."]);
+    expect(audited(h, "toolsLoaded")).toEqual([["apps"]]);
+  });
+
+  it("keeps a loaded group while the cache is warm and drops it once it has gone cold", async () => {
+    let now = new Date();
+    const { h, requests } = loaderHarness({ now: () => now });
+    h.faux.setResponses([toolTurn("load_tools", { groups: ["apps"] }), textTurn("Loaded."), toolTurn("email_read", {}), textTurn("Three new."), textTurn("Hi again.")]);
+    await ask(h, "check my inbox", "m1");
+    now = new Date(now.getTime() + 60_000);
+    await ask(h, "and now?", "m2");
+    const warm = requests[2]!;
+    expect(opening(warm)).toEqual(opening(requests[0]!));
+    expect(warm.messages.slice(0, requests[1]!.messages.length)).toEqual(requests[1]!.messages);
+    expect(announcements(warm)).toHaveLength(1); // the same one, where it was: nothing new to announce
+    expect(h.calls.map((c) => c.tool)).toEqual(["email_read"]);
+
+    now = new Date(now.getTime() + PROMPT_CACHE_MS + 60_000);
+    await ask(h, "hi", "m3");
+    const cold = requests.at(-1)!;
+    expect(opening(cold).tools).toEqual(BASE);
+    expect(announcements(cold)).toEqual([]);
+    expect(live(h).loadedGroups.size).toBe(0);
+    expect(audited(h, "toolsUnloaded")).toEqual([["apps"]]);
+    expect(calledEmail(cold)).toBe(true); // the calls made with it stay in the history
+  });
+
+  it("starts from the base tools after a restart, with the earlier calls still in the history", async () => {
+    const { h, requests } = loaderHarness();
+    h.faux.setResponses([toolTurn("load_tools", { groups: ["apps"] }), toolTurn("email_read", {}), textTurn("Three new."), textTurn("Hello.")]);
+    await ask(h, "check my inbox", "m1");
+    const restarted = new AgentRuntime(h.deps);
+    await restarted.handleInbound(inbound({ channel: "chat", from: "owner", conversationKey: "chat:main", text: "hi", id: "m2" }));
+    const after = requests.at(-1)!;
+    expect(opening(after).tools).toEqual(BASE);
+    expect(announcements(after)).toEqual([]);
+    expect(calledEmail(after)).toBe(true);
+  });
+
+  it("says so when a group is already loaded", async () => {
+    const { h, requests } = loaderHarness();
+    h.faux.setResponses([toolTurn("load_tools", { groups: ["computer"] }), toolTurn("load_tools", { groups: ["computer", "people"] }), textTurn("ok")]);
+    await ask(h, "open the browser and save Sam", "m1");
+    expect(loadResults(h)).toEqual(["Loaded computer, ready from your next step: desk.", "Loaded people, ready from your next step: contact_add.\n\nAlready loaded: computer. Use those tools directly."]);
+    expect(announcements(requests[2]!)).toEqual([{ added: ["desk"], removed: [] }, { added: ["contact_add"], removed: [] }]);
+  });
+
+  it("leaves other people's conversations as they were, and is off without the setting or the stable cache", async () => {
+    const friendTools = async (toolLoader: boolean) => {
+      const { h, requests } = loaderHarness({ toolLoader });
+      h.deps.contacts.upsert({ name: "Sam Lee", tier: "friend", phones: [SAM_PHONE] });
+      h.faux.setResponses([textTurn("hi Sam")]);
+      await h.runtime.handleInbound(inbound({ channel: "imessage", from: SAM_PHONE, conversationKey: "imessage:sam", text: "hey it's Sam", id: "s1" }));
+      return opening(requests[0]!).tools;
+    };
+    const withLoader = await friendTools(true);
+    expect(withLoader).toEqual(await friendTools(false));
+    expect(withLoader).not.toContain("load_tools");
+
+    const off = loaderHarness({ toolLoader: false });
+    off.h.faux.setResponses([textTurn("ok")]);
+    await ask(off.h, "hi", "m1");
+    expect(opening(off.requests[0]!).tools).toEqual(ALL);
+
+    const config = testConfig();
+    config.features = { ...config.features, stableCache: false };
+    const unstable = loaderHarness({ config });
+    unstable.h.faux.setResponses([textTurn("ok")]);
+    await ask(unstable.h, "hi", "m1");
+    expect(opening(unstable.requests[0]!).tools).toEqual(ALL);
+  });
+
+  it("keeps announcements through a fold: in place where kept, right after the summary where folded away", () => {
+    const big = "x".repeat(10_000);
+    const lead = { role: "system", content: "prompt", timestamp: 0 } as unknown as AgentMessage;
+    const announce = (name: string) => ({ role: "system", content: "", toolsAdded: [{ name, description: name, parameters: {} }], timestamp: 0 }) as unknown as AgentMessage;
+    const turn = (i: number): AgentMessage[] => [{ role: "user", content: [{ type: "text", text: `q${i} ${big}` }], timestamp: i }, fauxAssistantMessage(`a${i}`)];
+    const early = announce("early");
+    const late = announce("late");
+    const msgs = [lead, ...turn(0), early, ...Array.from({ length: 28 }, (_, i) => turn(i + 1)).flat(), late, ...turn(29)];
+    expect(foldInSteps(msgs.slice(0, 5), new Date())).toEqual(msgs.slice(0, 5)); // under the marks: untouched
+    const folded = foldInSteps(msgs, new Date()); // ~300k characters: past the high mark
+    expect(folded[0]).toBe(lead);
+    expect(JSON.stringify(folded[1]!.content)).toContain("[Conversation summary]");
+    expect(folded[2]).toBe(early);
+    expect(folded.indexOf(late)).toBe(folded.length - 3);
+    expect(folded.filter((m) => m.role === "system")).toHaveLength(3);
+  });
+});

@@ -28,6 +28,7 @@ import { A2AStore, a2aState, a2aTerminal } from "./a2a-state.js";
 import type { Scheduler } from "./scheduler.js";
 import type { StateDir } from "./state.js";
 import type { RegisteredTool, ToolContext, ToolRegistry } from "./tools.js";
+import { LOAD_TOOLS, LOADABLE_GROUPS, loadableGroupOf, loadToolsTool, type LoadableGroup } from "./tool-loader.js"; // [sunshine:tool-loader]
 import {
   TIER_ORDER,
   type Approval,
@@ -99,6 +100,13 @@ export interface RuntimeDeps {
    * is trimmed (the owner's own text threads and the dashboard chat). Unset: nothing is kept.
    */
   history?: HistoryArchive;
+  /**
+   * [sunshine:tool-loader] Set: the owner's conversations get the email, desktop, file and people tools
+   * only once a request loads them (`load_tools`, see tool-loader.ts), with each group's guidance
+   * (text the server would otherwise put in the prompt) in the result. Ignored when stableCache is off.
+   * Unset: every tool is always there.
+   */
+  toolLoader?: { guidance?: Partial<Record<LoadableGroup, string>> };
 }
 
 export interface HandleResult {
@@ -214,6 +222,20 @@ interface ConversationOptions {
   onPrune?: (pruned: { results: number; chars: number }) => void;
   /** [sunshine:history] Called with the whole history each time it is saved, to keep the conversation. */
   onPersist?: (messages: AgentMessage[]) => void;
+  /** [sunshine:tool-loader] Groups loaded on demand: see ToolLoaderHooks. Unset: every tool is always there. */
+  toolLoader?: ToolLoaderHooks;
+}
+
+/** [sunshine:tool-loader] What a Conversation needs from the runtime to load and drop tool groups. */
+interface ToolLoaderHooks {
+  /** Prompt cache lifetime: loaded groups are dropped once it has lapsed since the last model call. */
+  cacheMs: number;
+  /** True for a tool that only comes with a loaded group, for this conversation's principal. */
+  loadable(toolName: string): boolean;
+  /** The tools this conversation may see now: the base ones plus the loaded groups. */
+  rebind(): AgentTool<any>[];
+  /** Told which groups were dropped. */
+  onUnload?(groups: string[]): void;
 }
 
 export class Conversation {
@@ -234,6 +256,10 @@ export class Conversation {
   /** True while the current run was started by the owner's own direct message (see ToolContext.ownerTurn). */
   ownerTurn = false;
   busy = false;
+  /** [sunshine:tool-loader] Groups loaded in this conversation, until the cache goes cold or the history folds. */
+  readonly loadedGroups = new Set<LoadableGroup>();
+  /** [sunshine:tool-loader] Set by a load during a run: the next model call gets the new tool list. */
+  toolsChanged = false;
   /** [sunshine:delivery-mirror] Copies that arrived while a run was going; added when it ends. */
   private pendingNotes: AgentMessage[] = [];
   private readonly sessionFile: string;
@@ -243,6 +269,7 @@ export class Conversation {
   private readonly pruneAfterMs?: number; // [sunshine:prune]
   private readonly onPrune?: (pruned: { results: number; chars: number }) => void; // [sunshine:prune]
   private readonly onPersist?: (messages: AgentMessage[]) => void; // [sunshine:history]
+  private readonly toolLoader?: ToolLoaderHooks; // [sunshine:tool-loader]
 
   constructor(opts: ConversationOptions) {
     this.key = opts.key;
@@ -258,6 +285,7 @@ export class Conversation {
     this.pruneAfterMs = opts.pruneAfterMs; // [sunshine:prune]
     this.onPrune = opts.onPrune; // [sunshine:prune]
     this.onPersist = opts.onPersist; // [sunshine:history]
+    this.toolLoader = opts.toolLoader; // [sunshine:tool-loader]
   }
 
   /** [sunshine:stable-cache] The message as the model sees it: with the time it was sent in front. */
@@ -279,6 +307,7 @@ export class Conversation {
       const kept = this.agent.state.messages;
       this.agent.state.messages = this.stableCache ? foldInSteps(kept, this.now()) : trimContext(kept, this.now());
       this.pruneIfPaidAnyway(kept); // [sunshine:prune]
+      this.unloadIfPaidAnyway(kept); // [sunshine:tool-loader]
       const before = this.agent.state.messages.length;
       await this.agent.prompt(this.stamped(text), images);
       await this.agent.waitForIdle();
@@ -315,6 +344,26 @@ export class Conversation {
     this.onPrune?.({ results: pruned.results, chars: pruned.chars });
   }
 
+  /**
+   * [sunshine:tool-loader] Drop the loaded groups at the same moments: the start of the prompt is paid
+   * in full anyway, so going back to the base list costs nothing, and a group nobody uses stops riding
+   * along. Their announcements (system messages after the first) go with them; the calls made with
+   * them stay in the history, which Anthropic accepts for tools no longer declared.
+   */
+  private unloadIfPaidAnyway(beforeFold: AgentMessage[]): void {
+    if (!this.toolLoader) return;
+    const messages = this.agent.state.messages;
+    const announced = messages.some((m, i) => i > 0 && m.role === "system");
+    if (this.loadedGroups.size === 0 && !announced) return;
+    const folded = firstTurn(messages) !== firstTurn(beforeFold);
+    if (!folded && !cacheLapsed(messages, this.now(), this.toolLoader.cacheMs)) return;
+    const groups = [...this.loadedGroups];
+    this.loadedGroups.clear();
+    this.agent.state.messages = messages.filter((m, i) => i === 0 || m.role !== "system");
+    this.agent.state.tools = this.toolLoader.rebind();
+    if (groups.length > 0) this.toolLoader.onUnload?.(groups);
+  }
+
   /** [sunshine:delivery-mirror] Add messages to the end of this thread's history, now or after the current run. */
   addNote(notes: AgentMessage[]): void {
     if (this.busy) {
@@ -342,9 +391,13 @@ export class Conversation {
   /** The prompt carries the date, memory and pending approvals, so it is rebuilt per run. */
   private applySystemPrompt(): void {
     const prompt = this.refreshPrompt();
-    const tools = this.agent.state.tools.map(toToolDeclaration);
+    // [sunshine:tool-loader] The opening lists the base tools only, so it stays the same when a group
+    // is loaded; Pi announces loaded tools later in the history (system messages after the first),
+    // which stay in place. Rebuilt from the full list, every load would rewrite the whole prompt.
+    const loader = this.toolLoader;
+    const tools = (loader ? this.agent.state.tools.filter((t) => !loader.loadable(t.name)) : this.agent.state.tools).map(toToolDeclaration);
     const system = createInitialSystemMessage(prompt, tools);
-    const rest = this.agent.state.messages.filter((m) => m.role !== "system");
+    const rest = this.agent.state.messages.filter((m, i) => m.role !== "system" || (loader !== undefined && i > 0));
     this.agent.state.messages = system ? [system, ...rest] : rest;
   }
 }
@@ -387,6 +440,52 @@ export class AgentRuntime {
       now: this.now,
       send: (text) => this.sendToOwner(text, this.ownerPrincipal(), "system"),
     });
+    // [sunshine:tool-loader] One load_tools for the groups this agent has tools for, in a fixed order.
+    if (this.toolLoaderOn) {
+      const present = (Object.keys(LOADABLE_GROUPS) as LoadableGroup[]).filter((g) => deps.registry.all().some((t) => loadableGroupOf(t.spec.meta.group) === g));
+      if (present.length > 0) deps.registry.register(loadToolsTool(present));
+    }
+  }
+
+  /** [sunshine:tool-loader] Loading on demand needs the stable cache: without it the prompt changes every run anyway. */
+  private get toolLoaderOn(): boolean {
+    return this.deps.toolLoader !== undefined && this.deps.config.features?.stableCache !== false;
+  }
+
+  /** [sunshine:tool-loader] Only the owner's own conversations load groups; everyone else sees what policy allows, as before. */
+  private loadsTools(conv: Conversation): boolean {
+    return this.toolLoaderOn && conv.principal.kind === "owner" && conv.principal.tier === "owner" && this.deps.registry.get(LOAD_TOOLS) !== undefined;
+  }
+
+  /** [sunshine:tool-loader] A tool that comes only with a loaded group in this conversation. */
+  private loadable(conv: Conversation, toolName: string): boolean {
+    return this.loadsTools(conv) && loadableGroupOf(this.deps.registry.meta(toolName)?.group) !== undefined;
+  }
+
+  /** [sunshine:tool-loader] Adds groups to a conversation; the next model call gets their tools (see createConversation). */
+  private loadToolGroups(conv: Conversation, requested: string[]): string {
+    const { registry, policy, audit, toolLoader } = this.deps;
+    const known = [...new Set(requested)].filter((g): g is LoadableGroup => g in LOADABLE_GROUPS);
+    const toolsOf = (g: LoadableGroup) =>
+      registry.all().filter((t) => loadableGroupOf(t.spec.meta.group) === g && t.spec.meta.capabilities.every((c) => policy.canEver(conv.principal, c))).map((t) => t.spec.name);
+    const added = known.filter((g) => !conv.loadedGroups.has(g) && toolsOf(g).length > 0);
+    const lines: string[] = [];
+    for (const g of added) {
+      conv.loadedGroups.add(g);
+      lines.push(`Loaded ${g}, ready from your next step: ${toolsOf(g).join(", ")}.`);
+      const guidance = toolLoader?.guidance?.[g]?.trim();
+      if (guidance) lines.push(guidance);
+    }
+    const already = known.filter((g) => !added.includes(g) && conv.loadedGroups.has(g));
+    if (already.length > 0) lines.push(`Already loaded: ${already.join(", ")}. Use those tools directly.`);
+    const missing = requested.filter((g) => !added.includes(g as LoadableGroup) && !already.includes(g as LoadableGroup));
+    if (missing.length > 0) lines.push(`Nothing to load for ${missing.join(", ")} here.`);
+    if (added.length > 0) {
+      conv.agent.state.tools = this.bindTools(conv);
+      conv.toolsChanged = true;
+      audit.append({ kind: "policy", conversationKey: conv.key, principal: conv.principal.id, detail: { toolsLoaded: added } });
+    }
+    return lines.join("\n\n");
   }
 
   ownerPrincipal(): Principal {
@@ -463,6 +562,13 @@ export class AgentRuntime {
         this.recordToolCall(conv, toolCall.name, args, isError, result?.content);
         return undefined;
       },
+      // [sunshine:tool-loader] After a load the next model call gets the new list; Pi announces the
+      // added tools in a system message there instead of changing the start of the prompt.
+      prepareNextTurnWithContext: (turn) => {
+        if (!conv.toolsChanged) return undefined;
+        conv.toolsChanged = false;
+        return { context: { ...turn.context, tools: conv.agent.state.tools.slice() } };
+      },
     });
     conv = new Conversation({
       key,
@@ -492,6 +598,18 @@ export class AgentRuntime {
               } catch (error) {
                 this.deps.audit.append({ kind: "error", conversationKey: key, principal: principal.id, detail: { message: `history not kept: ${errorMessage(error)}` } });
               }
+            },
+          }
+        : {}),
+      // [sunshine:tool-loader] With stableCache only: without it the start of the prompt changes every run anyway.
+      ...(this.deps.toolLoader && stable
+        ? {
+            toolLoader: {
+              cacheMs: this.deps.promptCacheMs ?? PROMPT_CACHE_MS,
+              loadable: (name: string) => this.loadable(conv, name),
+              rebind: () => this.bindTools(conv),
+              onUnload: (groups: string[]) =>
+                this.deps.audit.append({ kind: "policy", conversationKey: key, principal: conv.principal.id, detail: { toolsUnloaded: groups } }),
             },
           }
         : {}),
@@ -1191,7 +1309,10 @@ export class AgentRuntime {
   private systemPromptFor(conv: Conversation): string {
     const { config, state, memory, approvals, skillsPrompt, policy } = this.deps;
     const principal = conv.principal;
-    const tools = conv.agent.state.tools;
+    // [sunshine:tool-loader] From every tool they may use, loaded or not, so a load never changes the prompt.
+    const tools = this.loadsTools(conv)
+      ? this.deps.registry.all().filter((t) => t.spec.meta.capabilities.every((c) => policy.canEver(principal, c))).map((t) => t.spec)
+      : conv.agent.state.tools;
     const groups = new Set<string>();
     const capabilities = new Set<Capability>();
     for (const t of tools) {
@@ -1254,7 +1375,15 @@ export class AgentRuntime {
       now: this.now,
     };
     const visible = (t: RegisteredTool) => t.spec.meta.capabilities.every((c) => policy.canEver(conv.principal, c));
-    return registry.bind(ctx, visible);
+    // [sunshine:tool-loader] The owner's conversations see load_tools and the base tools, plus the
+    // groups loaded so far; everyone else sees what policy allows, as before.
+    if (!this.loadsTools(conv)) return registry.bind(ctx, (t) => visible(t) && t.spec.name !== LOAD_TOOLS);
+    ctx.loadTools = (groups) => this.loadToolGroups(conv, groups);
+    return registry.bind(ctx, (t) => {
+      if (!visible(t)) return false;
+      const group = loadableGroupOf(t.spec.meta.group);
+      return group === undefined || conv.loadedGroups.has(group);
+    });
   }
 
   /**
@@ -1474,10 +1603,27 @@ export function trimContext(messages: AgentMessage[], now: Date): AgentMessage[]
  * be redone differently when the next run folds the stored transcript, costing a second uncached call.
  */
 export function foldInSteps(messages: AgentMessage[], now: Date, byCount = true): AgentMessage[] {
-  const system = messages.filter((m) => m.role === "system");
-  const rest = dropOrphanToolCalls(messages.filter((m) => m.role !== "system"));
-  if ((!byCount || rest.length <= FOLD_HIGH_MESSAGES) && charSize(rest) <= FOLD_HIGH_CHARS) return [...system, ...rest];
-  return [...system, ...restoreMessages(rest, now, FOLD_LOW_MESSAGES, FOLD_LOW_CHARS)];
+  // [sunshine:tool-loader] Only the opening system message goes first. Later ones (Pi's announcements of
+  // loaded tools) stay where they are: moved to the front they would change the start of every request.
+  const lead = messages[0]?.role === "system" ? [messages[0]] : [];
+  const body = dropOrphanToolCalls(messages.slice(lead.length));
+  const rest = body.filter((m) => m.role !== "system");
+  if ((!byCount || rest.length <= FOLD_HIGH_MESSAGES) && charSize(rest) <= FOLD_HIGH_CHARS) return [...lead, ...body];
+  return [...lead, ...keepAnnouncements(body, restoreMessages(rest, now, FOLD_LOW_MESSAGES, FOLD_LOW_CHARS))];
+}
+
+/**
+ * [sunshine:tool-loader] Put the later system messages back into a folded history: in place where what
+ * follows them was kept, right after the summary where it was folded away. A fold in the middle of a run
+ * (on size, with screenshots) must not take the loaded tools away from the steps still to come.
+ */
+function keepAnnouncements(body: AgentMessage[], folded: AgentMessage[]): AgentMessage[] {
+  if (!body.some((m) => m.role === "system")) return folded;
+  const kept = new Set(folded);
+  const firstKept = body.findIndex((m) => m.role !== "system" && kept.has(m));
+  if (firstKept < 0) return [...folded.slice(0, 1), ...body.filter((m) => m.role === "system"), ...folded.slice(1)];
+  const summary = folded.slice(0, folded.indexOf(body[firstKept]!));
+  return [...summary, ...body.slice(0, firstKept).filter((m) => m.role === "system"), ...body.slice(firstKept)];
 }
 
 /** [sunshine:prune] The first message after the system message: a fold puts a new summary there. */

@@ -29,6 +29,7 @@ import {
   resolveModel,
 } from "@open-instinct/core";
 import type { InboundMessage, InstinctConfig, Outbox, RegisteredTool } from "@open-instinct/core";
+import type { LoadableGroup } from "@open-instinct/core"; // [sunshine:tool-loader]
 import { InkboxA2A, InkboxChannel, InkboxInboundHydrator, InkboxProvisioner, messagingTools, sendFileTool } from "@open-instinct/inkbox";
 import { computerGuidance, detectComputer } from "@open-instinct/computer";
 import type { ComputerBackend } from "@open-instinct/computer";
@@ -152,6 +153,10 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
 
   const registry = new ToolRegistry();
   const promptSections: string[] = [];
+  // [sunshine:tool-loader] The owner's email, desktop, file and people tools load when a request needs
+  // them; the desktop and apps guidance then comes with the load instead of sitting in every prompt.
+  const loadOnDemand = config.features?.toolLoader !== false && config.features?.stableCache !== false;
+  const groupGuidance: Partial<Record<LoadableGroup, string>> = {};
 
   registry.registerMany(
     coreTools({
@@ -250,7 +255,8 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
     const tools = await safely(log, "computer tools", () => computer.tools());
     if (tools && tools.length > 0) {
       registry.registerMany(tools);
-      promptSections.push(computerGuidance());
+      if (loadOnDemand) groupGuidance.computer = computerGuidance(); // [sunshine:tool-loader]
+      else promptSections.push(computerGuidance());
       log(`computer: ${computer.describe()}`);
     }
   }
@@ -280,7 +286,9 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
       const on = connected.status.filter((s: ToolkitStatus) => s.connected).map((s: ToolkitStatus) => s.slug);
       const missing = connected.status.filter((s: ToolkitStatus) => !s.connected).map((s: ToolkitStatus) => s.slug);
       appsConnected = on;
-      promptSections.push(appsGuidance(on, missing, { anyApp: composio.allToolkits, unavailable: composio.unavailableToolkits }));
+      const guidance = appsGuidance(on, missing, { anyApp: composio.allToolkits, unavailable: composio.unavailableToolkits });
+      if (loadOnDemand) groupGuidance.apps = guidance; // [sunshine:tool-loader]
+      else promptSections.push(guidance);
       log(`apps: ${connected.tools.length} tools${composio.allToolkits ? " (any app by name)" : ""}, connected: ${on.join(", ") || "none"}`);
     }
   }
@@ -441,6 +449,7 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
     ...(history ? { history } : {}), // [sunshine:history]
     // [sunshine:prune] Pi keeps the prompt cache an hour with PI_CACHE_RETENTION=long; pruning waits that long then.
     ...(env.PI_CACHE_RETENTION?.trim() === "long" ? { promptCacheMs: 60 * 60 * 1000 } : {}),
+    ...(loadOnDemand ? { toolLoader: { guidance: groupGuidance } } : {}), // [sunshine:tool-loader]
   });
   watcher?.ensureStarted(); // [sunshine:watcher] before the scheduler and the Maritime push read the jobs
   memoryPass?.ensureStarted(); // [sunshine:memory] likewise

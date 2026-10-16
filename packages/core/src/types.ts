@@ -277,6 +277,11 @@ export interface InstinctConfig {
      * searched with history_search after the live history is trimmed.
      */
     history?: boolean;
+    /**
+     * [sunshine:tool-loader] On unless false (and only with stableCache): the owner's email, desktop,
+     * file and people tools are loaded when a request needs them (`load_tools`), not sent with every message.
+     */
+    toolLoader?: boolean;
   };
 }
 

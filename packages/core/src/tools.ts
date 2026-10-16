@@ -25,6 +25,8 @@ export interface ToolContext {
    */
   ownerTurn?: boolean;
   now(): Date;
+  /** [sunshine:tool-loader] Adds tool groups to this conversation (`load_tools`); the text tells the model what changed. */
+  loadTools?: (groups: string[]) => string;
 }
 
 export type ToolResultLike =

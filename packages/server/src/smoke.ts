@@ -214,6 +214,8 @@ async function main(): Promise<void> {
     const pdfAbsolute = join(realpathSync(dataDir), "workspace", pdfRelative);
     const fence = "```maritime-file\n" + JSON.stringify({ path: pdfAbsolute, name: "smoke.pdf", mime: "application/pdf" }) + "\n```";
     faux.setResponses([
+      // [sunshine:tool-loader] The file tools come when a request loads them.
+      fauxAssistantMessage([fauxToolCall("load_tools", { groups: ["files"] })], { stopReason: "toolUse" }),
       fauxAssistantMessage(
         [fauxToolCall("create_pdf", { path: pdfRelative, title: "Smoke brief", markdown: "# Smoke brief\n\nOne paragraph.\n\n- first point\n- second point\n\n| a | b |\n|---|---|\n| 1 | 2 |" })],
         { stopReason: "toolUse" },

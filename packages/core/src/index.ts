@@ -12,6 +12,7 @@ export * from "./memory.js";
 export * from "./history.js"; // [sunshine:history]
 export * from "./model.js";
 export * from "./tools.js";
+export * from "./tool-loader.js"; // [sunshine:tool-loader]
 export * from "./persona.js";
 export * from "./prompt.js";
 export * from "./runtime.js";

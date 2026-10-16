@@ -587,6 +587,28 @@ for a birthday never mentioned it searched twice and said it could not find it, 
 or delete `history.ts`, its tools and the tagged blocks in `runtime.ts`, `types.ts`, `index.ts`,
 `boot.ts`, `memory-pass.ts`, `watcher-writer.ts` and the tests.
 
+### `[sunshine:search]`: friends' agents get the web search key
+
+**Problem** (2026-10-16). Sunshine said its searches were failing. Without a key, `web_search`
+(`packages/core/src/core-tools.ts`) reads DuckDuckGo's HTML page, and that page stopped answering
+requests from the agent's server (each search timed out after about 11 seconds) while it still answered
+from a laptop: a block on DuckDuckGo's side, not a code change. Upstream already supports the Brave
+Search API: `BRAVE_SEARCH_API_KEY` is mapped to `searchApiKey` in `packages/server/src/boot.ts`. With the
+key set, Torstein's agent searched in about a second. Only the gateway did not pass it to new agents.
+
+**Why Brave.** It runs its own index and sells access to it. Cheaper providers such as Serper resell
+results scraped from Google, which Google is contesting in court (Google v. SerpApi, 2025-), so that
+route could break the same way. About $5 per 1,000 searches, with a monthly credit that covers a few
+users. With the key, search uses Brave only (no DuckDuckGo fallback; it is blocked from Maritime anyway).
+
+**What the fork adds.** `BRAVE_SEARCH_API_KEY` in `AGENT_SETTINGS` (`packages/gateway/src/main.ts`):
+when it is set on the gateway, every new agent gets it, as a secret (its name ends in `KEY`). Agents
+created before keep what they had: add it with `agent-env.sh set-secret` or Maritime's dashboard and
+restart them.
+
+**To remove.** Delete the name from `AGENT_SETTINGS` and the tagged test in
+`packages/gateway/test/main.test.ts`, or unset the variable on the gateway.
+
 ### Long replies (investigated 2026-10-15, nothing changed)
 
 A money question ("what should be considered: fund vs apartment") got a 1,435-character, seven-point

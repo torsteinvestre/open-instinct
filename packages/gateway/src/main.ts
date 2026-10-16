@@ -54,12 +54,14 @@ export interface GatewayEnv {
    * as they are: keeping up with the news (INSTINCT_WATCHER=1, the Jev key TYPESAFE_API_KEY, the news
    * step models) and the nightly memory notes' model. Unset ones are not passed, so agents keep their
    * own defaults.
+   * [sunshine:search] Also the web search key, BRAVE_SEARCH_API_KEY: without it agents search through
+   * DuckDuckGo's page, which stopped answering requests from Maritime's servers (seen 2026-10-16).
    */
   agentSettings?: Record<string, string>;
 }
 
-/** [sunshine:watcher] The agent settings a gateway passes on when set (see GatewayEnv.agentSettings). */
-export const AGENT_SETTINGS = ["INSTINCT_WATCHER", "TYPESAFE_API_KEY", "WATCHER_SCREEN_MODEL", "WATCHER_DECIDE_MODEL", "WATCHER_WRITE_MODEL", "MEMORY_PASS_MODEL"] as const;
+/** [sunshine:watcher] [sunshine:search] The agent settings a gateway passes on when set (see GatewayEnv.agentSettings). */
+export const AGENT_SETTINGS = ["INSTINCT_WATCHER", "TYPESAFE_API_KEY", "WATCHER_SCREEN_MODEL", "WATCHER_DECIDE_MODEL", "WATCHER_WRITE_MODEL", "MEMORY_PASS_MODEL", "BRAVE_SEARCH_API_KEY"] as const;
 
 function truthy(v: string | undefined): boolean {
   return v !== undefined && /^(1|true|yes)$/i.test(v.trim());

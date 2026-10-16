@@ -126,6 +126,15 @@ describe("agent settings from the gateway", () => {
     expect(JSON.stringify(env)).not.toContain("admin");
     expect(readEnv({ MARITIME_API_KEY: "mk" }).agentSettings).toBeUndefined();
   });
+
+  // [sunshine:search] Friends' agents search with the operator's Brave key, never shown in Maritime's list.
+  it("passes the web search key as a secret", () => {
+    const extra = agentExtraEnv(readEnv({ MARITIME_API_KEY: "mk", BRAVE_SEARCH_API_KEY: " bsa_test " }))!;
+    expect(extra).toEqual({ BRAVE_SEARCH_API_KEY: "bsa_test" });
+    const user = { id: "usr_1", identityApiKey: "ik", handle: "sunshine-anna-k3f9", identityId: "id_1", name: "Anna", phone: "+4790000001" } as never;
+    const env = agentEnvFor(user, { maritime: { apiKey: "mk", agentImage: "img", extraEnv: extra } });
+    expect(env.find((e) => e.key === "BRAVE_SEARCH_API_KEY")).toEqual({ key: "BRAVE_SEARCH_API_KEY", value: "bsa_test", isSecret: true });
+  });
 });
 
 describe("checkSignupPolicy", () => {

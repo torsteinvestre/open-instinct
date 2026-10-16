@@ -200,7 +200,7 @@ new?" in its own reply), `watch_journal` ("what did you skip?"), `watch_later`, 
 | The decision journal (`watcher-journal.jsonl`, 7 days) | `JOURNAL_*` in `store.ts`; read by the `watch_journal` tool |
 | "Reads almost like a told story" threshold | `SAME_HEADLINE_OVERLAP` in `packages/watcher/src/decide.ts` |
 | How Sunshine keeps the picture, reacts to feedback | `skills/news-watch/SKILL.md` |
-| The interest question in the welcome chat | `skills/onboarding/SKILL.md` (tagged step 3) |
+| The interest question in the welcome chat | `skills/onboarding/SKILL.md` (see `[sunshine:onboarding]`) |
 | Test scenarios (real models, costs cents) | `packages/watcher/scenarios/` |
 
 **Core and server pieces.** `ScheduleEntry.gate` and `RuntimeDeps.scheduleGates` (a gated job
@@ -508,6 +508,43 @@ pass; reminder copies do not count as model calls. Real model: `node scenarios/p
 **To remove.** Set `features.pruneToolResults` to false, or revert the commit
 (`git log --grep "sunshine:prune"`) or delete the tagged blocks in `runtime.ts`, `types.ts`, `boot.ts`
 and the tests.
+
+### `[sunshine:onboarding]`: a short welcome on a new owner's first text
+
+**Problem** (2026-10-15/16). Upstream's welcome skill was an eight-step checklist (name, city, texting
+style, news, apps, partner, family, morning text) that began by asking for the name signup already
+gave. And it never ran: tested with the real model and a new friend's exact prompt
+(`packages/server/scenarios/onboarding.mjs`), Sonnet never opened it, because nothing says a text is
+someone's first ("Hej!" with no history looks like any other). Without it the first reply was a bare
+"Vad kan jag hjälpa dig med?", and it never asked what news to follow, so the news stayed idle.
+
+**What the fork adds.**
+
+- `skills/onboarding/SKILL.md` rewritten as principles: greet by name and do not ask what signup gave;
+  one short opening text (who you are, a couple of things you can do, one question, usually what to
+  follow); one question per text; two or three exchanges, then something useful or "text me whenever";
+  stop when they are busy; their language; everything else (style, quiet hours, people, apps, a morning
+  text) when it comes up. Apps only when set up.
+- `welcomeIfFirstText` (`packages/core/src/runtime.ts`): on the owner's very first text in their own
+  text thread (nothing in it yet, no facts in `MEMORY.md`), a note goes in front of it: "[Not a message
+  from <owner>: they signed up a moment ago, and the next message is their first text to you. How to
+  welcome them:]" and the skill's instructions. In the delivery mirror's form, so the news writer and
+  the memory notes treat it as a note. Once: afterwards the thread is not empty; saved with the thread,
+  so a restart does not repeat it. Audit entry `policy` `firstContact`. Not for the dashboard chat, groups,
+  or an owner with saved facts (existing agents never see it). OpenClaw passes its first-run ritual
+  (BOOTSTRAP.md) with the first message for the same reason: models do not reliably open it themselves.
+- `RuntimeDeps.firstContactGuide`, filled by `boot.ts` with `skillGuide(skills, "onboarding")`
+  (`packages/server/src/skills.ts`: the skill without its header and comments).
+
+**Tested with the real model** (2026-10-16, $0.087): a curious Swede writing Swedish and a busy one
+opening in English, the friend played by Haiku. Both opened with hello by name, who Sunshine is, what it
+does and one question (what to follow); no name or timezone questions, one question per text, Swedish
+throughout for the Swede; it saved her interests and memory and set two correct reminders for her
+Lisbon flight in three texts; the busy one got "No problem, Åsa. Text me whenever something comes up."
+The opening follows the skill's example almost word for word, so that example is the welcome's wording.
+
+**To remove.** Revert the commits (`git log --grep "sunshine:onboarding"`) or delete the tagged blocks
+in `runtime.ts`, `boot.ts`, `skills.ts` and their tests; restore upstream's `skills/onboarding/SKILL.md`.
 
 ### Long replies (investigated 2026-10-15, nothing changed)
 

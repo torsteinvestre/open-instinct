@@ -86,6 +86,13 @@ export interface RuntimeDeps {
    * PI_CACHE_RETENTION=long.
    */
   promptCacheMs?: number;
+  /**
+   * [sunshine:onboarding] How to welcome a new owner (the onboarding skill, without its header). Given
+   * with the owner's very first text, once. The model cannot tell a first text from any other ("Hej!"
+   * and no history), so it never opened the skill on its own; OpenClaw passes its first-run ritual
+   * the same way for the same reason. Unset: no welcome note.
+   */
+  firstContactGuide?: () => string | undefined;
 }
 
 export interface HandleResult {
@@ -587,6 +594,7 @@ export class AgentRuntime {
     const prompt = principal.kind === "owner" && !msg.meta?.delegatedResult ? body : wrapUntrusted(body, untrustedLabel(msg, principal));
     const conv = this.conversation(routedKey ?? runtimeKey(msg, principal), principal, { deliveryKey: msg.conversationKey, replyRef: msg.replyRef });
     if (conv.channel === "a2a" && !this.a2aStore.active(conv.replyRef.taskId ?? "", conv.replyRef.messageId)) return { ...base, acked: true, blocked: "inactive-task" };
+    this.welcomeIfFirstText(conv, principal, msg, group); // [sunshine:onboarding]
     const stashed = this.takeStash(conv.key);
     const joinReply = (reply: string | undefined) => [approvalNote, ...stashed, reply].filter((t): t is string => Boolean(t)).join("\n\n") || undefined;
 
@@ -1058,6 +1066,27 @@ export class AgentRuntime {
       this.auditError(conversationKey, principal, error);
       throw error;
     }
+  }
+
+  /**
+   * [sunshine:onboarding] On the owner's very first text (their own text thread, nothing in it yet, no
+   * facts in memory), a note with the welcome guide goes in front of it, in the delivery mirror's form
+   * ("[Not a message from …]"), so the thread readers (news writer, memory notes) know it is not the
+   * owner's words. Once: afterwards the thread is not empty. The guide decides what the welcome says.
+   */
+  private welcomeIfFirstText(conv: Conversation, principal: Principal, msg: InboundMessage, group: boolean): void {
+    if (principal.kind !== "owner" || group || msg.meta?.delegatedResult || conv.busy) return;
+    if (msg.channel !== "imessage" && msg.channel !== "sms") return;
+    if (conv.agent.state.messages.some((m) => m.role !== "system")) return;
+    if (/^\s*[-*]\s+\S/m.test(this.deps.memory.readDurable())) return;
+    const guide = this.deps.firstContactGuide?.()?.trim();
+    if (!guide) return;
+    const owner = this.deps.config.owner;
+    const now = this.now();
+    conv.addNote([
+      userMessage(`${timeStamp(now, owner.timezone || "UTC")}\n[Not a message from ${owner.name}: they signed up a moment ago, and the next message is their first text to you. How to welcome them:]\n\n${guide}`, now),
+    ]);
+    this.deps.audit.append({ kind: "policy", conversationKey: msg.conversationKey, principal: principal.id, detail: { firstContact: true } });
   }
 
   /**

@@ -1,8 +1,8 @@
 // [sunshine:onboarding] A new friend's first chat with Sunshine: does it feel like meeting someone
 // helpful, or like a form? Boots the real server in a throwaway folder with a new friend's settings
 // (Åsa from Sweden, signed up through the gateway: name, Swedish number, Stockholm time, the news on,
-// no apps, empty memory), captures the exact instructions and tool list, and plays the first chat
-// through Sonnet 5.5. The friend is played by Haiku 5.5 from a short description, so Sunshine's
+// no apps, empty memory), captures the exact instructions, tool list and the welcome note the runtime
+// puts in front of a first text, and plays the first chat through Sonnet 5.5. The friend is played by Haiku 5.5 from a short description, so Sunshine's
 // questions get natural answers instead of a script that may not fit them. A skill Sunshine opens is
 // the real SKILL.md; apps_connect gives the real "not set up" answer; web searches get a canned result;
 // other tools say done. Nothing is sent anywhere.
@@ -58,26 +58,36 @@ if (!first) throw new Error("could not capture the system prompt");
 rmSync(dir, { recursive: true, force: true });
 const SYSTEM = first.content;
 const TOOLS = first.toolsAdded.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters }));
-console.log(`friend's agent: ${TOOLS.length} tools, instructions ${SYSTEM.length} characters, onboarding skill listed: ${SYSTEM.includes("<name>onboarding</name>")}`);
+// The welcome note the runtime put in front of the first text ([sunshine:onboarding]), exactly as sent.
+const textOfMsg = (m) => (typeof m.content === "string" ? m.content : m.content.map((c) => c.text ?? "").join(""));
+const WELCOME = captured[0].messages.find((m) => m.role === "user" && textOfMsg(m).includes("[Not a message from"));
+console.log(`friend's agent: ${TOOLS.length} tools, instructions ${SYSTEM.length} characters, welcome note: ${WELCOME ? `${textOfMsg(WELCOME).length} characters` : "MISSING"}`);
 if (process.env.DRY) {
-  const at = SYSTEM.indexOf("<name>onboarding</name>");
-  console.log(SYSTEM.slice(at, SYSTEM.indexOf("</skill>", at)).replace(/\s+/g, " "));
   console.log(`owner named: ${SYSTEM.includes("Åsa Lindqvist")}; apps line: ${SYSTEM.match(/- Apps[^\n]*/)?.[0] ?? "none"}`);
   console.log(`tools include apps_connect: ${TOOLS.some((t) => t.name === "apps_connect")}, watch_profile_update: ${TOOLS.some((t) => t.name === "watch_profile_update")}, load_skill: ${TOOLS.some((t) => t.name === "load_skill")}`);
+  console.log(`--- welcome note\n${WELCOME ? textOfMsg(WELCOME) : "(none)"}`);
   process.exit(0);
 }
+if (!WELCOME) throw new Error("no welcome note in front of the first text");
 
-const SEARCH = [
-  "1. Expressen, 15 Oct 2026: Djurgården beat Färjestad 4-2 at Hovet; Jacob Josefson scored twice. DIF are third in the SHL.",
-  "2. Breakit, 14 Oct 2026: Stockholm AI startup Lovable raises new round at a $4bn valuation; plans to hire 200 in Sweden.",
-  "3. DI Digital, 13 Oct 2026: Swedish tech layoffs slow in Q3; fintech hiring picks up again.",
-].join("\n");
+// Search results that fit what was searched for. (A first version answered every search with the same
+// news, and a hotel search "only gave unrelated news results": an artifact of the test.)
+const SEARCHES = [
+  [/hotel|hotell|lisbo|lissabon|alfama|boende|stay/i, "1. Booking.com, Alfama, 22-25 Oct: Memmo Alfama (4*, rooftop pool) from €210/night; Lisbon Story Guesthouse from €95/night; Alfama Patio Hostel private room from €70/night.\n2. Time Out Lisboa: Alfama is hilly with narrow streets; Graça and Baixa next door are quieter and flatter, 10 minutes' walk away."],
+  [/djurgården|dif|hockey|shl/i, "1. Expressen, 15 Oct 2026: Djurgården beat Färjestad 4-2 at Hovet; Jacob Josefson scored twice. DIF are third in the SHL.\n2. Aftonbladet: next game Saturday away at Frölunda."],
+  [/startup|breakit|tech|ai\b|artificial|fintech/i, "1. Breakit, 14 Oct 2026: Stockholm AI startup Lovable raises a new round at a $4bn valuation; plans to hire 200 in Sweden.\n2. DI Digital, 13 Oct 2026: Swedish tech layoffs slow in Q3; fintech hiring picks up again."],
+  [/weather|väder|vädret/i, "SMHI, Stockholm: Friday 16 Oct, cloudy, 9°C, light rain from 15:00. Weekend dry, 7-10°C."],
+];
+const searchFor = (args) => {
+  const q = JSON.stringify(args ?? {});
+  return SEARCHES.find(([re]) => re.test(q))?.[1] ?? "No useful results.";
+};
 const toolResult = (c) => {
   if (c.name === "load_skill") {
     try { return readFileSync(join(SKILLS, String(c.arguments?.name ?? ""), "SKILL.md"), "utf8"); } catch { return "No such skill."; }
   }
   if (c.name === "apps_connect") return `Apps are not set up on this agent, so there is no sign-in link for ${String(c.arguments?.toolkit ?? "that app")} yet. Tell you in one sentence: the person running the agent needs to set COMPOSIO_API_KEY (free at composio.dev) and restart it; after that you can text a link that connects it in one tap.`;
-  if (c.name === "web_search" || c.name === "web_fetch") return SEARCH;
+  if (c.name === "web_search" || c.name === "web_fetch") return searchFor(c.arguments);
   if (c.name === "react") return "Reacted. Now write your reply.";
   if (["memory_write", "watch_profile_update", "watch_settings", "journal_append"].includes(c.name)) return "Saved.";
   if (c.name === "schedule_create") return "Scheduled.";
@@ -103,7 +113,7 @@ const summary = [];
 
 for (const run of RUNS) {
   console.log(`\n===== ${run.name}`);
-  const messages = [{ role: "user", content: stamped(run.opener), timestamp: Date.now() }];
+  const messages = [WELCOME, { role: "user", content: stamped(run.opener), timestamp: Date.now() }];
   const transcript = [`Åsa: ${run.opener}`];
   const texts = [];
   const tools = [];

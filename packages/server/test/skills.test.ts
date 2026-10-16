@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ToolContext, ToolResultLike } from "@open-instinct/core";
-import { LOAD_SKILL_TOOL, loadSkillList, loadSkillTool, loadSkillsPrompt, resolveSkillsDir } from "../src/skills.js";
+import { LOAD_SKILL_TOOL, loadSkillList, loadSkillTool, loadSkillsPrompt, resolveSkillsDir, skillGuide } from "../src/skills.js";
 
 const stranger = { principal: { kind: "stranger", id: "stranger:x", tier: "stranger", displayName: "x" }, conversationKey: "imessage:1", channel: "imessage", now: () => new Date() } as unknown as ToolContext;
 const textOf = (r: ToolResultLike) => (typeof r === "string" ? r : r.content.map((c) => (c.type === "text" ? c.text : "")).join(""));
@@ -67,6 +67,15 @@ describe("skills", () => {
     const list = loadSkillList(dir);
     expect(loadSkillsPrompt(dir)).toBeUndefined();
     expect(textOf(await loadSkillTool(list).spec.execute({ name: "nightly" }, stranger))).toContain("Wrap up the day.");
+  });
+
+  // [sunshine:onboarding] The welcome guide handed to the model with a new owner's first text.
+  it("gives a skill's instructions without the header and comments, and nothing for a missing skill", () => {
+    mkdirSync(join(dir, "onboarding"));
+    writeFileSync(join(dir, "onboarding", "SKILL.md"), "---\nname: onboarding\ndescription: First chat\n---\n\n<!-- [sunshine:onboarding] -->\n# Onboarding\n\nGreet them by name.\n");
+    const list = loadSkillList(dir);
+    expect(skillGuide(list, "Onboarding")).toBe("# Onboarding\n\nGreet them by name.");
+    expect(skillGuide(list, "dining")).toBeUndefined();
   });
 
   it("keeps the first of two skills whose names differ only in case", () => {

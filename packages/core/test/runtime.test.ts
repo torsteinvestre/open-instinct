@@ -550,6 +550,49 @@ describe("AgentRuntime.handleInbound", () => {
     });
   });
 
+  // [sunshine:onboarding] The welcome guide goes with a new owner's very first text, once.
+  describe("first text", () => {
+    const THREAD = "imessage:c1";
+    const ownerSays = (h: Harness, text: string, id: string, channel: "imessage" | "chat" = "imessage") =>
+      h.runtime.handleInbound(inbound(channel === "chat" ? { channel, from: "owner", conversationKey: "chat:main", text, id } : { channel, from: OWNER_PHONE, conversationKey: THREAD, text, id }));
+    const userTexts = (h: Harness, key = THREAD) =>
+      h.runtime.conversation(key, h.runtime.ownerPrincipal()).agent.state.messages.filter((m) => m.role === "user").map((m) => m.content.map((c) => (c.type === "text" ? c.text : "")).join(""));
+    const guide = () => "# Onboarding\n\nGreet them by name.";
+
+    it("puts the welcome guide in a note before the owner's first text, and never again", async () => {
+      const h = harness({ deps: { firstContactGuide: guide } });
+      h.faux.setResponses([textTurn("Hi Maria!"), textTurn("Sure.")]);
+      await ownerSays(h, "Hej!", "m1");
+      await ownerSays(h, "and now?", "m2");
+      const texts = userTexts(h);
+      expect(texts).toHaveLength(3);
+      expect(texts[0]).toMatch(/^\[[^\]]+\]\n\[Not a message from Maria: they signed up a moment ago, and the next message is their first text to you\. How to welcome them:\]\n\n# Onboarding\n\nGreet them by name\.$/);
+      expect(texts[1]).toMatch(/Hej!$/);
+      expect(texts[2]).toMatch(/and now\?$/);
+      // Saved with the thread, so a restart does not welcome them a second time.
+      expect(readSession(`${h.deps.state.path("sessions")}/${encodeURIComponent(THREAD)}.jsonl`).filter((m) => m.role === "user")).toHaveLength(3);
+      expect(h.deps.audit.read({ limit: 100 }).filter((e) => (e.detail as { firstContact?: boolean }).firstContact)).toHaveLength(1);
+    });
+
+    it("leaves out the note for an owner it already knows, the dashboard chat, and without a guide", async () => {
+      const known = harness({ deps: { firstContactGuide: guide } });
+      known.deps.memory.appendDurable("- Lives in Oslo.");
+      known.faux.setResponses([textTurn("Hi!")]);
+      await ownerSays(known, "Hej!", "m1");
+      expect(userTexts(known)).toHaveLength(1);
+
+      const dashboard = harness({ deps: { firstContactGuide: guide } });
+      dashboard.faux.setResponses([textTurn("Hi!")]);
+      await ownerSays(dashboard, "hello", "m1", "chat");
+      expect(userTexts(dashboard, "chat:main")).toHaveLength(1);
+
+      const none = harness();
+      none.faux.setResponses([textTurn("Hi!")]);
+      await ownerSays(none, "Hej!", "m1");
+      expect(userTexts(none)).toHaveLength(1);
+    });
+  });
+
   // [sunshine:delivery-mirror] Texts that reach the owner from elsewhere land in the owner's thread, once.
   describe("delivery mirror", () => {
     const THREAD = "imessage:c1";

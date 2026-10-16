@@ -99,6 +99,21 @@ export function loadSkillsPrompt(dir: string | undefined, logger?: (m: string) =
 }
 
 /**
+ * [sunshine:onboarding] One skill's instructions without the header (name, description) and HTML
+ * comments, for handing to the model directly; undefined when the skill is missing or unreadable.
+ */
+export function skillGuide(skills: Skill[], name: string): string | undefined {
+  const skill = skills.find((s) => s.name.toLowerCase() === name.toLowerCase());
+  if (!skill) return undefined;
+  try {
+    const text = readFileSync(skill.filePath, "utf8").replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "").replace(/<!--[\s\S]*?-->\s*/g, "").trim();
+    return text || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Returns one skill's SKILL.md by name. Only skills found at boot can be named, so the
  * model never supplies a path. Skills are playbooks shipped with the agent, not owner
  * data, so any principal who may converse may load one.

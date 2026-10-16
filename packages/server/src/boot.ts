@@ -45,7 +45,7 @@ import { describeDataPart, promptExtraFor } from "./hooks.js";
 import { appsNotConfiguredTool, setupSummaryFor } from "./setup-summary.js";
 import { createScheduleSync, type ScheduleSync } from "./maritime-schedules.js";
 import { loadPaymentsModule, paymentsEnv, type LinkWalletLike, type PaymentsModule } from "./payments.js";
-import { formatSkillsIndex, loadSkillList, loadSkillTool, resolveSkillsDir } from "./skills.js";
+import { formatSkillsIndex, loadSkillList, loadSkillTool, resolveSkillsDir, skillGuide } from "./skills.js"; // [sunshine:onboarding] skillGuide
 
 export interface BootOptions {
   streamFn?: StreamFn;
@@ -432,6 +432,8 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
       ...(watcher ? { [WATCH_GATE]: watcher.gate } : {}),
       ...(memoryPass ? { [MEMORY_GATE]: memoryPass.gate } : {}),
     },
+    // [sunshine:onboarding] The welcome guide goes with a new owner's very first text.
+    firstContactGuide: () => skillGuide(skillList, "onboarding"),
     // [sunshine:prune] Pi keeps the prompt cache an hour with PI_CACHE_RETENTION=long; pruning waits that long then.
     ...(env.PI_CACHE_RETENTION?.trim() === "long" ? { promptCacheMs: 60 * 60 * 1000 } : {}),
   });

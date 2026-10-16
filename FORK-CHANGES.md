@@ -652,8 +652,19 @@ about $2.10 for a friend without email (each 1,000 tokens is about $0.28 per use
 Two checks were made by putting the old behaviour back on purpose: the tests fail for both traps. The
 smoke test loads `files` before making its PDF.
 
-**Real model** (`packages/server/scenarios/tool-loader.mjs`, 18 requests, canned tool answers, about
-40-60 cents a round): not run yet.
+**Real model** (`packages/server/scenarios/tool-loader.mjs`, 18 requests each in a thread of its own,
+canned tool answers, 2026-10-16, $0.36 a round).
+- Every request that needed a group loaded the right one first (12 of 12: inbox, calendar, an email to
+  Martin, moving an appointment, a web form, a screenshot, a PDF, saved files, saving a contact, what
+  Sanna may see, asking Sanna's assistant, the contact list). Every request that needed none loaded
+  nothing (6 of 6: a sum, a reminder, weather, "thanks", last week's question, XRP news).
+- No reply mentioned loading. The two replies with "can't" were about the scripted data, not about
+  loading: a calendar answer dated the 23rd on Friday the 16th, and a trust list without the tier's
+  details.
+- The cache held. Each thread's first call read the shared start (about 10,000 tokens). The call after
+  a load read it again and wrote only the added tools (6,500 for apps, 3,400 desktop, 2,200 files,
+  2,750 people), and the calls after that read everything back.
+- Requests that needed no group cost 0.2 to 0.7 cents; email and calendar ones 3.5 to 5.5 cents.
 
 **To remove.** `features.toolLoader = false`, or revert the commit (`git log --grep "tool-loader"`) or
 delete `tool-loader.ts` and the tagged blocks in `runtime.ts`, `tools.ts`, `types.ts`, `index.ts`,

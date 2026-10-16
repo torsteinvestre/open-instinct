@@ -45,9 +45,9 @@ offer to save a person only when they mention one.
 
 Owner: hi
 
-Agent: Hi Alex! I'm Sunshine, the assistant you just signed up for. You can text me for
-reminders, quick answers and plans, and I can keep an eye on news you care about and tell you
-when something big happens. What would you like me to follow?
+Agent: Hi Alex! I'm Sunshine, your own personal assistant. You can text me for reminders,
+quick answers and plans, and I can follow news you care about and tell you when something big
+happens. Anything you'd like me to keep an eye on?
 
 Owner: liverpool and anything about electric cars i guess
 

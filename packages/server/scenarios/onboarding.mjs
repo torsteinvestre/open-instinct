@@ -9,8 +9,9 @@
 // Checks each of Sunshine's texts: asks for the name or timezone signup already gave; more than one
 // question; offers apps or asks about partner and family on day one; uses her name; answers in her
 // language; length. Prints every text whole: read them too.
-// Usage (from packages/server, after `pnpm build`, ANTHROPIC_API_KEY set): node scenarios/onboarding.mjs
-// (about 15 cents). DRY=1 only captures the instructions and stops: free.
+// Usage (from packages/server, after `pnpm build`, ANTHROPIC_API_KEY set):
+//   node scenarios/onboarding.mjs [curious,busy,request]   (all three about 13 cents; one about 4-6)
+// DRY=1 only captures the instructions and stops: free.
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -96,10 +97,15 @@ const toolResult = (c) => {
 
 // The friend, played by Haiku. "Busy" uses a fixed second message, since any first text fits it.
 const ASA = "You are Åsa Lindqvist, 29, living on Södermalm in Stockholm. You work in marketing at a fintech. You follow Djurgården hockey, Swedish tech startups and AI news, and you love cooking. Next week you fly to Lisbon for a friend's 30th. A friend told you about Sunshine, an assistant you text; you just signed up and connected it, out of curiosity. You text like you do with friends: short, casual Swedish, mostly lowercase, no emojis. Answer what you are asked, sometimes with one small extra detail. Write only your next text message, nothing else.";
-const RUNS = [
-  { name: "curious, writes Swedish", opener: "Hej!", replies: 2 },
-  { name: "busy, opens in English", opener: "hi, who is this?", fixed: ["sorry, at work, can't really talk now"] },
+const ALL_RUNS = [
+  { key: "curious", name: "curious, writes Swedish", opener: "Hej!", replies: 2 },
+  { key: "busy", name: "busy, opens in English", opener: "hi, who is this?", fixed: ["sorry, at work, can't really talk now"] },
+  // A first text that is already a request: do it first, a one-line hello, the question after.
+  { key: "request", name: "first text is a request", opener: "hej, kan du påminna mig att ringa mamma kl 17 idag?", replies: 1, expectTool: "schedule_create" },
 ];
+// node scenarios/onboarding.mjs [curious,busy,request] (default: all)
+const pick = process.argv[2] ? new Set(process.argv[2].split(",")) : null;
+const RUNS = pick ? ALL_RUNS.filter((r) => pick.has(r.key)) : ALL_RUNS;
 
 const now = new Date();
 const stamped = (text) => `${timeStamp(now, TZ)}\n${text}`;
@@ -133,6 +139,7 @@ for (const run of RUNS) {
         messages.push({ role: "toolResult", toolCallId: c.id, toolName: c.name, content: [{ type: "text", text: toolResult(c) }], isError: false, timestamp: Date.now() });
       }
     }
+    if (turn === 0) run.firstTools = [...tools];
     texts.push(text);
     transcript.push(`Sunshine: ${text}`);
     const flags = [
@@ -156,7 +163,8 @@ for (const run of RUNS) {
   summary.push(
     `${run.name}: ${texts.length} texts, avg ${Math.round(all.length / texts.length)} chars; name used ${/Åsa/.test(texts[0] ?? "") ? "yes" : "no"}; ` +
       `asked name ${texts.filter((t) => ASKS_NAME.test(t)).length}, timezone ${texts.filter((t) => ASKS_TIMEZONE.test(t)).length}, >1 question ${texts.filter((t) => (t.match(/\?/g) ?? []).length > 1).length}, apps ${texts.filter((t) => APPS.test(t)).length}, partner/family ${texts.filter((t) => PEOPLE.test(t)).length}; ` +
-      `Swedish texts ${texts.filter((t) => SWEDISH.test(t)).length}/${texts.length}; onboarding skill opened: ${tools.includes("load_skill:onboarding") ? "yes" : "no"}`,
+      `Swedish texts ${texts.filter((t) => SWEDISH.test(t)).length}/${texts.length}; onboarding skill opened: ${tools.includes("load_skill:onboarding") ? "yes" : "no"}` +
+      (run.expectTool ? `; did the request in the first text: ${run.firstTools?.includes(run.expectTool) ? "yes" : "NO"}` : ""),
   );
 }
 console.log(`\n===== summary\n${summary.join("\n")}\nCost: $${cost.toFixed(4)}`);

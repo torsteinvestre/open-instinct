@@ -432,46 +432,69 @@ notes keep private things out of it. Only the owner's own thread is read.
 **Settings.** `MEMORY_PASS_MODEL` picks the model; `off` switches the notes off and removes their job.
 Without a key for the model there is no job either.
 
-**What each section is for** (2026-10-17). Two nights of live notes showed a few slips:
-- under About, a one-off file sent, the app setup, and a plan's "next step" after it was done;
-- under Preferences, a testing habit ("often asks for quick water reminders");
-- people put under About, with no People section;
-- under Lately, an inbox summary with a prescription message, and the news settings.
+**Labelled lines** (2026-10-17, `packages/server/src/memory-notes.ts`).
 
-`memorySystem` now gives each section its job as a criterion:
-- About is lasting facts; a plan or status goes under Lately.
-- People has one line per person named.
-- Preferences is what they said, not a habit in what they ask for.
-- Lately is dated, and a line goes when it is done or two weeks old.
+The problem. Two nights of live notes had:
+- under About: a one-off file, the app setup, and a stale "next step";
+- under Preferences: a testing habit ("often asks for quick water reminders");
+- no People section;
+- under Lately: an inbox summary with a prescription message, and the news settings.
 
-It also says what is not for the notes: Sunshine itself and the settings chosen for it; what Sunshine read out from email, calendar or the web unless they took it up; one-off things; health and private matters they did not raise.
+Rules about what each section is for helped, but every new rule moved something else (inertia, duplicates,
+calendar invitees with their addresses). The cause: one call found, classified, reconciled and rewrote
+the whole file as prose.
 
-Tested on copies of the live notes (scratchpad `memory-preview2.sh`, three runs, about 5 cents):
-- On today's notes it removed the file, the app setup, the water "preference", the inbox summary and the news settings, added People, and kept every real fact.
-- From the notes as they were before the first night, none of those slips came in at all.
-- Left: a plan already under About sometimes stays there, and a person can appear both under About and under People.
+What changed:
+- The model reads the notes as numbered lines with their labels and proposes changes: add, update,
+  remove with a reason, relabel.
+- Each line's labels:
+  - `kind`: lasting / person / preference / current;
+  - `date`: last true;
+  - `until`: for something coming up;
+  - `source`: said / showed / read;
+  - `taken_up`, `about_agent`, `private`.
+- Code applies the changes and enforces the rules:
+  - it keeps out lines about the agent itself, what it read and nobody took up, and private things they
+    did not raise;
+  - a private preference goes under About, out of the shared section;
+  - it strips email addresses and phone numbers;
+  - a current note goes the day after its `until`, or 14 days after its `date`; each note shows the day
+    it goes;
+  - it renders `MEMORY.md` in the same shape, so the digest, `preferencesDigest`, `memory_write` and hand
+    edits keep working.
+- Lines the model does not mention stay as they are. A line without labels (a hand edit, `memory_write`,
+  older notes) is labelled the next night.
+- Labels are kept in `memory/labels.json`.
+- Every removal or line kept out goes to the audit log with its reason (`memoryChanges`).
+- A night that would lose more than 60% of the lines is refused.
+- Where facts came from is shown, not guessed: a reply after tools that read the world is marked
+  "Sunshine (after reading email or calendar)". `replySources`/`toolSource` in core's `history.ts` work
+  this out, and the history keeps it (`tools` on an entry).
+- Reasoning medium (`MEMORY_REASONING`).
 
-Then two graded rounds (scratchpad `memory-grade.mjs`: 3 runs each on today's notes and the old notes,
-checked by code, about 10 cents a round).
-- Round 1: plans under About 2 of 3 and a person in both sections 3 of 6. "Gets their own line here *too*"
-  invited the duplicate. Calendar invitees' email addresses showed up 1 of 6.
-- Round 2 added "put every line in the section it belongs in, also lines already in the notes", "a fact
-  about someone else goes here, not under About" and "no email addresses or phone numbers".
-  - Plans under About 0 of 3; packing list 0 of 3; addresses 0 of 6. The privacy slips stayed out in all
-    6, and every real fact was kept.
-  - Starting fresh, calendar-only invitees were left out (no People section, 3 of 3), the stricter reading
-    of "what Sunshine read out from the calendar".
-  - "Runs company meetings with …" still stands under About beside the People lines (3 of 3).
-  - The Brave line keeps "Sunshine's search" (2 of 3; only the developer-owner).
-  - Likes under About once.
-  - Kept as is: further rules shift other things; the live notes are checked in the morning checks.
+Tests:
+- Unit tests in `test/memory-notes.test.ts` and `test/memory-pass.test.ts`.
+- `scenarios/memory-notes.mjs`: 16 one-case conversations, plus copies of a live agent's notes, about
+  10 cents a round.
+- Round 1: 12 of 13 made-up cases right. The live copies showed an upcoming concert filed as current with
+  no day (it would have gone before the concert), a fund merged into a plan, and a setting ("text me if
+  Kanye tours") that hid an interest. Answered with `until`, the day a note goes shown, "a lasting fact and
+  a current plan are separate notes", and "a setting that also tells something about them gets a separate
+  note".
+- Round 2: 14 of 16 made-up cases right, and every privacy slip stayed out of both live copies.
+  - "Keep your answers short" was taken for something about the agent ("how they use it"). Fixed: how they
+    want to be talked to or helped is a preference.
+  - A relabelled Kanye line lost the interest. Fixed: the separate note applies on relabelling too.
+  - Left to watch live: a fund merged into a plan once, in a run from older notes. It would age out, and
+    each note shows the day it goes. Also an invitee meeting kept as coming up.
 
 **Known limits.** On a very busy day, messages trimmed before the night reach the notes only as summary
 highlights (200 characters each).
 
-**To remove.** `MEMORY_PASS_MODEL=off`, or revert the commit (`git log --grep "sunshine:memory"`) or
-delete the tagged blocks in the files above and their tests (`packages/server/test/memory-pass.test.ts`,
-`packages/core/test/runtime.test.ts`, `memory.test.ts`, `core-tools.test.ts`).
+**To remove.** `MEMORY_PASS_MODEL=off`, or revert the commits (`git log --grep "sunshine:memory"`) or
+delete the tagged blocks in the files above, `memory-notes.ts` and their tests
+(`packages/server/test/memory-pass.test.ts`, `memory-notes.test.ts`, `packages/core/test/runtime.test.ts`,
+`memory.test.ts`, `core-tools.test.ts`, `history.test.ts`). `memory/labels.json` can then be deleted.
 
 ### `[sunshine:apps]`: Gmail and Calendar through Composio's router, without its code sandbox
 

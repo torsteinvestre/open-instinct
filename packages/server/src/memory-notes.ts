@@ -111,7 +111,7 @@ export function notesSystem(agent: string, owner: string): string {
     "- until: for a current note about something coming up, the day it happens or ends, as YYYY-MM-DD; the note stays until then.",
     `- source: "said" (they told ${agent}), "showed" (clear from what they asked or did) or "read" (${agent} read it in their email, calendar or on the web, or looked it up; the conversation marks those replies).`,
     `- taken_up: for a read note, true when they responded to it and it matters to them.`,
-    `- about_agent: true when the note is about ${agent} itself: its setup, the settings they chose for it, or how they use it (like what they often ask it for). A setting that also tells something about them (asking for news about Kanye: they follow Kanye) gets a separate note about them.`,
+    `- about_agent: true when the note is about ${agent} itself: its setup, the settings they chose for it, or a pattern in what they ask it for. How they want to be talked to or helped is a preference, not this. A setting that also tells something about them (asking for news about Kanye: they follow Kanye) gets a separate note about them, also when you relabel an existing note.`,
     "- private: true for health and other private matters.",
     "The labels decide where a note goes and which notes are kept, so give them as they are.",
     "",

@@ -485,8 +485,15 @@ Tests:
   - "Keep your answers short" was taken for something about the agent ("how they use it"). Fixed: how they
     want to be talked to or helped is a preference.
   - A relabelled Kanye line lost the interest. Fixed: the separate note applies on relabelling too.
-  - Left to watch live: a fund merged into a plan once, in a run from older notes. It would age out, and
-    each note shows the day it goes. Also an invitee meeting kept as coming up.
+  - Left to watch live: an invitee meeting kept as coming up.
+- Due notes. A fund merged into a plan once, in a run from older notes: aging out would have taken the
+  fund with it, unseen. Now a current note past its day is marked "due" (`isDue`). The model must decide
+  it: keep it with a new date or `until`, relabel it, split out what is lasting, or remove it. Left
+  undecided, it goes back once as a problem. A night with no model call deletes nothing.
+  3 of 3 with the real model:
+  - the fund was split out and kept as a lasting fact;
+  - a quiet Maldives idea was removed, with the reason given;
+  - a concert that had happened went, and "huge J. Cole fan" stayed.
 
 **Known limits.** On a very busy day, messages trimmed before the night reach the notes only as summary
 highlights (200 characters each).

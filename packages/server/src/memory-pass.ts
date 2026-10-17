@@ -133,7 +133,7 @@ export function createMemoryPass(deps: MemoryPassDeps): MemoryPass {
     let outcome: PassOutcome = "unreadable";
     try {
       for (let attempt = 0; attempt < 2; attempt++) {
-        const reply = await deps.call({ system, user: notesUser({ today, isoToday, notes: describeNotes(before, owner), conversation: kept.join("\n"), ...(feedback ? { feedback } : {}) }) });
+        const reply = await deps.call({ system, user: notesUser({ today, isoToday, notes: describeNotes(before, owner, isoToday), conversation: kept.join("\n"), ...(feedback ? { feedback } : {}) }) });
         cost += reply.costUsd;
         const changes = parseChanges(reply.text);
         if (!changes) {

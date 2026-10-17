@@ -110,6 +110,27 @@ describe("applying the changes", () => {
     expect(r.dropped).toEqual([{ text: "Weighing a flat in Oslo", why: `nothing new for over ${CURRENT_MAX_DAYS} days` }]);
   });
 
+  it("asks for a decision on a due note before it goes: kept with a new date, relabelled, split, or let go", () => {
+    const fund: Note = { text: "Has about 1.5M NOK in an ASK fund and is thinking about what to do with it", kind: "current", source: "said", date: "2026-09-30" };
+    const trip: Note = { text: "Thinking about a trip to the Maldives", kind: "current", source: "said", date: "2026-09-25" };
+    const flat: Note = { text: "Weighing a flat in Oslo", kind: "current", source: "said", date: "2026-09-28" };
+    // Not decided: named as a problem (the first answer goes back); on the second answer it goes.
+    const ignored = applyChanges([fund, trip], [], TODAY);
+    expect(ignored.problems).toEqual([
+      "n1 is due: keep it with a new date or until if it is still going on, relabel it if it is lasting, split out what is lasting, or remove it",
+      "n2 is due: keep it with a new date or until if it is still going on, relabel it if it is lasting, split out what is lasting, or remove it",
+    ]);
+    expect(ignored.notes).toEqual([]);
+    // Decided: the lasting part split out and kept, the trip let go, the flat still going on with a new date.
+    const decided = applyChanges([fund, trip, flat], [
+      { id: "n1", text: "Has about 1.5M NOK in an ASK fund", kind: "lasting" },
+      { id: "n2", remove: "an idea from September, not mentioned since" },
+      { id: "n3", date: "2026-10-16" },
+    ], TODAY);
+    expect(decided.problems).toEqual([]);
+    expect(decided.notes.map((n) => [n.text, n.kind, n.date])).toEqual([["Has about 1.5M NOK in an ASK fund", "lasting", undefined], ["Weighing a flat in Oslo", "current", "2026-10-16"]]);
+  });
+
   it("keeps something coming up until its day, however long ago it was mentioned, and shows when each current note goes", () => {
     const before: Note[] = [
       { text: "J. Cole at Oslo Spektrum", kind: "current", source: "said", date: "2026-09-20", until: "2026-11-21" },
@@ -124,6 +145,10 @@ describe("applying the changes", () => {
       "n2 [current, last true 2026-10-10, goes after 2026-10-12, said] Physio on Monday",
       "n3 [current, last true 2026-10-15, goes after 2026-10-29, said] Weighing a flat in Oslo",
     ]);
+    // On the night it is due, the note says so and asks for a decision.
+    expect(describeNotes(before, "Torstein", TODAY).split("\n")[1]).toBe(
+      "n2 [current, last true 2026-10-10, due: keep it with a new date or until if it is still going on, relabel it if it is lasting, split out what is lasting, or remove it, said] Physio on Monday",
+    );
     // An until set by the model is kept with the note.
     const added = applyChanges([], [{ text: "Dentist moved to next week", kind: "current", source: "said", until: "2026-10-28" }], TODAY);
     expect(added.notes[0]).toMatchObject({ date: TODAY, until: "2026-10-28" });

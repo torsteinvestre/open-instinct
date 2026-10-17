@@ -85,17 +85,30 @@ function goesAfter(n: NoteLabels): string | undefined {
 }
 
 /**
- * The notes as the model sees them: an id, the labels (or "unlabeled, under <section>"), the text. A
- * current note shows when it will leave, so a lasting fact filed as current can be caught before it goes.
+ * A current note past its day: it leaves only once the model has looked at it (kept with a new date,
+ * relabelled, split, or removed), so a lasting fact inside a plan ("has 1.5M NOK and is thinking about
+ * what to do with it") is not dropped unseen. Seen once in four live-copy runs (2026-10-17).
  */
-export function describeNotes(notes: Note[], owner: string): string {
+export function isDue(n: NoteLabels, isoToday: string): boolean {
+  const goes = goesAfter(n);
+  return goes !== undefined && isoToday > goes;
+}
+
+const DUE_ASK = "due: keep it with a new date or until if it is still going on, relabel it if it is lasting, split out what is lasting, or remove it";
+
+/**
+ * The notes as the model sees them: an id, the labels (or "unlabeled, under <section>"), the text. A
+ * current note shows when it will leave, or that it is due, so a lasting fact filed as current is caught.
+ */
+export function describeNotes(notes: Note[], owner: string, isoToday?: string): string {
   if (notes.length === 0) return "(none yet)";
   return notes
     .map((n, i) => {
       const goes = goesAfter(n);
+      const when = goes ? (isoToday && isDue(n, isoToday) ? DUE_ASK : `goes after ${goes}`) : "";
       const labels = n.unlabeled
         ? `unlabeled, under ${sectionTitle(n.kind, owner)}`
-        : [n.kind, n.date ? `last true ${n.date}` : "", goes ? `goes after ${goes}` : "", n.source === "read" ? (n.takenUp ? "read, taken up" : "read") : n.source, n.private ? "private" : "", n.aboutAgent ? "about the agent" : ""].filter(Boolean).join(", ");
+        : [n.kind, n.date ? `last true ${n.date}` : "", when, n.source === "read" ? (n.takenUp ? "read, taken up" : "read") : n.source, n.private ? "private" : "", n.aboutAgent ? "about the agent" : ""].filter(Boolean).join(", ");
       return `n${i + 1} [${labels}] ${n.text}`;
     })
     .join("\n");
@@ -115,7 +128,7 @@ export function notesSystem(agent: string, owner: string): string {
     "- private: true for health and other private matters.",
     "The labels decide where a note goes and which notes are kept, so give them as they are.",
     "",
-    "Notes you do not mention stay exactly as they are. Change what the conversation changed: add what is new and worth remembering, update what changed, remove what is over or no longer true and say why, and fix labels or wording that are wrong. Label every note marked unlabeled. Leave out what only mattered for a moment, like a file sent once.",
+    "Notes you do not mention stay exactly as they are. Change what the conversation changed: add what is new and worth remembering, update what changed, remove what is over or no longer true and say why, and fix labels or wording that are wrong. Label every note marked unlabeled, and decide every note marked due. Leave out what only mattered for a moment, like a file sent once.",
     "",
     "Answer with JSON between <changes> and </changes>, for example:",
     "<changes>",
@@ -240,6 +253,7 @@ export function applyChanges(before: Note[], changes: RawChange[], isoToday: str
   }
   before.forEach((n, i) => {
     if (n.unlabeled && !touched.has(i)) out.problems.push(`n${i + 1} is unlabeled: give it labels or remove it`);
+    else if (!n.unlabeled && !touched.has(i) && isDue(n, isoToday)) out.problems.push(`n${i + 1} is ${DUE_ASK}`);
   });
 
   const today = Date.parse(`${isoToday}T00:00:00Z`);

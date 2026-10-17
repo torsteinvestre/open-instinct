@@ -10,6 +10,8 @@
 // Usage (from packages/server, after `pnpm build`, ANTHROPIC_API_KEY and COMPOSIO_API_KEY set):
 //   node scenarios/tool-loader.mjs [rounds] [case,case]   (all 18 cases, one round: about 40-60 cents)
 //   MAX_USD=0.6 stops before the next case once the spend passes it. DRY=1 prints the tool list: free.
+//   NOT_CONNECTED=1: Gmail and Calendar are set up but not connected yet, as for a new friend; the apps
+//   cases then also need the sign-in link in the reply (cases connect,inbox,calendar,addevent).
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,9 +28,12 @@ const MAX_USD = Number(process.env.MAX_USD ?? 0.7);
 const SKILLS = fileURLToPath(new URL("../../../skills", import.meta.url));
 const OWNER = "+4790000000";
 
-// Shown as connected, as on the owner's agent; nothing is asked of Composio about a real account.
+// Shown as connected, as on the owner's agent, or not yet (NOT_CONNECTED=1, a new friend); nothing is
+// asked of Composio about a real account.
+const NOT_CONNECTED = Boolean(process.env.NOT_CONNECTED);
+const LINK = "https://connect.composio.dev/link/lk_test_7Hq2";
 ComposioApps.prototype.connectedToolkits = async function () {
-  return [{ slug: "gmail", connected: true }, { slug: "googlecalendar", connected: true }];
+  return [{ slug: "gmail", connected: !NOT_CONNECTED }, { slug: "googlecalendar", connected: !NOT_CONNECTED }];
 };
 
 const dir = mkdtempSync(join(tmpdir(), "tool-loader-"));
@@ -58,6 +63,12 @@ const EMAILS = "1. Nordnet (today 08:12): Your monthly statement for September i
 const EVENTS = "Fri 23 Oct: 09:00-09:30 Standup; 12:00-13:00 Lunch with Sanna; 17:30 Dentist (Grünerløkka Tannlegesenter).";
 function scripted(name, args) {
   const a = JSON.stringify(args ?? {});
+  if (NOT_CONNECTED) {
+    const app = /calendar/i.test(a) ? "googlecalendar" : "gmail";
+    if (name === "apps_list" || (name === "app_composio_manage_connections" && !/connect|initiate|link|add/i.test(a))) return "Not connected: gmail, googlecalendar.";
+    if (name === "apps_connect" || name === "app_composio_manage_connections") return `Connect link for ${app}: ${LINK} . Send it to the owner; they open it and sign in with Google.`;
+    if (name === "app_composio_multi_execute_tool") return `Error: no connected account for ${app}. The owner has to connect it first (apps_connect).`;
+  }
   if (name === "app_composio_search_tools") return /calendar|event|appointment|dentist/i.test(a)
     ? "GOOGLECALENDAR_EVENTS_LIST: list events in a time range (calendar_id, time_min, time_max)\nGOOGLECALENDAR_PATCH_EVENT: change an event (event_id, start, end)\nGOOGLECALENDAR_CREATE_EVENT: create an event"
     : "GMAIL_FETCH_EMAILS: list recent emails (max_results, query)\nGMAIL_SEND_EMAIL: send an email (recipient_email, subject, body)\nGMAIL_CREATE_EMAIL_DRAFT: draft an email";
@@ -104,6 +115,8 @@ if (process.env.DRY) {
 
 const CASES = [
   // Needs a group.
+  { key: "connect", group: "apps", text: "can you connect to my gmail?" },
+  { key: "addevent", group: "apps", text: "put dentist on friday at 15:00 in my calendar" },
   { key: "inbox", group: "apps", text: "check my inbox, anything important?" },
   { key: "calendar", group: "apps", text: "what's on my calendar on friday?" },
   { key: "email", group: "apps", text: "email Martin that I'll be 10 min late on friday" },
@@ -144,8 +157,10 @@ outer: for (let round = 1; round <= ROUNDS; round++) {
     const spent = usage.reduce((s, u) => s + (u.cost?.total ?? 0), 0);
     cost += spent;
     const reply = sent.map((m) => m.text).filter(Boolean).join(" / ") || "(nothing sent)";
-    const right = c.group ? loads.includes(c.group) : loads.length === 0;
-    const flags = [!right && (c.group ? `DID NOT LOAD ${c.group}` : `NEEDLESS LOAD ${loads.join(",")}`), CANT.test(reply) && "SAYS CAN'T", MACHINERY.test(reply) && "MENTIONS LOADING", c.group && loads.some((g) => g !== c.group) && `also loaded ${loads.filter((g) => g !== c.group).join(",")}`].filter(Boolean);
+    // Not connected yet: loading is not enough, the reply has to carry the sign-in link.
+    const linked = !(NOT_CONNECTED && c.group === "apps") || reply.includes(LINK);
+    const right = (c.group ? loads.includes(c.group) : loads.length === 0) && linked;
+    const flags = [!linked && "NO SIGN-IN LINK", !(c.group ? loads.includes(c.group) : loads.length === 0) && (c.group ? `DID NOT LOAD ${c.group}` : `NEEDLESS LOAD ${loads.join(",")}`), CANT.test(reply) && "SAYS CAN'T", MACHINERY.test(reply) && "MENTIONS LOADING", c.group && loads.some((g) => g !== c.group) && `also loaded ${loads.filter((g) => g !== c.group).join(",")}`].filter(Boolean);
     rows.push({ round, key: c.key, group: c.group, right, flags });
     console.log(`\n[${round}] ${c.key} (${c.group ?? "no group"}): ${right ? "ok" : "MISS"}${flags.length ? ` (${flags.join("; ")})` : ""}  $${spent.toFixed(4)}`);
     console.log(`  Torstein: ${c.text}`);

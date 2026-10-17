@@ -665,6 +665,11 @@ canned tool answers, 2026-10-16, $0.36 a round).
   a load read it again and wrote only the added tools (6,500 for apps, 3,400 desktop, 2,200 files,
   2,750 people), and the calls after that read everything back.
 - Requests that needed no group cost 0.2 to 0.7 cents; email and calendar ones 3.5 to 5.5 cents.
+- A new friend's first email request, with Gmail and Calendar set up but not connected
+  (`NOT_CONNECTED=1`, 2026-10-17, $0.10), 3 of 3 right: "can you connect to my gmail?", "put dentist on
+  friday at 15:00 in my calendar" and "check my inbox" each loaded apps, called `apps_connect` and sent
+  the sign-in link, with a promise to do the task after sign-in ("Gmail isn't connected yet, so I can't see
+  your inbox. Sign in here and I'll check it on your next message: …").
 
 **To remove.** `features.toolLoader = false`, or revert the commit (`git log --grep "tool-loader"`) or
 delete `tool-loader.ts` and the tagged blocks in `runtime.ts`, `tools.ts`, `types.ts`, `index.ts`,

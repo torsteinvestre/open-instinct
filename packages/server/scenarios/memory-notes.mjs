@@ -65,6 +65,35 @@ const CASES = [
   { key: "duefund", why: "a due plan that holds a lasting fact", before: [lasting("Lives in Oslo."), { text: "Has about 1.5M NOK in an aksjesparekonto and is thinking about what to do with it", kind: "current", source: "said", date: "2026-09-30" }], messages: [me("whats 12 times 14", 0), sun("168.", 0)], has: [["About", /1[.,]5|aksjespare|ASK/i]] },
   { key: "dueplan", why: "a due plan nobody mentioned again", before: [lasting("Lives in Oslo."), { text: "Thinking about a trip to the Maldives", kind: "current", source: "said", date: "2026-09-25" }], messages: [me("whats 12 times 14", 0), sun("168.", 0)], has: [["About", /Oslo/]], not: [["Lately", /Maldives/]] },
   { key: "dueevent", why: "an event that has happened, with a lasting part", before: [{ text: "Has tickets to J. Cole at Oslo Spektrum on 14 Oct; huge fan", kind: "current", source: "said", date: "2026-10-01", until: "2026-10-14" }], messages: [me("whats 12 times 14", 0), sun("168.", 0)], has: [[null, /J\.?\s?Cole/i]], not: [["Lately", /tickets/i]] },
+  // Stress: several due notes at once on a busy night; quiet plans that should go, not be re-dated; Swedish.
+  { key: "busy", why: "five due notes and a busy conversation", before: [
+      lasting("Lives in Oslo."),
+      { text: "Sanna: girlfriend", kind: "person", source: "said" },
+      { text: "Likes short answers.", kind: "preference", source: "said" },
+      { text: "Has about 1.5M NOK in an aksjesparekonto and is thinking about what to do with it", kind: "current", source: "said", date: "2026-09-30" },
+      { text: "Thinking about a trip to the Maldives", kind: "current", source: "said", date: "2026-09-25" },
+      { text: "Planning a cabin weekend in Hemsedal with Sanna", kind: "current", source: "said", date: "2026-09-29" },
+      { text: "Running the Oslo Marathon on 20 Sep; trains with a running club", kind: "current", source: "said", date: "2026-09-10", until: "2026-09-20" },
+      { text: "Physio for a knee injury", kind: "current", source: "said", private: true, date: "2026-09-20" },
+    ],
+    messages: [me("booked the hemsedal cabin for 6-8 nov btw", 0), sun("Nice, that'll be lovely.", 0), me("knee is all good now, done with physio", 5), sun("Great to hear!", 5), me("and big news, I'm starting a new job at Vipps on 1 dec", 10), sun("Congrats! That's huge.", 10), me("my sister Ida is visiting next weekend too", 15), sun("Fun, what are you two planning?", 15)],
+    has: [["About", /1[.,]5|aksjespare|ASK/i], [null, /Hemsedal/], [null, /Vipps/], ["People", /Ida/], [null, /running|marathon|run/i], ["People", /Sanna/], ["Preferences", /short/i]],
+    not: [["Lately", /Maldives/], ["Lately", /knee|physio/i], ["Lately", /Marathon on 20 Sep/]],
+    labels: [[/hemsedal/i, (l) => l.kind !== "current" || (l.until ?? "") >= "2026-11-06" || (l.date ?? "") >= "2026-10-16", "kept until the weekend or re-dated"]] },
+  { key: "redate", why: "quiet due plans go rather than being re-dated", before: [
+      lasting("Lives in Oslo."),
+      { text: "Thinking about getting a dog", kind: "current", source: "said", date: "2026-09-20" },
+      { text: "Considering learning Spanish", kind: "current", source: "said", date: "2026-09-22" },
+      { text: "Looking at new running shoes", kind: "current", source: "said", date: "2026-09-28" },
+      { text: "Wants to try the new ramen place on Grünerløkka", kind: "current", source: "said", date: "2026-09-26" },
+    ],
+    messages: [me("whats 15% of 80", 0), sun("12.", 0)], has: [["About", /Oslo/]], not: [["Lately", /dog|Spanish|running shoes|ramen/i]] },
+  { key: "swedish", why: "a Swedish conversation with a due trip", owner: "Zia", tz: "Europe/Stockholm", before: [
+      { text: "Bor i Stockholm.", kind: "lasting", source: "said" },
+      { text: "Planerar en resa till Lissabon i oktober", kind: "current", source: "said", date: "2026-09-28" },
+    ],
+    messages: [me("hej! tillbaka från lissabon, så fint", 0), sun("Välkommen hem! Kul att det var bra.", 0), me("förresten har jag börjat spela padel varje tisdag", 5), sun("Härligt!", 5), me("min bror Ali flyttar till Göteborg nästa månad", 10), sun("Spännande för honom.", 10)],
+    has: [[null, /Stockholm/], [null, /padel/i], ["People", /Ali/]], not: [["Lately", /Lissabon.*planer|Planerar en resa till Lissabon/i]] },
   { key: "nothing", why: "nothing new: every note stays", before: [lasting("Lives in Oslo."), { text: "Sanna: girlfriend, studies medicine", kind: "person", source: "said" }, { text: "Likes short answers.", kind: "preference", source: "said" }, { text: "Weighing an apartment in Oslo against keeping the fund", kind: "current", source: "said", date: "2026-10-15" }], messages: [me("what's 15% of 2340?", 0), sun("351.", 0)], has: [["About", /Oslo/], ["People", /Sanna/], ["Preferences", /short/], ["Lately", /apartment/]] },
 ].filter((c) => !pick || pick.split(",").includes(c.key));
 
@@ -128,8 +157,9 @@ const rows = [];
 const route ={ conversationKey: "imessage:c1", channel: "imessage" };
 for (const c of CASES) {
   if (total > MAX_USD) { console.log(`Stopped: spent $${total.toFixed(3)}, over MAX_USD ${MAX_USD}.`); break; }
-  const memoryMd = c.beforeMd ?? (c.before ? renderNotes(c.before, "Torstein") : "");
-  const r = await runPass({ memoryMd, labels: c.before, route, session: c.messages });
+  const owner = c.owner ?? "Torstein";
+  const memoryMd = c.beforeMd ?? (c.before ? renderNotes(c.before, owner) : "");
+  const r = await runPass({ memoryMd, labels: c.before, route, session: c.messages, owner, ...(c.tz ? { tz: c.tz } : {}) });
   total += r.cost;
   const fails = check(r.md, c.has, c.not);
   // Checks on a note's labels: [which note (by text), test, what it means].

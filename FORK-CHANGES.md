@@ -432,6 +432,25 @@ notes keep private things out of it. Only the owner's own thread is read.
 **Settings.** `MEMORY_PASS_MODEL` picks the model; `off` switches the notes off and removes their job.
 Without a key for the model there is no job either.
 
+**What each section is for** (2026-10-17). Two nights of live notes showed a few slips:
+- under About, a one-off file sent, the app setup, and a plan's "next step" after it was done;
+- under Preferences, a testing habit ("often asks for quick water reminders");
+- people put under About, with no People section;
+- under Lately, an inbox summary with a prescription message, and the news settings.
+
+`memorySystem` now gives each section its job as a criterion:
+- About is lasting facts; a plan or status goes under Lately.
+- People has one line per person named.
+- Preferences is what they said, not a habit in what they ask for.
+- Lately is dated, and a line goes when it is done or two weeks old.
+
+It also says what is not for the notes: Sunshine itself and the settings chosen for it; what Sunshine read out from email, calendar or the web unless they took it up; one-off things; health and private matters they did not raise.
+
+Tested on copies of the live notes (scratchpad `memory-preview2.sh`, three runs, about 5 cents):
+- On today's notes it removed the file, the app setup, the water "preference", the inbox summary and the news settings, added People, and kept every real fact.
+- From the notes as they were before the first night, none of those slips came in at all.
+- Left: a plan already under About sometimes stays there, and a person can appear both under About and under People.
+
 **Known limits.** On a very busy day, messages trimmed before the night reach the notes only as summary
 highlights (200 characters each).
 

@@ -451,6 +451,21 @@ Tested on copies of the live notes (scratchpad `memory-preview2.sh`, three runs,
 - From the notes as they were before the first night, none of those slips came in at all.
 - Left: a plan already under About sometimes stays there, and a person can appear both under About and under People.
 
+Then two graded rounds (scratchpad `memory-grade.mjs`: 3 runs each on today's notes and the old notes,
+checked by code, about 10 cents a round).
+- Round 1: plans under About 2 of 3 and a person in both sections 3 of 6. "Gets their own line here *too*"
+  invited the duplicate. Calendar invitees' email addresses showed up 1 of 6.
+- Round 2 added "put every line in the section it belongs in, also lines already in the notes", "a fact
+  about someone else goes here, not under About" and "no email addresses or phone numbers".
+  - Plans under About 0 of 3; packing list 0 of 3; addresses 0 of 6. The privacy slips stayed out in all
+    6, and every real fact was kept.
+  - Starting fresh, calendar-only invitees were left out (no People section, 3 of 3), the stricter reading
+    of "what Sunshine read out from the calendar".
+  - "Runs company meetings with …" still stands under About beside the People lines (3 of 3).
+  - The Brave line keeps "Sunshine's search" (2 of 3; only the developer-owner).
+  - Likes under About once.
+  - Kept as is: further rules shift other things; the live notes are checked in the morning checks.
+
 **Known limits.** On a very busy day, messages trimmed before the night reach the notes only as summary
 highlights (200 characters each).
 

@@ -45,7 +45,7 @@ export function memorySystem(agent: string, owner: string): string {
   return [
     `You keep the notes ${agent} has about ${owner}, the person ${agent} works for. Once a night you read the notes and what ${owner} and ${agent} said since the last time, and write the notes back.`,
     "",
-    `${agent} sees these notes at the start of every conversation, so they hold what a good friend would remember about ${owner}'s life: what ${owner} told ${agent} or clearly showed, never a guess. Keep everything that is still true, update what changed, remove what is over or no longer true. One fact per line, plain and short, with a date where it matters.`,
+    `${agent} sees these notes at the start of every conversation, so they hold what a good friend would remember about ${owner}'s life: what ${owner} told ${agent} or clearly showed, never a guess. Keep everything that is still true, update what changed, remove what is over or no longer true, and put every line in the section it belongs in, also lines already in the notes. One fact per line, plain and short, with a date where it matters.`,
     "",
     "Write the whole file back in this shape:",
     "# Memory",
@@ -60,7 +60,7 @@ export function memorySystem(agent: string, owner: string): string {
     // section, and an inbox summary with a prescription message under Lately.
     "What each section is for:",
     `- About: lasting facts about who they are and what they have, do or follow, still true months from now. A plan, a status or a next step is not lasting; it belongs under Lately.`,
-    "- People: the people in their life, one per line: the name, who they are to them, what matters about them. Someone named in a fact about work or plans gets their own line here too.",
+    "- People: the people in their life, one per line: the name, who they are to them, what matters about them. A fact about someone else goes here, not under About. No email addresses or phone numbers: those belong in contacts.",
     `- Preferences: likes, dislikes and how they want things done, as they put them. A habit in what they ask ${agent} for is not a preference. This section is shared with people ${owner} trusts, like a partner or family, so nothing private goes in it.`,
     "- Lately: what is going on for them now, each line dated: plans, things they are weighing, things coming up. A line goes once it is done, or once it is two weeks old with nothing new about it.",
     "",

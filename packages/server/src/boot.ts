@@ -40,7 +40,7 @@ import { networkTools } from "@open-instinct/network";
 // [sunshine:watcher]
 import { DEFAULT_DECIDE_MODEL, DEFAULT_SCREEN_MODEL, DEFAULT_WRITE_MODEL, NEWS_PROMPT, WATCH_GATE, createWatcher, modelCall, resolveWatcherModel, stepModelSpec, type ModelCall, type Watcher } from "@open-instinct/watcher";
 import { researchWith, writerContextFor } from "./watcher-writer.js";
-import { DEFAULT_MEMORY_MODEL, MEMORY_GATE, createMemoryPass } from "./memory-pass.js"; // [sunshine:memory]
+import { DEFAULT_MEMORY_MODEL, MEMORY_GATE, MEMORY_REASONING, createMemoryPass } from "./memory-pass.js"; // [sunshine:memory]
 import { ChatAwareOutbox, ConsoleOutbox, type ChatReplyBuffer } from "./console-outbox.js";
 import { fileTools, resolveInsideWorkspace } from "./file-tools.js";
 import { describeDataPart, promptExtraFor } from "./hooks.js";
@@ -368,7 +368,7 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
     // Without a key for its model the pass could never run, so there is no job either.
     const m = spec ? resolveWatcherModel(spec, env) : undefined;
     const apiKey = m ? apiKeyFor(m.provider, env) : undefined;
-    if (m && apiKey) call = modelCall(m, { reasoning: "low", apiKey });
+    if (m && apiKey) call = modelCall(m, { reasoning: MEMORY_REASONING, apiKey }); // [sunshine:memory]
     log(`memory notes: ${call ? `nightly, ${spec}` : spec ? `off (no key for ${m?.provider})` : "off"}`);
     return createMemoryPass({ state, memory, config, scheduler, audit, ...(call ? { call } : {}), ...(history ? { history } : {}) }); // [sunshine:history] history
   });

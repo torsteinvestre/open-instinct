@@ -4,7 +4,7 @@
  * then texts as the agent would, instead of from the headline alone.
  */
 import { join } from "node:path";
-import { DEFAULT_PERSONA, readPersona, readSession, type HistoryArchive, type InstinctConfig, type MemoryStore, type Principal, type StateDir, type ToolRegistry } from "@open-instinct/core";
+import { DEFAULT_PERSONA, readPersona, readSession, replySources, type HistoryArchive, type InstinctConfig, type MemoryStore, type Principal, type StateDir, type ToolRegistry } from "@open-instinct/core";
 import type { WriterContext } from "@open-instinct/watcher";
 
 /** Messages from the end of the owner's thread the writer sees. */
@@ -32,6 +32,8 @@ export interface ThreadEntry {
   name: string;
   when: string;
   text: string;
+  /** [sunshine:memory] For a reply: what the tools before it read (see core's replySources). */
+  tools?: string[];
 }
 
 /**
@@ -45,7 +47,9 @@ export function ownerThreadEntries(state: StateDir, config: InstinctConfig): { e
   const tz = config.owner.timezone || "UTC";
   const entries: ThreadEntry[] = [];
   let summary: { ts: number; text: string } | undefined;
-  for (const m of readSession(join(state.path("sessions"), `${encodeURIComponent(route.conversationKey)}.jsonl`))) {
+  const messages = readSession(join(state.path("sessions"), `${encodeURIComponent(route.conversationKey)}.jsonl`));
+  const sources = replySources(messages); // [sunshine:memory]
+  for (const [i, m] of messages.entries()) {
     if (m.role !== "user" && m.role !== "assistant") continue;
     const raw = typeof m.content === "string" ? m.content : m.content.map((c) => (c.type === "text" ? c.text : "")).join("");
     // Drop the time stamp line the runtime puts in front of each message; the entry carries the time.
@@ -58,7 +62,8 @@ export function ownerThreadEntries(state: StateDir, config: InstinctConfig): { e
     const when = new Intl.DateTimeFormat("en-GB", { timeZone: tz, weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).format(new Date(m.timestamp));
     const who = m.role === "assistant" ? "agent" : text.startsWith("[Not a message from") ? "note" : "owner";
     const name = who === "agent" ? config.agent.name : who === "note" ? "(note)" : config.owner.name;
-    entries.push({ ts: m.timestamp, who, name, when, text });
+    const tools = who === "agent" ? sources[i] : undefined; // [sunshine:memory]
+    entries.push({ ts: m.timestamp, who, name, when, text, ...(tools ? { tools } : {}) });
   }
   return summary ? { entries, summary } : { entries };
 }
@@ -80,12 +85,17 @@ export function historyThreadEntries(history: HistoryArchive, state: StateDir, c
       name: e.who === "agent" ? config.agent.name : e.who === "note" ? "(note)" : config.owner.name,
       when: new Intl.DateTimeFormat("en-GB", { timeZone: tz, weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).format(new Date(e.ts)),
       text: e.text,
+      ...(e.tools ? { tools: e.tools } : {}), // [sunshine:memory]
     }));
 }
 
-/** An entry as one plain line, "[Wed 14 Oct, 14:58] Torstein: …", its text clipped to `max`. */
-export function threadLine(e: ThreadEntry, max: number): string {
-  return `[${e.when}] ${e.name}: ${e.text.replace(/\s+/g, " ").slice(0, max)}`;
+/**
+ * An entry as one plain line, "[Wed 14 Oct, 14:58] Torstein: …", its text clipped to `max`.
+ * [sunshine:memory] With `sources`, a reply says what it read first: "Sunshine (after reading email or calendar): …".
+ */
+export function threadLine(e: ThreadEntry, max: number, sources = false): string {
+  const who = sources && e.tools?.length ? `${e.name} (after reading ${e.tools.join(", ")})` : e.name;
+  return `[${e.when}] ${who}: ${e.text.replace(/\s+/g, " ").slice(0, max)}`;
 }
 
 /** The agent's own web_search tool as the writer's research: one query in, results as text out. */

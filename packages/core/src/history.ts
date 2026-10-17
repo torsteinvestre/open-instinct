@@ -32,6 +32,45 @@ export interface HistoryEntry {
   key: string;
   who: HistoryWho;
   text: string;
+  /** [sunshine:memory] For a reply: what the tools before it read ("the web", "email or calendar", ...). */
+  tools?: string[];
+}
+
+/**
+ * [sunshine:memory] Where a reply's facts came from, by the tools used before it: the nightly notes
+ * keep what the owner said apart from what the agent read out of their email or the web. Undefined for
+ * tools that read nothing of the world (reminders, notes, texting).
+ */
+export function toolSource(name: string): string | undefined {
+  if (name === "web_search" || name === "web_fetch") return "the web";
+  if (name.startsWith("app_") || name.startsWith("apps_")) return "email or calendar";
+  if (name.startsWith("computer")) return "the browser";
+  if (name === "history_search") return "past messages";
+  if (name.startsWith("watch_")) return "the news";
+  return undefined;
+}
+
+/**
+ * [sunshine:memory] For each message, what the tools used since the last user message read: the
+ * sources behind a reply. Indexed like `messages`; only replies with text get one.
+ */
+export function replySources(messages: AgentMessage[]): Array<string[] | undefined> {
+  const out: Array<string[] | undefined> = [];
+  let pending = new Set<string>();
+  for (const m of messages) {
+    if (m.role === "user") pending = new Set();
+    let sources: string[] | undefined;
+    if (m.role === "assistant") {
+      if (pending.size > 0 && messageText(m).trim()) sources = [...pending];
+      for (const c of m.content) {
+        if (c.type !== "toolCall") continue;
+        const source = toolSource(c.name);
+        if (source) pending.add(source);
+      }
+    }
+    out.push(sources);
+  }
+  return out;
 }
 
 export interface HistoryMatch {
@@ -114,8 +153,9 @@ export class HistoryArchive {
   record(key: string, messages: AgentMessage[]): number {
     const known = this.knownSet();
     const forgotten = this.forgottenSet();
+    const sources = replySources(messages); // [sunshine:memory]
     let added = 0;
-    for (const m of messages) {
+    for (const [i, m] of messages.entries()) {
       let who: HistoryWho;
       let text = messageText(m).trim();
       if (m.role === "user") {
@@ -133,7 +173,8 @@ export class HistoryArchive {
       const ts = typeof m.timestamp === "number" ? m.timestamp : this.now();
       const id = digest(who, ts, text);
       if (known.has(id) || forgotten.has(id)) continue;
-      this.state.appendLine(HISTORY_FILE, JSON.stringify({ ts, key, who, text } satisfies HistoryEntry));
+      const tools = who === "agent" ? sources[i] : undefined; // [sunshine:memory]
+      this.state.appendLine(HISTORY_FILE, JSON.stringify({ ts, key, who, text, ...(tools ? { tools } : {}) } satisfies HistoryEntry));
       known.add(id);
       added++;
     }

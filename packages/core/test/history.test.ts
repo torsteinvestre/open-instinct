@@ -36,6 +36,8 @@ describe("history archive", () => {
     expect(kept.map((e) => e.who)).toEqual(["owner", "agent", "note", "agent"]);
     expect(kept[0]!.text).toBe("I have a fund, what should be considered in the fund vs apartment");
     expect(kept[2]!.text.length).toBe(300);
+    // [sunshine:memory] A reply keeps what its tools read; a reply after none (or after a new message) has nothing.
+    expect((kept as Array<{ tools?: string[] }>).map((e) => e.tools)).toEqual([undefined, ["the web"], undefined, undefined]);
     // A new process reads the file and still writes nothing twice.
     expect(new HistoryArchive(state, { now: () => new Date(T + 60 * MIN) }).record("imessage:c1", messages)).toBe(0);
   });

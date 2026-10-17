@@ -57,6 +57,7 @@ interface HarnessOptions {
   /** Also register the real core tools (ask_owner, notify_owner, memory, ...). */
   withCoreTools?: boolean;
   typing?: Outbox["typing"];
+  markRead?: Outbox["markRead"]; // [sunshine:read-receipts]
   deps?: Partial<RuntimeDeps>;
 }
 
@@ -148,6 +149,7 @@ function harness(opts: HarnessOptions = {}): Harness {
       sent.push({ msg, ctx });
     },
     ...(opts.typing ? { typing: opts.typing } : {}),
+    ...(opts.markRead ? { markRead: opts.markRead } : {}), // [sunshine:read-receipts]
   };
   if (opts.withCoreTools) registry.registerMany(coreTools({ memory, scheduler, approvals, audit, config, outbox }));
   const deps: RuntimeDeps = {
@@ -1931,6 +1933,60 @@ describe("[sunshine:reply-guard] system tasks", () => {
     await h.runtime.runSystemTask({ id: "keynote", prompt: "Remind the owner about the keynote." });
     expect(h.sent.map((s) => s.msg.text)).toEqual(["The keynote is at 9."]);
     expect(h.deps.audit.read({ kinds: ["policy"] }).some((a) => a.detail["replyGuard"])).toBe(true);
+  });
+});
+
+// [sunshine:read-receipts] "Read" under their text as soon as it is in; refused dots or receipts are logged.
+describe("[sunshine:read-receipts] read receipts", () => {
+  const THREAD = "imessage:c1";
+  const ownerSays = (h: Harness, text: string, id: string, extra: Partial<InboundMessage> = {}) =>
+    h.runtime.handleInbound(inbound({ channel: "imessage", from: OWNER_PHONE, conversationKey: THREAD, text, id, ...extra }));
+  const courtesyErrors = (h: Harness) => h.deps.audit.read({ kinds: ["error"] }).map((e) => e.detail["courtesy"]).filter(Boolean);
+
+  it("marks a one-to-one text read when it arrives, also one that comes in while a run is going", async () => {
+    const reads: string[] = [];
+    const h = harness({ markRead: async (key) => void reads.push(key), replyBudgetMs: 25 });
+    h.faux.setResponses([toolTurn("slow", {}), textTurn("done"), textTurn("and that too")]);
+    await ownerSays(h, "do the slow thing", "m1");
+    expect(reads).toEqual([THREAD]); // before the model has answered
+    expect(h.runtime.conversation(THREAD, h.runtime.ownerPrincipal()).busy).toBe(true);
+    await ownerSays(h, "also this", "m2");
+    expect(reads).toEqual([THREAD, THREAD]);
+    h.gate.open();
+    await vi.waitFor(() => expect(h.sent.length).toBeGreaterThan(0));
+  });
+
+  it("marks a contact's text read, and leaves strangers, groups, the dashboard chat, duplicates and the switch-off alone", async () => {
+    const reads: string[] = [];
+    const h = harness({ markRead: async (key) => void reads.push(key) });
+    h.deps.contacts.upsert({ name: "Sam Lee", tier: "friend", phones: [SAM_PHONE] });
+    h.faux.setResponses([textTurn("hi"), textTurn("hi Sam"), textTurn("hi all"), textTurn("ok"), textTurn("who is this?")]);
+    await ownerSays(h, "hi", "m1");
+    await ownerSays(h, "hi", "m1"); // the same event again
+    await h.runtime.handleInbound(inbound({ channel: "imessage", from: SAM_PHONE, conversationKey: "imessage:sam", text: "hey", id: "s1" }));
+    await h.runtime.handleInbound(inbound({ channel: "imessage", from: OWNER_PHONE, conversationKey: "imessage:group1", text: "hi all", id: "g1", meta: { isGroup: true, participants: [OWNER_PHONE, SAM_PHONE] } }));
+    await h.runtime.handleInbound(inbound({ channel: "chat", from: "owner", conversationKey: "chat:main", text: "hi", id: "c1" }));
+    await h.runtime.handleInbound(inbound({ channel: "imessage", from: "+16175550123", conversationKey: "imessage:stranger", text: "hello?", id: "x1" }));
+    expect(reads).toEqual([THREAD, "imessage:sam"]);
+
+    const off = testConfig();
+    off.features = { ...off.features, readReceipts: false };
+    const quiet: string[] = [];
+    const h2 = harness({ markRead: async (key) => void quiet.push(key), deps: { config: off } });
+    h2.faux.setResponses([textTurn("hi")]);
+    await ownerSays(h2, "hi", "m1");
+    expect(quiet).toEqual([]);
+  });
+
+  it("logs a refused read receipt or typing dots and still answers", async () => {
+    const h = harness({
+      markRead: async () => { throw new Error("409 imessage_connection_expired"); },
+      typing: async () => { throw new Error("502 upstream"); },
+    });
+    h.faux.setResponses([textTurn("Hi!")]);
+    await ownerSays(h, "hi", "m1");
+    await vi.waitFor(() => expect(courtesyErrors(h).sort()).toEqual(["read receipt", "typing"]));
+    expect(h.sent.map((s) => s.msg.text)).toEqual(["Hi!"]);
   });
 });
 

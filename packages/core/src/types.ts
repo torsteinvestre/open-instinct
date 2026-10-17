@@ -282,6 +282,8 @@ export interface InstinctConfig {
      * file and people tools are loaded when a request needs them (`load_tools`), not sent with every message.
      */
     toolLoader?: boolean;
+    /** [sunshine:read-receipts] On unless false: a one-to-one iMessage shows "Read" as soon as it arrives. */
+    readReceipts?: boolean;
   };
 }
 

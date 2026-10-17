@@ -670,6 +670,37 @@ canned tool answers, 2026-10-16, $0.36 a round).
 delete `tool-loader.ts` and the tagged blocks in `runtime.ts`, `tools.ts`, `types.ts`, `index.ts`,
 `boot.ts`, `smoke.ts` and the tests.
 
+### `[sunshine:read-receipts]`: "Read" under a text as soon as it arrives
+
+**Problem** (2026-10-16). On a bigger question nothing showed that the text had arrived until the answer
+came (10 to 27 seconds for the slowest; 102 replies measured, median 4 s, none over 30 s). The typing
+dots are sent once at the start, and whether they reach the phone was never logged: a refusal was
+silently dropped. Inkbox supports read receipts (`POST /mark-read`), and upstream's
+`InkboxChannel.markRead` existed but was never called. OpenClaw sends read receipts on iMessage by default.
+
+**What the fork adds.**
+- `Outbox.markRead` (optional), passed through by `ChatAwareOutbox` (`packages/server/src/console-outbox.ts`).
+- `markReadOnArrival` (`packages/core/src/runtime.ts`): a one-to-one iMessage from the owner or a contact
+  is marked read when it arrives, before the queue. A text that waits behind a reply still being worked
+  on shows "Read" too. Not for groups (Inkbox has no read receipts there), strangers, duplicates,
+  delegated results or the dashboard chat.
+- `courtesyFailed`: a refused read receipt, or refused typing dots in a one-to-one thread, leaves an
+  `error` entry with `courtesy` in the audit log. Never retried, never in the way of the answer.
+- Off switch: `config.features.readReceipts = false`.
+
+**Not done, on purpose.**
+- Refreshing the typing dots: they last about 60 to 90 seconds on iMessage providers, and no reply has
+  come near that. A refresh just after the answer would bring the dots back.
+- An "on it" text: two bubbles for one answer, fixed wording, and it counts toward Inkbox's messages.
+
+**Tests** (`packages/core/test/runtime.test.ts`, "read receipts"):
+- read on arrival, also while a run is going;
+- contacts yes, and strangers, groups, chat, duplicates and the switch no;
+- a refusal is logged and the answer still goes out.
+
+**To remove.** `features.readReceipts = false`, or revert the commit (`git log --grep "read-receipts"`)
+or delete the tagged blocks in `runtime.ts`, `types.ts`, `console-outbox.ts` and the tests.
+
 ### `[sunshine:search]`: friends' agents get the web search key
 
 **Problem** (2026-10-16). Sunshine said its searches were failing. Without a key, `web_search`

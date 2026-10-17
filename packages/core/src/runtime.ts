@@ -47,6 +47,8 @@ import {
 export interface Outbox {
   send(msg: OutboundMessage, ctx: { principal: Principal; conversationKey: string }): Promise<void>;
   typing?(conversationKey: string): Promise<void>;
+  /** [sunshine:read-receipts] Show the sender "Read" under their message (one-to-one iMessage). */
+  markRead?(conversationKey: string): Promise<void>;
 }
 
 export interface RuntimeDeps {
@@ -632,6 +634,7 @@ export class AgentRuntime {
     }
     let run = this.inboundRuns.get(msg.id);
     if (!run) {
+      this.markReadOnArrival(msg, originalPrincipal); // [sunshine:read-receipts]
       run = this.processInbound(msg);
       this.inboundRuns.set(msg.id, run);
       void run.finally(() => this.inboundRuns.delete(msg.id)).catch(() => undefined);
@@ -746,7 +749,9 @@ export class AgentRuntime {
 
     // Typing is a courtesy, never a cost: it runs alongside the model and is dropped when slow.
     if (DELIVERABLE.has(msg.channel) && this.deps.outbox.typing) {
-      void withinBudget(this.deps.outbox.typing(msg.conversationKey).catch(() => undefined), TYPING_TIMEOUT_MS);
+      // [sunshine:read-receipts] A refusal is logged (one-to-one only: groups never show typing), so the log
+      // tells whether the dots reach the phone.
+      void withinBudget(this.deps.outbox.typing(msg.conversationKey).catch((error: unknown) => { if (!group) this.courtesyFailed("typing", msg.conversationKey, principal, error); }), TYPING_TIMEOUT_MS);
     }
 
     const promptedBefore = approvals.promptedToken();
@@ -1067,6 +1072,24 @@ export class AgentRuntime {
 
   private auditError(conversationKey: string, principal: Principal, error: unknown): void {
     this.deps.audit.append({ kind: "error", conversationKey, principal: principal.id, detail: { message: errorMessage(error) } });
+  }
+
+  /**
+   * [sunshine:read-receipts] "Read" under their text as soon as it is in, before the typing dots and the
+   * answer, as when a person reads it (OpenClaw sends read receipts on iMessage by default). On arrival,
+   * so a text that waits behind a reply still being worked on shows "Read" too. One-to-one iMessage from
+   * the owner or a contact: groups have no read receipts, and strangers get none.
+   */
+  private markReadOnArrival(msg: InboundMessage, principal: Principal): void {
+    const { config, outbox } = this.deps;
+    if (msg.channel !== "imessage" || isGroup(msg) || msg.meta?.delegatedResult || principal.kind === "stranger") return;
+    if (config.features?.readReceipts === false || !outbox.markRead) return;
+    void outbox.markRead(msg.conversationKey).catch((error: unknown) => this.courtesyFailed("read receipt", msg.conversationKey, principal, error));
+  }
+
+  /** [sunshine:read-receipts] Typing dots or a read receipt the channel refused: logged, never retried, never fatal. */
+  private courtesyFailed(what: "typing" | "read receipt", conversationKey: string, principal: Principal, error: unknown): void {
+    this.deps.audit.append({ kind: "error", conversationKey, principal: principal.id, detail: { courtesy: what, message: errorMessage(error) } });
   }
 
   // -------------------------------------------------------------------------

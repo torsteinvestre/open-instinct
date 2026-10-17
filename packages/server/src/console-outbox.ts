@@ -86,6 +86,11 @@ export class ConsoleOutbox implements Outbox {
     this.log(`[outbox] typing ${conversationKey}`);
   }
 
+  /** [sunshine:read-receipts] */
+  async markRead(conversationKey: string): Promise<void> {
+    this.log(`[outbox] read ${conversationKey}`);
+  }
+
   /** Last message sent in a conversation, if any. */
   lastFor(conversationKey: string): OutboundMessage | undefined {
     return this.lastByKey.get(conversationKey);
@@ -121,5 +126,11 @@ export class ChatAwareOutbox implements Outbox {
   async typing(conversationKey: string): Promise<void> {
     if (conversationKey.startsWith("chat:")) return;
     await this.inner.typing?.(conversationKey);
+  }
+
+  /** [sunshine:read-receipts] Passed through like typing. */
+  async markRead(conversationKey: string): Promise<void> {
+    if (conversationKey.startsWith("chat:")) return;
+    await this.inner.markRead?.(conversationKey);
   }
 }

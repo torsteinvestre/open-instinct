@@ -799,6 +799,22 @@ restart them.
 **To remove.** Delete the name from `AGENT_SETTINGS` and the tagged test in
 `packages/gateway/test/main.test.ts`, or unset the variable on the gateway.
 
+### `[sunshine:language]`: reply language (a test only; nothing changed in the prompt)
+
+**Seen** (2026-10-22, a local test): asked in English about a Norwegian email in an empty thread,
+Sunshine answered in Norwegian (Oslo timezone, +47 number and Norwegian material outweighed the
+English question). **Tried:** one system-prompt line ("write in the language they write to you in, even
+when what you read is in another language"): 0/2 in empty threads, so not shipped. How others do it:
+Anthropic's docs (Claude follows the conversation; state a fixed language in the system prompt), the Claude
+app (one rule), Hermes (the model, plus an optional fixed language), OpenClaw (nothing).
+**Real conditions:** the live history had 13/13 clear text-reply pairs in the same language, inbox
+summaries of Norwegian email included; with even one English message first, the test answers in English
+2/2 and follows English -> Norwegian -> English turn by turn.
+
+**What the fork adds.** `packages/server/scenarios/language.mjs` only: conversations with English
+history (default), `PLAN=fresh` for the empty-thread weak spot, `GRADER_CHECK=1` for the grader itself.
+Run it after prompt changes. **To remove.** Delete the file.
+
 ### Long replies (investigated 2026-10-15, nothing changed)
 
 A money question ("what should be considered: fund vs apartment") got a 1,435-character, seven-point

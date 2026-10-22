@@ -503,23 +503,30 @@ delete the tagged blocks in the files above, `memory-notes.ts` and their tests
 (`packages/server/test/memory-pass.test.ts`, `memory-notes.test.ts`, `packages/core/test/runtime.test.ts`,
 `memory.test.ts`, `core-tools.test.ts`, `history.test.ts`). `memory/labels.json` can then be deleted.
 
-### `[sunshine:apps]`: Gmail and Calendar through Composio's router, without its code sandbox
+### `[sunshine:apps]`: Gmail and Calendar through Composio's router (workbench kept)
 
 **Measured** (2026-10-15, a local boot with the live agent's settings, Anthropic's token counter):
 Gmail and Google Calendar in Composio's **direct** mode are 109 tools, about **100,000 tokens on every
-message** (nearly six times the whole prompt). **Router** mode is 6 meta tools, about 8,600 tokens, of
-which the remote workbench (2,019) and remote bash (406) run code on Composio's servers, which email
-and calendar never need.
-
-**What the fork adds.** `LEFT_OUT_TOOLS` in `packages/apps/src/composio.ts`: those two are never
-offered. Router mode then adds about **6,200 tokens** a message (search 2,613, run 1,698, connections
-915, tool schemas 534, apps_list and guidance). The agent runs with `COMPOSIO_MODE=router` and
-`COMPOSIO_TOOLKITS=gmail,googlecalendar` (Maritime settings), so apps are the owner's only.
+message** (nearly six times the whole prompt). **Router** mode is 6 meta tools, about 8,600 tokens
+(the remote workbench 2,019 and remote bash 406 of them). The agent runs with `COMPOSIO_MODE=router`
+and `COMPOSIO_TOOLKITS=gmail,googlecalendar` (Maritime settings), so apps are the owner's only.
 
 **Loaded only when needed** since `[sunshine:tool-loader]`: the router's tools come with `load_tools`
 ("apps") instead of riding along with every message.
 
-**To remove.** Delete `LEFT_OUT_TOOLS` and its filter in `tools()`, and the test next to it.
+**History: the workbench was left out 2026-10-15 to 2026-10-22, and that broke reading emails.** A
+`LEFT_OUT_TOOLS` filter hid the workbench and bash tools ("email and calendar never need them", judged
+from their descriptions). But Composio moves large results to the workbench and returns a preview plus
+a note (its docs: "Large responses ... are automatically synced to a secure remote workbench"); a single
+full email (`format: full`) is enough. Without the tools Sunshine could not read past the preview: Zia's
+agent said "the full text lands somewhere I can't open" (19 Oct). Removed again 2026-10-22, back to
+upstream's `tools()`. Test: `packages/apps/test/composio.test.ts` "keeps Composio's remote workbench
+tools"; real check `packages/server/scenarios/long-email.mjs` (real Composio, one connected account, the
+email's real ending as the answer key): with the tools, a full Delphi email was offloaded, read with the
+bash tool and its ending quoted word for word (26/123 six-word runs, $0.107). The two tools cost about
+2,400 tokens only on email and calendar turns (tool loader).
+
+**To remove.** Nothing left in the code; the test and the scenario above guard the workbench.
 
 ### `[sunshine:prune]`: old tool results are removed once their turn is over
 

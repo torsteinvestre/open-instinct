@@ -799,6 +799,28 @@ restart them.
 **To remove.** Delete the name from `AGENT_SETTINGS` and the tagged test in
 `packages/gateway/test/main.test.ts`, or unset the variable on the gateway.
 
+### `[sunshine:a2a]`: two agents working together, tested on one machine (a test only)
+
+**What the fork adds.** `packages/server/scenarios/a2a.mjs`: boots Torstein's and Zia's agents (real server,
+prompt, tools, permission checks, Sonnet 5.5), each with the other in contacts at `TIER` (default friend), and a
+stand-in for Inkbox between them: SendMessage becomes `a2a.task.created`, a worker reply becomes
+`a2a.sent_task.updated`, and the task lookup returns what Inkbox stores (id, context, state, the caller's
+authenticated handle and the message history), because the runtime checks the webhook against it and reads the
+request text from it (a stand-in without the history made the worker drop every request as `inactive-task`).
+Every event goes through `parseInkboxEvent` and `runtime.handleInbound` as `server/src/http.ts` does. Zia the
+person is Haiku with a made-up calendar (silent when nothing is asked, at most four answers). `DRY=1` checks the
+setup and the parser for free.
+
+**First run** (2026-10-22, $0.27 with one failed attempt): Torstein's agent sent a typed `propose_times` and told
+him it would report back; Zia's agent replied progress, asked Zia (clarified a bare "ok"), accepted, and Torstein
+was asked whether to add it to his calendar. No calendar titles shared except one Zia asked to pass on.
+Clumsy: "is Zia free" became an acceptance, then a follow-up `inform` left both sides unsure who still had to
+confirm; Zia's agent promised to pass a note on before it had. Progress updates on a sent task are ignored by
+design (runtime.ts: submitted/working wake nobody). Zia's agent could not read Zia's calendar (router mode:
+the multi-execute tool is owner-only), so it asked Zia, as expected.
+
+**To remove.** Delete the file.
+
 ### `[sunshine:language]`: reply language (a test only; nothing changed in the prompt)
 
 **Seen** (2026-10-22, a local test): asked in English about a Norwegian email in an empty thread,

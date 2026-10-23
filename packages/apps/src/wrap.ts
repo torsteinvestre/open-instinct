@@ -1,7 +1,7 @@
 import type { Capability, RegisteredTool, ToolContext, ToolMeta, ToolResultLike, ToolSpec } from "@open-instinct/core";
 import { toLlmContent, type CallToolResult, type Tool as McpTool } from "@earendil-works/pi-mcp";
 import { Type, type TSchema } from "typebox";
-import { capabilitiesForSlug } from "./capabilities.js";
+import { capabilitiesForMultiExecute, capabilitiesForSlug } from "./capabilities.js";
 
 /** The slice of pi-mcp's McpClient this package needs. Narrow so tests can stub it. */
 export interface McpToolSource {
@@ -40,6 +40,11 @@ export function parametersFor(inputSchema: Record<string, unknown>): TSchema {
 }
 
 export function metaFor(slug: string, capabilities: Capability[] = capabilitiesForSlug(slug)): ToolMeta {
+  // [sunshine:app-permissions] The generic executor is offered to everyone who may use apps, and each
+  // call is judged by the actions it runs, as those actions would be as direct tools.
+  if (slug === MULTI_EXECUTE) {
+    return { capabilities: ["apps.use"], capabilitiesFor: capabilitiesForMultiExecute, group: "apps", describe: describeMultiExecute };
+  }
   return {
     capabilities,
     group: "apps",
@@ -47,14 +52,23 @@ export function metaFor(slug: string, capabilities: Capability[] = capabilitiesF
   };
 }
 
-const MULTI_EXECUTE_NOTE =
-  " Runs several Composio tools in one call, so the policy guard cannot check them one by one. Prefer the direct app_ tools.";
+const MULTI_EXECUTE = "COMPOSIO_MULTI_EXECUTE_TOOL";
+
+/** [sunshine:app-permissions] The actions a multi-execute call runs, as an approval or the audit log shows them. */
+function describeMultiExecute(args: unknown): string {
+  const tools = (args as { tools?: unknown } | null | undefined)?.tools;
+  if (!Array.isArray(tools) || tools.length === 0) return describeCall(MULTI_EXECUTE, args);
+  return tools.map((t) => describeCall(String((t as { tool_slug?: unknown } | null)?.tool_slug ?? "?"), (t as { arguments?: unknown } | null)?.arguments ?? {})).join("; ");
+}
+
+// [sunshine:app-permissions] Upstream's note said the guard could not check the tools one by one.
+const MULTI_EXECUTE_NOTE = " Each tool in the list is checked against what the person you act for may do.";
 
 /** Wrap one MCP tool as an Open Instinct RegisteredTool. */
 export function wrapMcpTool(source: McpToolSource, tool: McpTool): RegisteredTool {
   const slug = tool.name;
   const upper = slug.toUpperCase();
-  const description = (tool.description ?? slug) + (upper === "COMPOSIO_MULTI_EXECUTE_TOOL" ? MULTI_EXECUTE_NOTE : "");
+  const description = (tool.description ?? slug) + (upper === MULTI_EXECUTE ? MULTI_EXECUTE_NOTE : "");
 
   const spec: ToolSpec<TSchema> = {
     name: toolNameFor(slug),

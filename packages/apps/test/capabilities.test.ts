@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { PolicyEngine, defaultPolicy } from "@open-instinct/core";
 import type { Principal, Tier } from "@open-instinct/core";
 import { APPS_MANAGE, CONTACTS_WRITE, PAYMENT_TOOLKITS, capabilitiesForSlug, sensitiveCapabilitiesForSlug, toolkitOfSlug, COMPOSIO_META_TOOLS } from "../src/capabilities.js";
+import { actionsAllowed, capabilitiesForMultiExecute } from "../src/capabilities.js"; // [sunshine:app-permissions]
 import { metaFor } from "../src/wrap.js";
 
 describe("capabilitiesForSlug", () => {
@@ -228,5 +229,80 @@ describe("staff tier with app tools", () => {
     expect(engine.evaluate(staff, metaFor("NOTION_CREATE_PAGE"), {}).outcome).toBe("deny");
     expect(engine.evaluate(staff, metaFor("GOOGLECONTACTS_CREATE_CONTACT"), {}).outcome).toBe("deny");
     expect(engine.evaluate(staff, metaFor("STRIPE_CREATE_PAYMENT_INTENT"), {}).outcome).toBe("deny");
+  });
+});
+
+// [sunshine:app-permissions] In router mode every app action runs through COMPOSIO_MULTI_EXECUTE_TOOL. Each
+// call is judged by the actions it lists, so another person's agent gets exactly what the same actions as
+// direct tools would give its tier, and nothing the call does not spell out.
+describe("[sunshine:app-permissions] COMPOSIO_MULTI_EXECUTE_TOOL, judged by the actions it runs", () => {
+  const engine = new PolicyEngine(defaultPolicy());
+  const principalFor = (tier: Tier): Principal =>
+    tier === "owner"
+      ? { kind: "owner", id: "owner", tier, displayName: "Maria" }
+      : tier === "staff"
+        ? { kind: "agent", id: "agent:research-bot", tier, displayName: "Research's agent", agentHandle: "research-bot" }
+        : { kind: tier === "stranger" ? "stranger" : "agent", id: `agent:${tier}`, tier, displayName: `${tier}'s agent`, agentHandle: `${tier}-bot` };
+  const others: Tier[] = ["staff", "partner", "family", "friend", "contact", "stranger"];
+  const multi = metaFor("COMPOSIO_MULTI_EXECUTE_TOOL");
+  const call = (...slugs: string[]) => ({ tools: slugs.map((s) => ({ tool_slug: s, arguments: {} })), sync_response_to_workbench: false });
+
+  it("lets a friend's agent check free/busy and nothing more", () => {
+    const friend = principalFor("friend");
+    expect(engine.evaluate(friend, multi, call("GOOGLECALENDAR_FIND_FREE_SLOTS")).outcome).toBe("allow");
+    expect(engine.evaluate(friend, multi, call("GOOGLECALENDAR_FREE_BUSY_QUERY")).outcome).toBe("allow");
+    expect(engine.evaluate(friend, multi, call("GOOGLECALENDAR_EVENTS_LIST")).outcome).toBe("deny");
+    expect(engine.evaluate(friend, multi, call("GMAIL_FETCH_EMAILS")).outcome).toBe("deny");
+    // One action it may not run spoils the whole call.
+    expect(engine.evaluate(friend, multi, call("GOOGLECALENDAR_FIND_FREE_SLOTS", "GMAIL_SEND_EMAIL")).outcome).toBe("deny");
+  });
+
+  it.each([
+    "GOOGLECALENDAR_FIND_FREE_SLOTS",
+    "GOOGLECALENDAR_EVENTS_LIST",
+    "GOOGLECALENDAR_CREATE_EVENT",
+    "GMAIL_FETCH_EMAILS",
+    "GMAIL_SEND_EMAIL",
+    "GOOGLECONTACTS_SEARCH_CONTACTS",
+    "GOOGLECONTACTS_CREATE_CONTACT",
+    "NOTION_CREATE_PAGE",
+    "STRIPE_CREATE_PAYMENT_INTENT",
+  ])("gives every tier the same answer for %s as the direct tool would", (slug) => {
+    for (const tier of ["owner", ...others] as Tier[]) {
+      const p = principalFor(tier);
+      expect(engine.evaluate(p, multi, call(slug)).outcome, `${slug} for ${tier}`).toBe(engine.evaluate(p, metaFor(slug), {}).outcome);
+    }
+  });
+
+  it("keeps a call it cannot read, or one that runs a Composio meta tool, with the owner", () => {
+    const unreadable = [{}, null, { tools: [] }, { tools: "GMAIL_SEND_EMAIL" }, { tools: [{}] }, { tools: [{ tool_slug: 42 }] }, { tools: [{ tool_slug: " " }] }];
+    const meta = ["COMPOSIO_SEARCH_TOOLS", "COMPOSIO_MANAGE_CONNECTIONS", "COMPOSIO_REMOTE_WORKBENCH", "COMPOSIO_REMOTE_BASH_TOOL", "COMPOSIO_GET_TOOL_SCHEMAS"].map((s) => call(s));
+    for (const args of [...unreadable, ...meta]) {
+      expect(capabilitiesForMultiExecute(args)).toEqual([...APPS_MANAGE]);
+      for (const tier of others) expect(engine.evaluate(principalFor(tier), multi, args).outcome, `${JSON.stringify(args)} for ${tier}`).toBe("deny");
+      expect(engine.evaluate(principalFor("owner"), multi, args).outcome).toBe("allow");
+    }
+  });
+
+  it("puts the owner's own money actions under the spend policy, as the direct tools do", () => {
+    expect(engine.evaluate(principalFor("owner"), multi, call("STRIPE_CREATE_PAYMENT_INTENT")).outcome).toBe("ask");
+    expect(engine.evaluate(principalFor("owner"), multi, call("GMAIL_SEND_EMAIL", "GOOGLECALENDAR_CREATE_EVENT")).outcome).toBe("allow");
+  });
+
+  it("opens the schema lookup to tiers that may use apps; the search, connections and the workbench stay with the owner", () => {
+    expect(capabilitiesForSlug("COMPOSIO_GET_TOOL_SCHEMAS")).toEqual(["apps.use"]);
+    expect(engine.evaluate(principalFor("friend"), metaFor("COMPOSIO_GET_TOOL_SCHEMAS"), {}).outcome).toBe("allow");
+    expect(engine.evaluate(principalFor("contact"), metaFor("COMPOSIO_GET_TOOL_SCHEMAS"), {}).outcome).toBe("deny");
+    for (const slug of ["COMPOSIO_SEARCH_TOOLS", "COMPOSIO_MANAGE_CONNECTIONS", "COMPOSIO_REMOTE_WORKBENCH", "COMPOSIO_REMOTE_BASH_TOOL"]) {
+      for (const tier of others) expect(engine.evaluate(principalFor(tier), metaFor(slug), {}).outcome, `${slug} for ${tier}`).toBe("deny");
+    }
+  });
+
+  it("lists, per tier, the catalog actions it may ever use (approvals included)", () => {
+    const catalog = ["GMAIL_SEND_EMAIL", "GMAIL_FETCH_EMAILS", "GOOGLECALENDAR_FIND_FREE_SLOTS", "googlecalendar_free_busy_query", "GOOGLECALENDAR_EVENTS_LIST", "GOOGLECALENDAR_CREATE_EVENT", "COMPOSIO_SEARCH_TOOLS", "NOTION_CREATE_PAGE"];
+    const may = (tier: Tier) => (c: Parameters<typeof engine.canEver>[1]) => engine.canEver(principalFor(tier), c);
+    expect(actionsAllowed(catalog, may("friend"))).toEqual(["GOOGLECALENDAR_FIND_FREE_SLOTS", "GOOGLECALENDAR_FREE_BUSY_QUERY"]);
+    expect(actionsAllowed(catalog, may("partner"))).toEqual(["GMAIL_SEND_EMAIL", "GOOGLECALENDAR_CREATE_EVENT", "GOOGLECALENDAR_EVENTS_LIST", "GOOGLECALENDAR_FIND_FREE_SLOTS", "GOOGLECALENDAR_FREE_BUSY_QUERY"]);
+    expect(actionsAllowed(catalog, may("contact"))).toEqual([]);
   });
 });

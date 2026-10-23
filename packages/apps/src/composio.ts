@@ -117,7 +117,14 @@ export interface ComposioClientLike {
     create(userId: string, config: SessionCreateConfig): Promise<ComposioSessionLike>;
     use(id: string, options: { mcp: true }): Promise<ComposioSessionLike>;
   };
+  /** [sunshine:app-permissions] Composio's catalog of actions. Optional so test doubles may leave it out. */
+  tools?: {
+    getRawComposioTools(query: { toolkits: string[]; limit?: number }): Promise<Array<{ slug: string; isDeprecated?: boolean }>>;
+  };
 }
+
+/** [sunshine:app-permissions] Upper bound for one catalog read (Gmail and Calendar are about 110 actions). */
+const CATALOG_LIMIT = 1000;
 
 /** Session create config. `toolkits` is left out in all mode: no allowlist means every toolkit. */
 export interface SessionCreateConfig {
@@ -139,6 +146,7 @@ export class ComposioApps {
   private client?: McpToolSource;
   private connecting?: Promise<void>;
   private cachedTools?: RegisteredTool[];
+  private catalog?: string[]; // [sunshine:app-permissions]
   /** Toolkits dropped this run because the Composio project has no auth config for them. */
   private readonly unavailable = new Set<string>();
 
@@ -265,6 +273,19 @@ export class ComposioApps {
       this.log(`composio: ${this.cachedTools.length} app tools`);
     }
     return this.cachedTools;
+  }
+
+  /**
+   * [sunshine:app-permissions] The slugs of the configured toolkits' actions, from Composio's catalog (no
+   * session, no account data), so the agent can tell another person's agent which of them it may use.
+   * Empty in all mode (no toolkit list). Cached after the first answer; a failed read throws.
+   */
+  async actionCatalog(): Promise<string[]> {
+    if (this.catalog) return this.catalog;
+    if (this.allToolkits || !this.composio.tools) return [];
+    const list = await this.composio.tools.getRawComposioTools({ toolkits: this.toolkitSlugs, limit: CATALOG_LIMIT });
+    this.catalog = list.filter((t) => !t.isDeprecated).map((t) => t.slug.toUpperCase()).sort();
+    return this.catalog;
   }
 
   /** OAuth link the owner opens to connect a toolkit. Undefined when the toolkit needs no auth. */

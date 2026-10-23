@@ -346,8 +346,11 @@ export class PolicyEngine {
   /** All capabilities must pass. Deny beats ask beats allow. */
   evaluate(principal: Principal, meta: ToolMeta, args: unknown): PolicyDecision {
     const at = this.now();
-    if (meta.capabilities.length === 0) return { outcome: "allow", reason: "tool declares no capabilities" };
-    const outcomes = meta.capabilities.map((c) => this.evaluateOne(principal, c, meta, args, at));
+    // [sunshine:app-permissions] What this call needs, for a tool that says so per call.
+    const capabilities = callCapabilities(meta, args);
+    if (!capabilities) return { outcome: "deny", reason: "could not tell what this call would do" };
+    if (capabilities.length === 0) return { outcome: "allow", reason: "tool declares no capabilities" };
+    const outcomes = capabilities.map((c) => this.evaluateOne(principal, c, meta, args, at));
 
     const denied = outcomes.find((o) => o.decision.outcome === "deny");
     if (denied) return denied.decision;
@@ -411,6 +414,21 @@ export class PolicyEngine {
 
   toJSON(): Policy {
     return clone(this.policy);
+  }
+}
+
+/**
+ * [sunshine:app-permissions] The capabilities one call needs: `capabilitiesFor(args)` for a tool that
+ * judges each call, else its fixed `capabilities`. Undefined when the tool cannot judge the call (an
+ * empty answer, or it throws); the policy check refuses such a call.
+ */
+export function callCapabilities(meta: ToolMeta, args: unknown): Capability[] | undefined {
+  if (!meta.capabilitiesFor) return meta.capabilities;
+  try {
+    const caps = meta.capabilitiesFor(args);
+    return caps.length > 0 ? caps : undefined;
+  } catch {
+    return undefined;
   }
 }
 

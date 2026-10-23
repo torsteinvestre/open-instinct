@@ -83,12 +83,16 @@ describe("wrapMcpTool", () => {
     expect(tool.spec.meta.capabilities).toEqual(["calendar.freebusy"]);
   });
 
-  it("warns about COMPOSIO_MULTI_EXECUTE_TOOL in its description", () => {
+  // [sunshine:app-permissions] Upstream tagged it owner-only because the guard could not see inside it.
+  it("offers COMPOSIO_MULTI_EXECUTE_TOOL to every tier that may use apps and judges each call by its actions", () => {
     const t: Tool = { name: "COMPOSIO_MULTI_EXECUTE_TOOL", description: "Run tools", inputSchema: {} };
     const tool = wrapMcpTool(stubSource([t]), t);
     expect(tool.spec.description).toContain("Run tools");
-    expect(tool.spec.description).toContain("cannot check them one by one");
-    expect(tool.spec.meta.capabilities).toEqual(["apps.use", "trust.manage"]);
+    expect(tool.spec.description).toContain("Each tool in the list is checked against what the person you act for may do.");
+    expect(tool.spec.meta.capabilities).toEqual(["apps.use"]);
+    const call = { tools: [{ tool_slug: "GOOGLECALENDAR_FIND_FREE_SLOTS", arguments: { time_min: "2026-10-23T08:00:00Z" } }, { tool_slug: "GMAIL_SEND_EMAIL", arguments: {} }] };
+    expect(tool.spec.meta.capabilitiesFor?.(call)).toEqual(["apps.use", "calendar.freebusy", "email.send"]);
+    expect(tool.spec.meta.describe?.(call)).toBe('GOOGLECALENDAR_FIND_FREE_SLOTS {"time_min":"2026-10-23T08:00:00Z"}; GMAIL_SEND_EMAIL {}');
   });
 
   it("calls the MCP tool by its original slug and converts the result", async () => {

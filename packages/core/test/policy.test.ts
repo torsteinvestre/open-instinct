@@ -3,6 +3,7 @@ import {
   ALL_CAPABILITIES,
   DEFAULT_TIER_TABLE,
   PolicyEngine,
+  callCapabilities,
   defaultPolicy,
   loadPolicy,
   savePolicy,
@@ -412,5 +413,41 @@ describe("staff tier", () => {
     for (const cap of ["memory.write", "trust.manage", "schedule.manage", "network.invite"] as const) {
       expect(DEFAULT_TIER_TABLE.staff[cap], cap).toBe("no");
     }
+  });
+});
+
+// [sunshine:app-permissions] A tool that runs other tools says per call what that call needs.
+describe("[sunshine:app-permissions] capabilities per call", () => {
+  const engine = new PolicyEngine(defaultPolicy());
+  const runner = meta(["apps.use"], {
+    capabilitiesFor: (a) => {
+      const what = (a as { what?: string }).what;
+      if (what === "boom") throw new Error("unreadable");
+      if (what === "nothing") return [];
+      return what === "freebusy" ? ["apps.use", "calendar.freebusy"] : ["apps.use", "email.read"];
+    },
+  });
+
+  it("uses the call's own capabilities, not the tool's fixed ones", () => {
+    expect(callCapabilities(runner, { what: "freebusy" })).toEqual(["apps.use", "calendar.freebusy"]);
+    expect(callCapabilities(meta(["converse"]), { what: "anything" })).toEqual(["converse"]);
+    expect(engine.evaluate(principalOf("friend"), runner, { what: "freebusy" }).outcome).toBe("allow");
+    expect(engine.evaluate(principalOf("friend"), runner, { what: "mail" }).outcome).toBe("deny");
+    expect(engine.evaluate(principalOf("staff"), runner, { what: "mail" }).outcome).toBe("allow");
+  });
+
+  it("refuses a call the tool cannot judge, for everyone", () => {
+    for (const what of ["boom", "nothing"]) {
+      expect(callCapabilities(runner, { what })).toBeUndefined();
+      for (const tier of TIER_ORDER) expect(engine.evaluate(principalOf(tier), runner, { what }).outcome, `${what}/${tier}`).toBe("deny");
+    }
+  });
+
+  it("a grant on the call's capability opens it", () => {
+    const granted = new PolicyEngine(defaultPolicy());
+    const friend = principalOf("friend", { id: "contact:sam", contactId: "sam" });
+    expect(granted.evaluate(friend, runner, { what: "mail" }).outcome).toBe("deny");
+    granted.addGrant({ to: friend.id, capabilities: ["email.read"], note: "test" });
+    expect(granted.evaluate(friend, runner, { what: "mail" }).outcome).toBe("allow");
   });
 });

@@ -37,6 +37,7 @@ import type { CallEndedEvent, CallOrigination } from "@open-instinct/inkbox";
 import { computerGuidance, detectComputer } from "@open-instinct/computer";
 import type { ComputerBackend } from "@open-instinct/computer";
 import { ComposioApps, DEFAULT_TOOLKITS, OPENAI_COMPLETIONS_TOOL_LIMIT, appsGuidance, appsTools, composioModeFor } from "@open-instinct/apps";
+import { actionsAllowed, appsForOthersGuidance } from "@open-instinct/apps"; // [sunshine:app-permissions]
 import { ampleTools, type AmpleCredentials } from "@open-instinct/ample";
 import { AtomicMailBackend, atomicMailGuidance } from "@open-instinct/atomicmail";
 import { contextTools } from "@open-instinct/context";
@@ -293,6 +294,7 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
   // `all` (or `*`) drops the allowlist so any app can be connected by name.
   let apps: ComposioApps | undefined;
   let appsConnected: string[] | undefined;
+  let appActions: string[] = []; // [sunshine:app-permissions]
   if (env.COMPOSIO_API_KEY) {
     const toolkits = config.apps.toolkits.length > 0 ? config.apps.toolkits : DEFAULT_TOOLKITS;
     // Direct mode lists one tool per app action; router mode lists Composio's meta tools only.
@@ -317,6 +319,12 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
       if (loadOnDemand) groupGuidance.apps = guidance; // [sunshine:tool-loader]
       else promptSections.push(guidance);
       log(`apps: ${connected.tools.length} tools${composio.allToolkits ? " (any app by name)" : ""}, connected: ${on.join(", ") || "none"}`);
+      // [sunshine:app-permissions] In router mode other people's agents reach the apps only through the
+      // generic executor, so they are told by name which actions their tier may use (direct mode lists them).
+      if (composio.mode === "router") {
+        appActions = (await safely(log, "apps catalog", () => composio.actionCatalog())) ?? [];
+        log(`apps: catalog of ${appActions.length} actions for other people's agents`);
+      }
     }
   }
   // Atomic Mail: an inbox of the agent's own, when the deployer gave us a key. The key is
@@ -468,6 +476,14 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
     return parts.length > 0 ? parts.join("\n\n") : undefined;
   };
 
+  // [sunshine:app-permissions] The owner's app actions this person's tier may ever use (tier and grants;
+  // "ask" counts, the owner then approves the call). Nothing for the owner, who has every app tool.
+  const appsForOthers = (principal: Principal): string[] => {
+    if (principal.kind === "owner" || appActions.length === 0 || !policy.canEver(principal, "apps.use")) return [];
+    const actions = actionsAllowed(appActions, (c) => policy.canEver(principal, c));
+    return actions.length > 0 ? [appsForOthersGuidance(config.owner.name, actions)] : [];
+  };
+
   // eslint-disable-next-line prefer-const
   let runtime: AgentRuntime;
   runtime = new AgentRuntime({
@@ -489,8 +505,13 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
     getApiKey: (provider: string) => apiKeyFor(provider, env),
     // Core cannot import the network package; the server bridges OIP and the network guidance.
     describeData: describeDataPart,
-    // [sunshine:watcher] With the news watch on, the owner's prompt says how to talk about it.
-    promptExtra: watcher ? (principal, channel) => [...promptExtraFor(principal, channel), ...(principal.kind === "owner" ? [NEWS_PROMPT] : [])] : promptExtraFor,
+    promptExtra: (principal, channel) => [
+      ...promptExtraFor(principal, channel),
+      // [sunshine:watcher] With the news watch on, the owner's prompt says how to talk about it.
+      ...(watcher && principal.kind === "owner" ? [NEWS_PROMPT] : []),
+      // [sunshine:app-permissions] Someone else's conversation: the owner's app actions their tier may use.
+      ...appsForOthers(principal),
+    ],
     setupSummary: () =>
       setupSummaryFor({
         inkbox: inkbox ? { handle: inkbox.handle } : undefined,

@@ -335,6 +335,12 @@ export interface Approval {
 export interface ToolMeta {
   /** Capabilities a call needs; all must be allowed. */
   capabilities: Capability[];
+  /**
+   * [sunshine:app-permissions] For a tool whose calls differ in what they do (one tool that runs other
+   * tools): the capabilities this call needs. The policy check uses them instead of `capabilities`, which
+   * still decides who sees the tool at all. A call it cannot judge (empty answer, or it throws) is refused.
+   */
+  capabilitiesFor?: (args: unknown) => Capability[];
   /** Group used for prompt sections and filtering. */
   group: "messaging" | "owner" | "memory" | "contacts" | "network" | "schedule" | "files" | "computer" | "apps" | "web" | "system";
   /** Extract a USD amount from the args for spend checks, if applicable. */

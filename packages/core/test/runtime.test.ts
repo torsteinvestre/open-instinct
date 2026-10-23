@@ -1103,6 +1103,36 @@ describe("AgentRuntime.handleInbound", () => {
     expect(conv.agent.state.systemPrompt).not.toContain(OWNER_PHONE);
   });
 
+  // [sunshine:app-permissions] A tool that runs other tools (Composio's multi-execute) is judged by the
+  // guard per call: shown to a friend, it runs the free/busy check and refuses the inbox.
+  it("judges a tool's call by what that call does", async () => {
+    const ran: string[] = [];
+    const runner = defineTool({
+      name: "run_app",
+      label: "Run app action",
+      description: "runs one app action",
+      parameters: Type.Object({ action: Type.String() }),
+      meta: {
+        capabilities: ["apps.use"],
+        capabilitiesFor: (a) => ((a as { action?: string }).action === "freebusy" ? ["apps.use", "calendar.freebusy"] : ["apps.use", "email.read"]),
+        group: "apps",
+        describe: (a) => `run ${(a as { action?: string }).action}`,
+      },
+      execute: async ({ action }) => {
+        ran.push(action);
+        return textResult(`ran ${action}`);
+      },
+    });
+    const h = harness({ extraTools: [runner] });
+    h.deps.contacts.upsert({ name: "Sam Lee", tier: "friend", phones: [SAM_PHONE] });
+    h.faux.setResponses([toolTurn("run_app", { action: "freebusy" }), toolTurn("run_app", { action: "inbox" }), textTurn("Friday afternoon is free.")]);
+    await h.runtime.handleInbound(inbound({ channel: "imessage", from: SAM_PHONE, conversationKey: "imessage:sam", text: "is Maria free friday?" }), { waitForCompletion: true });
+    const conv = h.runtime.conversation("imessage:sam", { kind: "contact", id: "contact:sam-lee", tier: "friend", displayName: "Sam Lee" });
+    expect(conv.agent.state.tools.map((t) => t.name)).toContain("run_app");
+    expect(ran).toEqual(["freebusy"]);
+    expect(h.deps.audit.read({ kinds: ["policy"] }).filter((e) => e.detail.tool === "run_app").map((e) => e.detail.outcome)).toEqual(["allow", "deny"]);
+  });
+
   it("rate limits strangers per conversation and per day", async () => {
     const policy = defaultPolicy();
     policy.strangerLimits = { conversationsPerDay: 1, messagesPerConversation: 2 };

@@ -534,6 +534,64 @@ bash tool and its ending quoted word for word (26/123 six-word runs, $0.107). Th
 
 **To remove.** Nothing left in the code; the test and the scenario above guard the workbench.
 
+**Other people's agents** reach the apps through `[sunshine:app-permissions]` below; router mode alone made
+them owner-only.
+
+### `[sunshine:app-permissions]`: other people's agents use the owner's apps within their tier, in router mode
+
+**Problem** (2026-10-23). Upstream tags every app action with what it needs (`capabilitiesForSlug`: free/busy,
+calendar read or write, email read or send, contacts), so in Composio's direct mode a friend's agent may check
+the owner's free/busy and a partner's may read the calendar, each as `docs/PERMISSIONS.md` says. In router mode,
+which the fork uses because direct mode costs about 100,000 tokens per message (`[sunshine:apps]`), every action
+runs through `COMPOSIO_MULTI_EXECUTE_TOOL`, which upstream tags owner-only because the guard could not see
+inside it. So another person's agent could use none of the owner's apps: in the agent-to-agent test Zia's
+agent had to ask Zia whether she was free instead of checking.
+
+**What the fork adds.**
+- `ToolMeta.capabilitiesFor` (`packages/core/src/types.ts`) and `callCapabilities` (`policy.ts`): a tool whose
+  calls differ in what they do says per call what that call needs. `PolicyEngine.evaluate`, the approval's
+  capability (`askedCapability`) and spend recording (`recordToolCall`) use it; the fixed `capabilities` still
+  decide who sees the tool. A call it cannot judge is refused.
+- `COMPOSIO_MULTI_EXECUTE_TOOL` (`packages/apps/src/wrap.ts`, `capabilities.ts`): shown to every tier with
+  `apps.use` (staff, partner, family, friend); each call needs `apps.use` plus every listed action's own tags
+  (`capabilitiesForMultiExecute`), so it gets exactly what the same actions as direct tools would get. A call
+  that is not a list of `{ tool_slug }`, or that runs a Composio meta tool, stays owner-only. Approvals and the
+  audit name the actions, not the generic tool. For the owner the only change is that money actions now go
+  through the spend policy, as upstream's direct tools do.
+- `COMPOSIO_GET_TOOL_SCHEMAS` opened to tiers with `apps.use`: checked live, it returns input schemas and
+  suggestions, no account data. The search (`COMPOSIO_SEARCH_TOOLS`) stays owner-only: checked live, its answer
+  carries the owner's account data (calendar events, with names and addresses). Connections and the workbench
+  (which can run any action from code) stay owner-only.
+- Discovery without the search: at boot, in router mode, the agent reads Composio's catalog of the configured
+  toolkits' actions (`ComposioApps.actionCatalog`, no session, no account data; 108 for Gmail and Calendar), and a
+  conversation with anyone but the owner gets a short section naming the actions that person's tier may ever use
+  (`appsForOthersGuidance`, `actionsAllowed`, wired in `boot.ts` `promptExtra`). The owner's prompt is unchanged.
+- Upstream's free/busy row lacked the catalog's name for one action: `GOOGLECALENDAR_FREE_BUSY_QUERY` added.
+
+**Tested** (all free). Unit tests: `packages/core/test/policy.test.ts` and `runtime.test.ts` (per-call
+capabilities, refusal of a call it cannot judge, grants, a friend's call run or refused through the runtime),
+`packages/apps/test/capabilities.test.ts` (the multi-execute answer equals the direct tool's for every tier,
+unreadable calls and meta tools owner-only, the owner's spend policy, the per-tier action lists) and
+`wrap.test.ts`. End to end, `packages/server/scenarios/app-permissions.mjs` (the real server, the real Composio
+router of the owner's own account, a stand-in model, no model cost): a friend was offered only the schema
+lookup and the executor, its prompt named the two free/busy actions, free/busy ran against Composio, the inbox was
+refused before anything reached Composio and the owner was told ("Sam asked to GMAIL_FETCH_EMAILS ...; I
+declined"), and the search was not offered. An owner chat's system prompt and tools stayed byte-identical (same
+fingerprints, 11,017 tokens); with the app tools loaded, only the executor's note changed.
+
+**Known limits.**
+- The free/busy actions accept calendar ids, so a friend's agent could ask about any calendar the owner can see
+  (a shared work calendar), as upstream's direct tools allow too.
+- Large results go to the workbench, which stays the owner's: a partner's agent asking for a long event list
+  may get a truncated answer.
+- The catalog is read at boot: a toolkit added later is listed for others after a restart.
+- Permissions come from the tier and grants as upstream defines them; a grant must include `apps.use` for a
+  contact-tier person to reach any app.
+
+**To remove.** Revert the commit (`git log --grep "sunshine:app-permissions"`) or delete the tagged blocks in
+`types.ts`, `policy.ts`, `runtime.ts`, `capabilities.ts`, `wrap.ts`, `composio.ts`, `guidance.ts`, `index.ts`,
+`boot.ts`, the tests and the scenario. Apps are then the owner's alone in router mode, as upstream intends.
+
 ### `[sunshine:prune]`: old tool results are removed once their turn is over
 
 **Problem** (measured live 2026-10-15, a Gmail and Calendar test). Six requests in seven minutes grew the

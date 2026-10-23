@@ -1,5 +1,7 @@
 export {
   capabilitiesForSlug,
+  capabilitiesForMultiExecute, // [sunshine:app-permissions]
+  actionsAllowed, // [sunshine:app-permissions]
   sensitiveCapabilitiesForSlug,
   toolkitOfSlug,
   APPS_MANAGE,
@@ -26,7 +28,7 @@ export {
   type AppsState,
   type ToolkitStatus,
 } from "./composio.js";
-export { appsGuidance, type AppsGuidanceOptions } from "./guidance.js";
+export { appsGuidance, appsForOthersGuidance, type AppsGuidanceOptions } from "./guidance.js"; // [sunshine:app-permissions] appsForOthersGuidance
 export { appsTools, describeStatus, type AppsLike, type AppsToolDeps } from "./tools.js";
 export { wrapMcpTool, wrapMcpTools, toolNameFor, describeCall, parametersFor, metaFor, TOOL_NAME_PREFIX, type McpToolSource } from "./wrap.js";
 

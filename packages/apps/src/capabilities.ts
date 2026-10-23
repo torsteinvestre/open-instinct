@@ -53,10 +53,41 @@ export function capabilitiesForSlug(slug: string): Capability[] {
     return ["contacts.read"];
   }
 
+  // [sunshine:app-permissions] Schema lookup returns only how to call an action (checked against
+  // the live router 2026-10-23: input schemas and suggestions, no account data), so anyone who may
+  // use apps may read it. The search is different: its answer carries the owner's account data.
+  if (s === "COMPOSIO_GET_TOOL_SCHEMAS") return ["apps.use"];
+
   // Meta tools (manage connections, search, multi-execute) and every toolkit without
   // a row above are owner-only. COMPOSIO_MULTI_EXECUTE_TOOL can run any tool in one
   // call, so per-tool capabilities cannot be checked for it. See README.
+  // [sunshine:app-permissions] The fork checks them per call: capabilitiesForMultiExecute.
   return [...sensitiveCapabilitiesForSlug(s), ...APPS_MANAGE];
+}
+
+/**
+ * [sunshine:app-permissions] What one COMPOSIO_MULTI_EXECUTE_TOOL call needs: `apps.use` plus every
+ * action in its `tools` list judged by capabilitiesForSlug, so the call is allowed, asked or refused
+ * exactly as the same actions would be as direct tools. A call that does not read as a non-empty list of
+ * `{ tool_slug }`, or that runs a Composio meta tool, is owner-only.
+ */
+export function capabilitiesForMultiExecute(args: unknown): Capability[] {
+  const tools = (args as { tools?: unknown } | null | undefined)?.tools;
+  if (!Array.isArray(tools) || tools.length === 0) return [...APPS_MANAGE];
+  const out = new Set<Capability>(["apps.use"]);
+  for (const entry of tools) {
+    const slug = (entry as { tool_slug?: unknown } | null | undefined)?.tool_slug;
+    if (typeof slug !== "string" || !slug.trim() || slug.trim().toUpperCase().startsWith("COMPOSIO_")) return [...APPS_MANAGE];
+    for (const c of capabilitiesForSlug(slug)) out.add(c);
+  }
+  return [...out];
+}
+
+/** [sunshine:app-permissions] The app actions in `slugs` whose every capability `may` allows, sorted. */
+export function actionsAllowed(slugs: string[], may: (capability: Capability) => boolean): string[] {
+  return [...new Set(slugs.map((s) => s.trim().toUpperCase()))]
+    .filter((s) => s && !s.startsWith("COMPOSIO_") && capabilitiesForSlug(s).every(may))
+    .sort();
 }
 
 /**
@@ -93,6 +124,7 @@ const CALENDAR_FREEBUSY: ReadonlySet<string> = new Set([
   "GOOGLECALENDAR_FIND_FREE_SLOTS",
   "GOOGLECALENDAR_FREEBUSY",
   "GOOGLECALENDAR_GET_FREE_BUSY",
+  "GOOGLECALENDAR_FREE_BUSY_QUERY", // [sunshine:app-permissions] the name Composio's catalog uses (2026-10-23)
 ]);
 
 const CALENDAR_WRITE_PREFIXES: readonly string[] = [

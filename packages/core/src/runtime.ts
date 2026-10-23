@@ -20,7 +20,7 @@ import type { ContactStore } from "./contacts.js";
 import type { MemoryStore } from "./memory.js";
 import type { HistoryArchive } from "./history.js"; // [sunshine:history]
 import { OwnerNotifier } from "./notifier.js";
-import { DEFAULT_TIER_TABLE, SPEND_CAPABILITIES, type PolicyEngine } from "./policy.js";
+import { DEFAULT_TIER_TABLE, SPEND_CAPABILITIES, callCapabilities, type PolicyEngine } from "./policy.js";
 import { looksLikePhone, normalizePhone, phoneCountryOf, resolvePrincipal } from "./principal.js";
 import { saveConfig } from "./config.js";
 import { CLAIM_WELCOME_TEXT, MAX_CLAIM_ATTEMPTS, matchClaimCode, ownerClaimStatus } from "./owner-claim.js";
@@ -1091,7 +1091,7 @@ export class AgentRuntime {
     }
 
     const amountUsd = meta.amountUsd?.(args);
-    const capability = askedCapability(principal, meta);
+    const capability = askedCapability(principal, meta, args);
     const argsHash = hashArgs(args);
 
     // The owner already said yes to this exact call in this conversation: spend that approval once.
@@ -1147,7 +1147,7 @@ export class AgentRuntime {
     }
     if (isError || meta?.recordsOwnSpend) return;
     const amountUsd = meta?.amountUsd?.(args);
-    const spends = meta?.capabilities.some((c) => SPEND_CAPABILITIES.has(c)) ?? false;
+    const spends = meta ? (callCapabilities(meta, args) ?? meta.capabilities).some((c) => SPEND_CAPABILITIES.has(c)) : false; // [sunshine:app-permissions] per call
     if ((amountUsd !== undefined && amountUsd > 0) || spends) {
       // Spend entries feed the daily total; a purchase with no amount is still recorded so it is visible.
       audit.append({ kind: "spend", conversationKey: conv.key, principal: conv.principal.id, detail: { tool: toolName, ...(amountUsd !== undefined ? { amountUsd } : {}), summary: safeDescribe(meta, args) } });
@@ -2062,13 +2062,14 @@ function safeDescribe(meta: ToolMeta | undefined, args: unknown): string {
 }
 
 /** Pick the capability the approval is about: the first one the tier does not get outright. */
-function askedCapability(principal: Principal, meta: ToolMeta): Capability {
+function askedCapability(principal: Principal, meta: ToolMeta, args: unknown): Capability {
   const row = DEFAULT_TIER_TABLE[principal.tier];
-  for (const cap of meta.capabilities) {
+  const capabilities = callCapabilities(meta, args) ?? meta.capabilities; // [sunshine:app-permissions]
+  for (const cap of capabilities) {
     const permission = row?.[cap];
     if (permission === "ask" || permission === "limit" || permission === "no") return cap;
   }
-  return meta.capabilities[0] ?? "converse";
+  return capabilities[0] ?? "converse";
 }
 
 /** JSON with sorted keys, so two equal argument objects always hash the same. */

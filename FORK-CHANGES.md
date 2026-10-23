@@ -895,6 +895,14 @@ the simulated Zia and "dinner" never reached the step where Zia comes in, so nei
 this test are paused: tuning one task in simulation is the per-feature tuning we decided against; real use comes
 first.
 
+**Harness fixes** (2026-10-23, after a run that said nothing): "Friday" is the first Friday after the run day and
+the calendars follow it (fixed dates made "Friday at 14:00" a past time on Friday 23 Oct); a free/busy check returns
+times with every title replaced by "busy", as Google's free/busy does (it returned the whole calendar, titles
+included, which a friend's agent could never see); the simulated person always answers a text with a question
+(twice it wrote NONE to "Does that work?"); each A2A send shows its task and whether it continues a topic, and the
+report counts the requests that reached Zia's agent with the topic's earlier turns. Still weak: once the simulated
+Zia texted "N", which started a side thread.
+
 **To remove.** Delete the file.
 
 ### `[sunshine:a2a-topic]`: a follow-up in an agent-to-agent topic remembers the earlier turns
@@ -922,8 +930,12 @@ told Zia "I have no record of you agreeing" and asked again.
 **Tested** (free). `packages/core/test/runtime.test.ts`, "a follow-up in the same topic": the earlier task with the
 same caller is shown, another caller's task in the same context and the same caller's task in another context
 are not, the answer still goes to the current task only; an unreadable earlier task leaves the request as before;
-the caller's note carries the context. Not yet tested with the real model: whether the caller passes the context
-for a follow-up, and how the worker uses the history. The live test between two agents shows both.
+the caller's note carries the context. With the real model (`scenarios/a2a.mjs`, situation "late", 2026-10-23,
+$0.27, one run): Torstein's agent sent its "confirm" in the same topic, Zia's agent received it with the earlier
+turns and answered "noted... settled. No further action needed" instead of asking Zia again (the failure seen
+2026-10-22). Not covered: a change proposed from the other side (Zia's agent asking to move the meeting) starts a
+topic in its own direction, so the receiving agent relies on its own calendar. One run, simulated people: the live
+test is the real check.
 
 **To remove.** Revert the commit (`git log --grep "sunshine:a2a-topic"`) or delete the tagged blocks in
 `runtime.ts`, `a2a-state.ts`, `packages/network/src/tools.ts` and the tests.

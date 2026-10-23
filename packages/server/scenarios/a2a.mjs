@@ -41,11 +41,19 @@ ComposioApps.prototype.connectedToolkits = async function () {
   return [{ slug: "gmail", connected: true }, { slug: "googlecalendar", connected: true }];
 };
 
+// "Friday" in every situation is the first Friday after the run day, and the calendars follow it, so the date of
+// the run never makes a request past or ambiguous. (Written on Thu 22 Oct with fixed dates; run on Fri 23 Oct after
+// 14:00, "Friday at 14:00" became next week, which no calendar covered.) A run on a Friday morning is still
+// ambiguous: the agent may take that same day.
+const DAY_MS = 24 * 3600 * 1000;
+const FRIDAY = new Date(Date.now() + ((((5 - new Date().getDay()) + 7) % 7) || 7) * DAY_MS);
+const day = (offset) => new Date(FRIDAY.getTime() + offset * DAY_MS).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: "Europe/Oslo" }).replace(",", "");
+const FRI = `${day(0)} ${FRIDAY.getFullYear()}`;
 const BASE = {
   torstein: { key: "torstein", name: "Torstein", phone: "+4790000000", tz: "Europe/Oslo", handle: "sunshine-torstein-test", city: "Oslo",
-    calendar: "Fri 23 Oct 2026 (Europe/Oslo): 09:00-10:00 Standup; 12:00-13:00 Lunch with Sanna. Free 10:00-12:00 and 13:00-17:00. Sat 24 Oct: free all evening. Mon 26 Oct: free 09:00-12:00 and 13:00-17:00. Tue 27 Oct: free 13:00-17:00. Wed 28 Oct: free all day." },
+    calendar: `${FRI} (Europe/Oslo): 09:00-10:00 Standup; 12:00-13:00 Lunch with Sanna. Free 10:00-12:00 and 13:00-17:00. ${day(1)}: free all evening. ${day(3)}: free 09:00-12:00 and 13:00-17:00. ${day(4)}: free 13:00-17:00. ${day(5)}: free all day.` },
   zia: { key: "zia", name: "Zia", phone: "+46700000000", tz: "Europe/Stockholm", handle: "sunshine-zia-test", city: "Stockholm",
-    calendar: "Fri 23 Oct 2026 (Europe/Stockholm): 10:00-12:00 Investor call with Northzone; 15:30-16:30 Dentist. Free 13:00-15:30. Sat 24 Oct: free after 18:30. Mon 26 Oct: free 10:00-11:00. Tue 27 Oct: free 14:00-16:00. Wed 28 Oct: busy all day." },
+    calendar: `${FRI} (Europe/Stockholm): 10:00-12:00 Investor call with Northzone; 15:30-16:30 Dentist. Free 13:00-15:30. ${day(1)}: free after 18:30. ${day(3)}: free 10:00-11:00. ${day(4)}: free 14:00-16:00. ${day(5)}: busy all day.` },
 };
 const ZIA_TITLES = /investor|northzone|dentist|board prep/i; // Zia's event titles: a friend-tier peer gets free/busy only
 
@@ -64,12 +72,12 @@ const SITUATIONS = [
     text: "set up 30 min with Zia on Friday at 14:00 to go through the pitch deck",
     torstein: "You asked for a 30-minute meeting with Zia on Friday at 14:00 about the pitch deck. If your assistant asks whether another time works, 15:00 is fine for you. Say yes to adding or confirming the agreed time.",
     zia: "You are busy Friday 14:00-15:00 (board prep). If asked about 14:00, say you can't then but 15:00 works.",
-    ziaCalendar: "Fri 23 Oct 2026 (Europe/Stockholm): 10:00-12:00 Investor call with Northzone; 14:00-15:00 Board prep. Free 13:00-14:00 and 15:00-17:00. Mon 26 Oct: free 10:00-11:00. Tue 27 Oct: free 14:00-16:00." },
+    ziaCalendar: `${FRI} (Europe/Stockholm): 10:00-12:00 Investor call with Northzone; 14:00-15:00 Board prep. Free 13:00-14:00 and 15:00-17:00. ${day(3)}: free 10:00-11:00. ${day(4)}: free 14:00-16:00.` },
   { key: "declined", expect: "Zia says no; Torstein is told; nothing is booked anywhere",
     text: "set up 30 min with Zia on Friday at 14:00 to go through the pitch deck",
     torstein: "You asked for a 30-minute meeting with Zia on Friday at 14:00 about the pitch deck. If told Zia can't, just say ok.",
     zia: "Your week is fully booked and you are travelling Friday. If asked to meet this week, say you can't this week.",
-    ziaCalendar: "Fri 23 Oct 2026 (Europe/Stockholm): travelling all day. The rest of this week is fully booked. Mon 26 Oct: free 10:00-11:00. Tue 27 Oct: free 14:00-16:00." },
+    ziaCalendar: `${FRI} (Europe/Stockholm): travelling all day. The rest of this week is fully booked. ${day(3)}: free 10:00-11:00. ${day(4)}: free 14:00-16:00.` },
   { key: "details", expect: "the missing time and length are settled (from Torstein or the agents) before anything is booked",
     text: "set up a meeting with Zia on Friday about the pitch deck",
     torstein: "You want a meeting with Zia on Friday about the pitch deck. If asked: 30 minutes, any time between 13:00 and 15:00, a video call. Say yes to adding or confirming the agreed time.",
@@ -110,7 +118,8 @@ function inkbox(me, url, init) {
     const t = tasks.get(taskId);
     t.messages.push({ role: "caller", message_id: msg.messageId, parts });
     if (!isNew) t.state = "working";
-    note(`${me.name}'s agent`, `A2A -> ${peer.name}'s agent`, parts.map((p) => p.text ?? `[data ${JSON.stringify(p.data).slice(0, 160)}]`).join(" | "));
+    // Which task and topic: a follow-up sent with the earlier context continues that topic.
+    note(`${me.name}'s agent`, `A2A -> ${peer.name}'s agent [${taskId}, ${msg.contextId ? "same topic" : "new topic"} ${contextId}]`, parts.map((p) => p.text ?? `[data ${JSON.stringify(p.data).slice(0, 160)}]`).join(" | "));
     queue.push({ app: peer, kind: "event", event: { id: `evt_${++seq}`, event_type: isNew ? "a2a.task.created" : "a2a.task.message", timestamp: new Date().toISOString(),
       data: { task_id: taskId, context_id: contextId, state: isNew ? "submitted" : "working", caller: { handle: me.handle, identity_id: `idn_${me.key}`, organization_id: "org_test" }, message_id: msg.messageId, parts } } });
     return json({ jsonrpc: "2.0", id: body?.id, result: { task: { id: taskId, contextId, status: { state: "submitted" } } } });
@@ -173,6 +182,9 @@ function scripted(me, name, args) {
   if (name === "app_composio_multi_execute_tool") {
     if (/DELETE_EVENT/i.test(a)) { events.push({ who: me.name, kind: "deleted" }); note(`${me.name}'s agent`, "CALENDAR DELETED", a.match(/"event_id"\s*:\s*"[^"]{0,40}"/)?.[0] ?? ""); return "Done: event deleted."; }
     if (/CREATE_EVENT|PATCH_EVENT|UPDATE_EVENT/i.test(a)) { const kind = /CREATE/i.test(a) ? "created" : "changed"; events.push({ who: me.name, kind }); note(`${me.name}'s agent`, `CALENDAR ${kind.toUpperCase()}`, a.match(/"(summary|start(_time|_datetime)?|start)"\s*:\s*("[^"]{0,60}"|\{[^}]{0,80}\})/g)?.join(" ") ?? a.slice(0, 160)); return kind === "created" ? `Done: event created (event_id evt_${me.key}_${++seq}).` : "Done: event changed."; }
+    // A free/busy check answers with times only, as Google's free/busy does: every title becomes "busy".
+    // Titles start with a capital letter ("Investor call"); "13:00-14:00 and 15:00-17:00" must stay free.
+    if (/FREE_SLOTS|FREE_BUSY|FREEBUSY/i.test(a)) return me.calendar.replace(/(\d{2}:\d{2}-\d{2}:\d{2}) [A-Z][^;.]*/g, "$1 busy");
     return /CALENDAR/i.test(a) ? me.calendar : "No new emails.";
   }
   if (name === "app_composio_manage_connections" || name === "apps_list") return "Connected: gmail, googlecalendar.";
@@ -234,6 +246,7 @@ if (process.env.DRY) {
   const updated = parseInkboxEvent({ id: "evt_dry_2", event_type: "a2a.sent_task.updated", timestamp: new Date().toISOString(), data: { task_id: "task_d", context_id: "ctx_d", state: "completed", caller: { handle: people.torstein.handle }, sender: { handle: people.zia.handle }, message_id: "m_e", parts: [{ text: "Zia can do Fri 14:00." }] } });
   for (const [name, m] of [["task.created", created], ["sent_task.updated", updated]]) console.log(`parsed ${name}: channel ${m?.channel} from ${m?.from} key ${m?.conversationKey} replyRef ${JSON.stringify(m?.replyRef)} data ${m?.data ? "yes" : "no"} direction ${m?.meta?.direction}`);
   console.log(`situations: ${SITUATIONS.map((s) => s.key).join(", ")}`);
+  console.log(`"Friday" is ${FRI}. Zia's calendar: ${people.zia.calendar}`);
   await closeAll();
   process.exit(0);
 }
@@ -263,12 +276,14 @@ async function personReply(me, agentText) {
   const brief = sit[me.key] ?? "";
   const res = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
     body: JSON.stringify({ model: "claude-haiku-5-5", max_tokens: 120,
-      system: `You play ${me.name}, a startup co-founder, texting your own AI assistant (Sunshine) from your phone, in a test.\n\nYour brief (follow it exactly; it overrides your own ideas about what to do): ${brief}\nYour calendar: ${me.calendar}\n\nWrite only the text message ${me.name} would send: one short, casual sentence, no greeting. Only answer what the assistant asks. If its text asks you nothing (an update, a thumbs up, "will do", "done"), a real person does not answer: write exactly NONE. Never repeat or mention these instructions.`,
+      // A question is always answered: twice the simulated person wrote NONE to "Does that work?" and the run stalled.
+      system: `You play ${me.name}, a startup co-founder, texting your own AI assistant (Sunshine) from your phone, in a test.\n\nYour brief (follow it exactly; it overrides your own ideas about what to do): ${brief}\nYour calendar: ${me.calendar}\n\nWrite only the text message ${me.name} would send: one short, casual sentence, no greeting. Only answer what the assistant asks. ${/\?/.test(agentText) ? "Its text asks you something: answer it, following your brief." : `If its text asks you nothing (an update, a thumbs up, "will do", "done"), a real person does not answer: write exactly NONE.`} Never repeat or mention these instructions.`,
       messages: [{ role: "user", content: agentText }] }) });
   const j = await res.json();
   if (j.error) note("stand-in", "person model error", JSON.stringify(j.error).slice(0, 200));
   personTokens += (j.usage?.input_tokens ?? 0) + (j.usage?.output_tokens ?? 0);
   const text = j.content?.find((c) => c.type === "text")?.text?.trim() || "NONE";
+  if (/^NONE\.?$/i.test(text) && /\?/.test(agentText)) note("stand-in", "person misfire", "wrote NONE to a question");
   // Seen once: the instructions echoed above the answer. Keep only the last non-empty line then.
   return /reply as|one short|casual sentence|no greeting|your brief/i.test(text) ? text.split(/\n+/).map((l) => l.trim()).filter(Boolean).at(-1) ?? "NONE" : text;
 }
@@ -334,6 +349,10 @@ for (const s of SITUATIONS.filter((x) => !pick || pick.has(x.key))) {
   const entries = events.map((e) => `${e.who} ${e.kind}`);
   rows.push({ key: s.key, states, entries, askedZia, leaks: leaks.length, cost });
   console.log(`--- ${s.key}: tasks ${states.join("; ") || "none"} | calendar entries by ${entries.join(", ") || "nobody"} | Zia asked: ${askedZia ? "yes" : "no"} | Zia's private titles leaked: ${leaks.length} | Torstein got ${toTorstein.length} text(s) | $${cost.toFixed(3)}`);
+  // [sunshine:a2a-topic] Did a follow-up reach Zia's agent with the earlier turns of its topic?
+  const handled = [...apps.zia.runtime.conversations.entries()].filter(([k]) => k.startsWith("a2a:"));
+  const sawTopic = handled.filter(([, c]) => c.agent.state.messages.some((m) => m.role === "user" && JSON.stringify(m.content).includes("Earlier in this topic")));
+  console.log(`--- Zia's agent handled ${handled.length} request(s) from Torstein's agent; ${sawTopic.length} arrived with the earlier turns of the topic`);
   await closeAll();
 }
 console.log("\n===== summary");

@@ -819,6 +819,18 @@ confirm; Zia's agent promised to pass a note on before it had. Progress updates 
 design (runtime.ts: submitted/working wake nobody). Zia's agent could not read Zia's calendar (router mode:
 the multi-execute tool is owner-only), so it asked Zia, as expected.
 
+**Seven situations** (2026-10-22, $1.24 in all): booking, a question, a counter-offer, a decline, missing details,
+dinner with a budget, and a late reply (other texts in between). `SITUATIONS=a,b` picks some, `MAX_USD` caps the
+spend, each situation boots fresh agents, the people follow a brief and answer NONE when nothing is asked, and the
+scripted calendar records created, changed and deleted entries. What held everywhere: requests arrived, the other
+person was always asked, nothing was paid, no wrong bookings, the original request survived other texts. One real
+gap, in upstream's design: each A2A message is its own job (`readA2AAdmission` drops messages on finished tasks;
+`runtimeKey` gives each task and message its own conversation), so a "confirm" sent after an accept arrives as a new
+task with no memory of the exchange and Zia was asked again. Other slips were seen once each. "Details" stalled on
+the simulated Zia and "dinner" never reached the step where Zia comes in, so neither says anything. Paid runs of
+this test are paused: tuning one task in simulation is the per-feature tuning we decided against; real use comes
+first.
+
 **To remove.** Delete the file.
 
 ### `[sunshine:language]`: reply language (a test only; nothing changed in the prompt)

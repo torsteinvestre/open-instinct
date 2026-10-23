@@ -19,9 +19,17 @@ import type {
 
 const FILE = "policy.json";
 
-type Row = [owner: Permission, partner: Permission, family: Permission, friend: Permission, contact: Permission, stranger: Permission];
+type Row = [owner: Permission, staff: Permission, partner: Permission, family: Permission, friend: Permission, contact: Permission, stranger: Permission];
 
-// Columns follow TIER_ORDER: owner, partner, family, friend, contact, stranger.
+// Columns follow TIER_ORDER: owner, staff, partner, family, friend, contact, stranger.
+// `staff` is an agent that works for the same owner (a teammate). It gets the owner's working
+// read capabilities (calendar, mail, contacts, web, apps); anything that commits the owner
+// (calendar writes, outside email, bookings, spend) asks the owner first, and it never changes
+// the owner's own records (memory, trust, schedules, invitations). It never gets a shell:
+// files.read, files.write and computer.use stay owner-only, because bash (files.read +
+// files.write) can read anything the process uid can, including the data dir. Staff is only
+// assignable to a contact with an agent handle, and email never resolves above partner
+// (see principal.ts), so the tier is reachable only over authenticated A2A.
 // "intro" and "partial" are allowed outcomes that carry a hint for the prompt.
 // `web.read` (web_search, web_fetch; public hosts only, see core-tools.ts) and
 // `apps.use` (Composio app tools) are transport capabilities: the specific
@@ -29,40 +37,46 @@ type Row = [owner: Permission, partner: Permission, family: Permission, friend: 
 // gating, so they are open for everyone the owner has placed in a tier and closed
 // for contacts and strangers. Both rows appear in docs/PERMISSIONS.md.
 const ROWS: Record<Capability, Row> = {
-  "converse": ["yes", "yes", "yes", "yes", "yes", "intro"],
-  "owner.relay": ["yes", "yes", "yes", "yes", "yes", "yes"],
-  "owner.profile.public": ["yes", "yes", "yes", "yes", "yes", "no"],
-  "owner.profile.preferences": ["yes", "yes", "partial", "partial", "no", "no"],
-  "owner.location.exact": ["yes", "yes", "no", "no", "no", "no"],
-  "owner.location.approx": ["yes", "yes", "yes", "no", "no", "no"],
-  "calendar.freebusy": ["yes", "yes", "yes", "yes", "no", "no"],
-  "calendar.read": ["yes", "yes", "no", "no", "no", "no"],
-  "calendar.write": ["yes", "ask", "ask", "no", "no", "no"],
-  "email.read": ["yes", "no", "no", "no", "no", "no"],
-  "email.send": ["yes", "ask", "no", "no", "no", "no"],
-  "contacts.read": ["yes", "partial", "no", "no", "no", "no"],
-  "plans.propose": ["yes", "yes", "yes", "yes", "no", "no"],
-  "plans.commit": ["yes", "ask", "ask", "ask", "no", "no"],
-  "purchase": ["limit", "ask", "no", "no", "no", "no"],
-  "travel.book": ["limit", "ask", "no", "no", "no", "no"],
-  "computer.use": ["yes", "no", "no", "no", "no", "no"],
-  "files.read": ["yes", "no", "no", "no", "no", "no"],
-  "files.write": ["yes", "no", "no", "no", "no", "no"],
-  "memory.write": ["yes", "no", "no", "no", "no", "no"],
-  "network.ask": ["yes", "yes", "yes", "yes", "no", "no"],
-  "network.invite": ["yes", "no", "no", "no", "no", "no"],
-  "trust.manage": ["yes", "no", "no", "no", "no", "no"],
-  "schedule.manage": ["yes", "no", "no", "no", "no", "no"],
+  "converse": ["yes", "yes", "yes", "yes", "yes", "yes", "intro"],
+  "owner.relay": ["yes", "yes", "yes", "yes", "yes", "yes", "yes"],
+  "owner.profile.public": ["yes", "yes", "yes", "yes", "yes", "yes", "no"],
+  "owner.profile.preferences": ["yes", "yes", "yes", "partial", "partial", "no", "no"],
+  "owner.location.exact": ["yes", "yes", "yes", "no", "no", "no", "no"],
+  "owner.location.approx": ["yes", "yes", "yes", "yes", "no", "no", "no"],
+  "calendar.freebusy": ["yes", "yes", "yes", "yes", "yes", "no", "no"],
+  "calendar.read": ["yes", "yes", "yes", "no", "no", "no", "no"],
+  "calendar.write": ["yes", "ask", "ask", "ask", "no", "no", "no"],
+  "email.read": ["yes", "yes", "no", "no", "no", "no", "no"],
+  "email.send": ["yes", "ask", "ask", "no", "no", "no", "no"],
+  "contacts.read": ["yes", "yes", "partial", "no", "no", "no", "no"],
+  "plans.propose": ["yes", "yes", "yes", "yes", "yes", "no", "no"],
+  "plans.commit": ["yes", "ask", "ask", "ask", "ask", "no", "no"],
+  "purchase": ["limit", "ask", "ask", "no", "no", "no", "no"],
+  "travel.book": ["limit", "ask", "ask", "no", "no", "no", "no"],
+  "computer.use": ["yes", "no", "no", "no", "no", "no", "no"],
+  "files.read": ["yes", "no", "no", "no", "no", "no", "no"],
+  "files.write": ["yes", "no", "no", "no", "no", "no", "no"],
+  "memory.write": ["yes", "no", "no", "no", "no", "no", "no"],
+  "network.ask": ["yes", "yes", "yes", "yes", "yes", "no", "no"],
+  "network.invite": ["yes", "no", "no", "no", "no", "no", "no"],
+  "trust.manage": ["yes", "no", "no", "no", "no", "no", "no"],
+  "schedule.manage": ["yes", "no", "no", "no", "no", "no", "no"],
   // web.read: fetch and search public web pages (never loopback, private or metadata hosts).
-  "web.read": ["yes", "yes", "yes", "yes", "no", "no"],
+  "web.read": ["yes", "yes", "yes", "yes", "yes", "no", "no"],
   // apps.use: call connected app tools; each app tool also carries its own capability.
-  "apps.use": ["yes", "yes", "yes", "yes", "no", "no"],
+  "apps.use": ["yes", "yes", "yes", "yes", "yes", "no", "no"],
+  // phone.call: place a Voice AI call to a phone number. Always "ask", even for the owner: a call is
+  // outward-facing and billed, and an injected instruction in the owner's own thread (a page, an
+  // email, a forwarded message) could otherwise dial. The owner approves each exact call (number and
+  // brief) with their own plain yes; staff asks the owner; partners and below are denied unless a
+  // grant names phone.call.
+  "phone.call": ["ask", "ask", "no", "no", "no", "no", "no"],
 };
 
 /** Capabilities that move money. The owner gets them under the spend policy; a grant never skips it. */
 export const SPEND_CAPABILITIES: ReadonlySet<Capability> = new Set(["purchase", "travel.book"]);
 
-const TIERS: Tier[] = ["owner", "partner", "family", "friend", "contact", "stranger"];
+const TIERS: Tier[] = ["owner", "staff", "partner", "family", "friend", "contact", "stranger"];
 
 function buildTable(): Record<Tier, Record<Capability, Permission>> {
   const table = {} as Record<Tier, Record<Capability, Permission>>;
@@ -115,15 +129,21 @@ function textOf(args: unknown): string {
   }
 }
 
-/** Best-effort merchant name from common argument shapes (`merchant`, `vendor`, `store`). */
-function merchantOf(args: unknown): string | undefined {
-  if (!args || typeof args !== "object") return undefined;
+const MERCHANT_KEYS = ["merchant", "merchantName", "merchant_name", "vendor", "store", "restaurant", "airline", "hotel"];
+
+/**
+ * Every merchant name in the args, lowercased. All of them are checked, so a call cannot pass
+ * an allowed `merchant` while the tool actually pays the `merchantName` it was also given.
+ */
+function merchantsOf(args: unknown): string[] {
+  if (!args || typeof args !== "object") return [];
   const o = args as Record<string, unknown>;
-  for (const k of ["merchant", "vendor", "store", "restaurant", "airline", "hotel"]) {
+  const out: string[] = [];
+  for (const k of MERCHANT_KEYS) {
     const v = o[k];
-    if (typeof v === "string" && v.trim()) return v.trim().toLowerCase();
+    if (typeof v === "string" && v.trim()) out.push(v.trim().toLowerCase());
   }
-  return undefined;
+  return out;
 }
 
 /** Lower-cased object keys and scalar values from a JSON-like tool argument payload. */
@@ -237,7 +257,7 @@ export class PolicyEngine {
       reason,
       approvalPrompt: `${asker}${label}${amount !== undefined ? ` (${fmtUsd(amount)})` : ""}?`,
     });
-    const merchant = merchantOf(args);
+    const merchants = merchantsOf(args);
     const blocked = blockedMerchantIn(args, s.blockedMerchants);
     if (blocked) {
       return { outcome: "deny", reason: `${blocked} is on the blocked merchant list` };
@@ -246,8 +266,9 @@ export class PolicyEngine {
     const haystack = textOf(args);
     const flagged = s.neverWithoutAsk.find((w) => haystack.includes(w.toLowerCase()));
     if (flagged) return ask(`${flagged} always needs the owner's confirmation`);
-    if (s.allowedMerchants.length > 0 && !(merchant && s.allowedMerchants.some((m) => merchant.includes(m.toLowerCase())))) {
-      return ask(`merchant${merchant ? ` ${merchant}` : ""} is not on the allowed list`);
+    if (s.allowedMerchants.length > 0) {
+      const off = merchants.length === 0 ? "" : merchants.find((name) => !s.allowedMerchants.some((m) => name.includes(m.toLowerCase())));
+      if (off !== undefined) return ask(`merchant${off ? ` ${off}` : ""} is not on the allowed list`);
     }
     if (amount > s.perActionUsd) return ask(`${fmtUsd(amount)} is above the per-action limit of ${fmtUsd(s.perActionUsd)}`);
     const askAbove = grantCapUsd ?? s.askAbove;
@@ -263,10 +284,12 @@ export class PolicyEngine {
     const permission = this.permissionFor(principal.tier, capability);
     const amount = meta.amountUsd?.(args);
     const label = meta.describe?.(args) ?? `${principal.displayName} wants ${capability}`;
+    // The owner's own asks (phone.call) carry no "<name> asks:" prefix: the owner is the one reading it.
+    const asker = principal.kind === "owner" ? "" : `${principal.displayName} asks: `;
     const askDecision: PolicyDecision = {
       outcome: "ask",
       reason: `${capability} requires the owner's approval for tier ${principal.tier}`,
-      approvalPrompt: `${principal.displayName} asks: ${label}${amount !== undefined ? ` (${fmtUsd(amount)})` : ""}. Want me to go ahead?`,
+      approvalPrompt: `${asker}${label}${amount !== undefined ? ` (${fmtUsd(amount)})` : ""}. Want me to go ahead?`,
     };
 
     // A blocked merchant is blocked for everyone; no tier, grant or approval opens it.

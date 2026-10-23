@@ -21,6 +21,21 @@ function input(overrides: Partial<PromptInput> = {}): PromptInput {
 }
 
 describe("buildSystemPrompt", () => {
+  it("tells the agent when it may phone someone and what it may say afterwards", () => {
+    // [sunshine:phone-calls] The rule comes with the tool, which is off unless features.phoneCalls is true.
+    const base = input();
+    const p = buildSystemPrompt({ ...base, config: { ...base.config, features: { ...base.config.features, phoneCalls: true } } });
+    expect(p).toContain(
+      "8. A phone call needs Maria's explicit yes first, with the number you will call and what you will say; a general request is not a yes. Every phone_call is held for Maria's own yes to that exact number and brief, even when Maria asked for the call, so call the tool once and wait rather than asking twice. After a call, report only what its transcript shows, never what you expect was said. Never call Maria's own contacts unless Maria asked for that call.",
+    );
+  });
+
+  it("[sunshine:phone-calls] leaves the phone-call rule out while calls are off", () => {
+    const p = buildSystemPrompt(input());
+    expect(p).not.toContain("phone_call");
+    expect(p).not.toContain("8. A phone call");
+  });
+
   it("has every section for the owner", () => {
     const p = buildSystemPrompt(input());
     // [sunshine:stable-cache] "# Time" (the timezone, the clock rides on each message) replaced "# Now".
@@ -59,7 +74,7 @@ describe("buildSystemPrompt", () => {
   });
 
   it("hides owner.about, phones and emails from everyone but the owner", () => {
-    for (const tier of ["partner", "family", "friend", "contact", "stranger"] as const) {
+    for (const tier of ["staff", "partner", "family", "friend", "contact", "stranger"] as const) {
       const p = buildSystemPrompt(input({ principal: principalOf(tier) }));
       expect(p, tier).not.toContain("Allergic to shellfish");
       expect(p, tier).not.toContain("+16175550100");
@@ -191,5 +206,14 @@ describe("wrapUntrusted", () => {
     expect(w.match(/<untrusted/g)).toHaveLength(1);
     expect(w.match(/<\/untrusted>/g)).toHaveLength(1);
     expect(w).toContain('source="evil  label  next"');
+  });
+});
+
+describe("staff principal card", () => {
+  it("calls a staff agent a teammate and keeps commits with the owner", () => {
+    const p = buildSystemPrompt(input({ principal: { kind: "agent", id: "agent:research-bot", tier: "staff", displayName: "Research's agent (@research-bot)", agentHandle: "research-bot", onBehalfOf: { displayName: "Research" } } }));
+    expect(p).toContain("Tier: staff");
+    expect(p).toContain("teammate");
+    expect(p).toContain("still need your owner's yes");
   });
 });

@@ -143,7 +143,10 @@ Only through Stripe Link Agent Wallet, and only one purchase at a time. The agen
 for a one-time card for an exact amount and merchant. You approve in Link. By default
 anything above $50 also asks you by text first, and flights and hotels always ask. The card
 is shown once to the model and is never written to disk. Link Agent Wallet serves people in
-the United States and Canada. Set it up with `instinct payments connect`.
+the United States and Canada. The operator first needs a Link OAuth client, which Stripe
+grants by application (a short form, reviewed every 3 to 5 days); see
+[PAYMENTS.md](PAYMENTS.md#registering-an-oauth-client). Then the owner connects with
+`instinct payments connect` or by texting "connect my wallet".
 Details: [../packages/payments/README.md](../packages/payments/README.md).
 
 ### 16. Should I give it my passwords?

@@ -10,21 +10,23 @@
 
 You text a phone number. [Inkbox](https://inkbox.ai) gives the agent that number, an email address and an agent-to-agent endpoint. A small gateway wakes your agent, which lives in its own microVM on [Maritime](https://maritime.sh) with a Linux desktop. Inside, a [Pi](https://github.com/earendil-works/pi) agent loop runs with your apps through [Composio](https://composio.dev), a wallet through [Stripe Link](https://docs.stripe.com/agentic-commerce/agents/link-agent-wallet), and a policy guard in front of every tool. Default model: Claude Fable 5.1. Any Pi provider works.
 
+It makes phone calls, too: say yes to "call the restaurant and book 7pm" and Inkbox Voice AI dials, speaks and hangs up, then you get one text with the outcome and any follow-ups from the transcript (see [INKBOX.md](docs/INKBOX.md#phone-calls)).
+
 It writes real files, too: ask for a brief "as a PDF" and it creates one in its workspace and sends it to you as an iMessage or email attachment. Any app Composio supports can be connected by name ("connect my Notion"), and the prompt it runs with is a file you can read and edit (`instinct prompt`, `instinct persona`; see [CUSTOMIZE.md](docs/CUSTOMIZE.md)).
 
 <p align="center"><img src="docs/assets/brand/stack.png" alt="Who does what: you text; Inkbox is identity and messaging; Maritime hosts one microVM with a desktop per person; inside it Pi runs the loop, Claude is the model, Composio connects apps, Stripe Link pays" width="900"></p>
 
 ## Who gets which key
 
-<p align="center"><img src="docs/assets/brand/trust.png" alt="Six rings: owner, partner, family, friend, contact, stranger" width="820"></p>
+<p align="center"><img src="docs/assets/brand/trust.png" alt="Rings of trust: owner, staff, partner, family, friend, contact, stranger" width="820"></p>
 
-Six tiers, enforced in code before any tool runs. Your partner's agent can read your calendar. A friend's can only ask when you are free. A stranger gets a polite no, and you get a one-line text saying who asked for what. Grants add exceptions in plain English: "Sam can book us dinner this week." Details in [PERMISSIONS.md](docs/PERMISSIONS.md) and [PROTOCOL.md](docs/PROTOCOL.md).
+Seven tiers, enforced in code before any tool runs. `staff` is for your own agents working as a team. Your partner's agent can read your calendar. A friend's can only ask when you are free. A stranger gets a polite no, and you get a one-line text saying who asked for what. Grants add exceptions in plain English: "Sam can book us dinner this week." Details in [PERMISSIONS.md](docs/PERMISSIONS.md) and [PROTOCOL.md](docs/PROTOCOL.md).
 
 ## Payments
 
 <p align="center"><img src="docs/assets/brand/payments.png" alt="How the agent pays: you ask, it reaches checkout on its desktop, asks Stripe Link for a one-time card for the exact amount, you approve on your phone, it pays and reports" width="1000"></p>
 
-The agent never holds your card. For each purchase it asks your Stripe Link wallet for a single-use card for the exact total, you approve with one tap, and the card is dead after the payment. Limits live in a spend policy file: ask above an amount, daily cap, and things that always need a yes. Without a wallet it still gets you to checkout and hands you the screen. Details: [PAYMENTS.md](docs/PAYMENTS.md).
+The agent never holds your card. For each purchase it asks your Stripe Link wallet for a single-use card for the exact total, you approve with one tap, and the card is dead after the payment. Limits live in a spend policy file: ask above an amount, daily cap, and things that always need a yes. Without a wallet it still gets you to checkout and hands you the screen. Paying needs a Link OAuth client from Stripe: a short application form, reviewed in about 3 to 5 days, so apply before you need it. Details: [PAYMENTS.md](docs/PAYMENTS.md).
 
 ## Quick start
 

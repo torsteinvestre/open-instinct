@@ -227,6 +227,8 @@ export function startGateway(cfg: GatewayEnv): GatewayServer {
   server.listen(cfg.port, "0.0.0.0", () => {
     log.info("gateway.listening", { port: cfg.port, publicUrl: cfg.publicUrl, users: store.all().length, signup: Boolean(inkbox), link: Boolean(cfg.link) });
     server.resumePending();
+    // Older subscriptions were made before call.ended existed; each boot tops them up.
+    void server.backfillWebhookEvents();
   });
   let stopping = false;
   const stop = () => {

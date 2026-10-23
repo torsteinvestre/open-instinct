@@ -43,26 +43,64 @@ is available to consumers in the United States and Canada. The agent can run any
 ## Registering an OAuth client
 
 Link Agent Wallet uses OAuth 2.0 with PKCE. You need three values: a client id, a
-client secret and a Stripe publishable key.
+client secret and a Stripe publishable key. Stripe issues the first two by application,
+not from the dashboard. Plan for it: the form takes about fifteen minutes to fill in,
+and Stripe reviews applications on a rolling basis, every 3 to 5 days as of October
+2026. Until the client arrives the agent shops but hands you the screen at checkout.
 
-1. Read the Stripe guide: <https://docs.stripe.com/agentic-commerce/agents/link-agent-wallet/oauth>.
-2. Request a client through the form linked from that page. Give your app name, a short
-   description of what the agent buys, and the exact redirect URI or URIs you will use.
-3. Stripe sends back `client_id` and `client_secret`.
-4. The publishable key (`pk_live_...` or `pk_test_...`) is in your Stripe Dashboard under
-   Developers, API keys.
+### Before you start
+
+- A Stripe account. Note the account id (`acct_...`, under Settings, Business, Account
+  details). Your business can be anywhere; the owners who connect wallets must be US or
+  Canadian consumers.
+- A public page for your app or company. The form asks for it.
+- The exact redirect URI or URIs you will use (table below). They must match character
+  for character: scheme, host, port and path.
+- A square PNG or JPEG logo (optional; Stripe shows it on the Link consent screen).
+- A short description of the app in under ten words, and the name owners will see.
+
+### The application
+
+1. Open the Link CLI guide, <https://docs.stripe.com/agentic-commerce/link-cli>, and
+   follow its link to the "Link OAuth App Registration" Google Form (it requires a
+   Google sign-in; the answers are emailed back to you).
+2. Page one asks who you are and what you are building: email, Stripe account id, web
+   presence, who your users are, the user journey from first text to a paid order, the
+   technical approach (where the agent runs, where tokens live, how a payment is
+   confirmed), the countries you serve, user and volume estimates, and a launch plan.
+   Plain, specific answers are fine; describe the three-step flow from this page.
+3. Page two is the OAuth app itself:
+   - Scopes: tick `agentic payments`. Only tick `financial insights` if you will use it;
+     requesting a scope at login that was not approved here fails hard.
+   - Client type: `Confidential`. Open Instinct keeps the secret on the server, never in a
+     browser or on the phone. A public client triggers a longer security review.
+   - Integration details: say the flow is authorization code with PKCE, started
+     server-side, with one callback path, and that every purchase needs the owner's yes.
+   - App name, logo and description: what the owner sees on Link's consent screen.
+   - Redirect URLs: the exact URIs from the table below, one per line.
+   - How you want the client secret delivered. Stripe sends it encrypted; the form links
+     a document with the key-exchange steps (you request access to it), and the usual
+     answer is to send your key to `agent-spend@stripe.com`.
+4. Submit. The confirmation page says reviews run every 3 to 5 days. Amendments, such
+   as a new redirect URI, go to `agent-spend@stripe.com` with your app name.
+5. Stripe sends back `client_id` and the encrypted `client_secret`.
+6. The publishable key (`pk_live_...` or `pk_test_...`) is in your Stripe Dashboard under
+   Developers, API keys. It is the only one of the three you can get yourself.
 
 Redirect URIs must match exactly: scheme, host, port and path. Register every one you
-will use.
+will use, including staging. Stripe discourages `localhost` URIs; if you need one for
+`instinct dev`, say why in the form.
 
 | Deployment | Redirect URI |
 |---|---|
 | `instinct dev` | `http://127.0.0.1:<port>/oauth/link/callback` |
 | Single agent with a public URL | `<INSTINCT_PUBLIC_URL>/oauth/link/callback` |
-| Behind the gateway | `<GATEWAY_PUBLIC_URL>/oauth/link/callback/<userId>` |
+| Behind the gateway | `<GATEWAY_PUBLIC_URL>/oauth/link/callback` (one URI for every agent) |
 
-In the gateway case, the gateway receives the callback and relays it to the right agent
-as a `link.oauth_callback` event. The agent finishes the token exchange.
+In the gateway case one registered URI serves the whole fleet: each agent puts its handle in
+front of the OAuth `state` (`<handle>.<random>`), the gateway finds the user from it and
+relays the callback to that agent as a `link.oauth_callback` event. The agent finishes the
+token exchange. The older per-user path `/oauth/link/callback/<userId>` still works.
 
 Scopes requested: `payment_methods.agentic userinfo:read`. Access tokens last one hour.
 Refresh tokens rotate on every refresh. Authorization codes expire after 10 minutes.
@@ -164,7 +202,7 @@ What gets written where:
 | File | Holds | Never holds |
 |---|---|---|
 | `payments.json` | request id, amount, merchant, status, who asked, whether the card was delivered | card data, approval URLs |
-| `audit.jsonl` | a `spend` entry with the amount and merchant | card data |
+| `audit.jsonl` | `spend` entries: the amount at request, the delivery, a negative release if Link says no | card data |
 | `secrets/link-tokens.json` | access token, refresh token, expiry | card data |
 
 ## Spend policy interplay
@@ -203,11 +241,18 @@ always asks the owner, whatever the policy says.
 the spend check never asks for them. `payment_request` reports `amountUsd`, so every
 limit applies to it.
 
-One gap to know about. `blockedMerchants` scans every object key and scalar value in the tool
-arguments, including `payment_request`'s `merchantName`, nested objects and lists. `allowedMerchants`
-is narrower: it matches only `merchant`, `vendor`, `store`, `restaurant`, `airline` and
-`hotel`, so `payment_request` still asks when an allow list is configured. The block list
-intentionally errs toward denying incidental mentions; an allow list fails closed instead.
+`blockedMerchants` scans every object key and scalar value in the tool arguments, including
+`payment_request`'s `merchantName`, nested objects and lists, and errs toward denying incidental
+mentions. `allowedMerchants` reads every merchant field it finds (`merchant`, `merchantName`,
+`vendor`, `store`, `restaurant`, `airline`, `hotel`); each one must be on the list when it is set,
+so `payment_request` cannot pass the check with one name and pay another.
+
+The daily total counts a purchase once. The runtime logs the amount when `payment_request`
+runs, so pending requests already count and several of them cannot pass the daily limit
+together. When `payment_status` sees the request denied, expired, canceled or failed, it logs
+the same amount negative, once and only on the day it was requested, giving the hold back.
+Card delivery is logged for the record without a second amount. The other payment tools set
+`meta.recordsOwnSpend` so the runtime does not log empty spend entries for them.
 
 ## What is not supported
 

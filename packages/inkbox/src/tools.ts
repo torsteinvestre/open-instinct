@@ -8,8 +8,8 @@ import path from "node:path";
 import { Type } from "typebox";
 import { defineTool, normalizeHandle, normalizePhone, phoneCountryOf, textResult } from "@open-instinct/core";
 import type { Contact, ContactStore, InstinctConfig, OutboundMessage, RegisteredTool, ReplyTarget, ToolContext, ToolResultLike } from "@open-instinct/core";
-import type { FileSend, InkboxChannel } from "./channel.js";
-import { parseConversationKey } from "./channel.js";
+import type { CallOrigination, FileSend, InkboxChannel } from "./channel.js";
+import { CALL_ORIGINATIONS, parseConversationKey } from "./channel.js";
 
 /**
  * What send_file needs. The channel is optional: without Inkbox the tool still
@@ -29,6 +29,14 @@ export interface SendFileDeps {
 
 export interface MessagingDeps extends SendFileDeps {
   channel: InkboxChannel;
+  /** Force where calls go out from (INKBOX_CALL_ORIGINATION). Omitted: the identity's iMessage line. */
+  callOrigination?: CallOrigination;
+}
+
+/** What phone_call needs: a channel that can place calls, and optionally a fixed origination. */
+export interface PhoneCallDeps {
+  channel: Pick<InkboxChannel, "placeCall">;
+  callOrigination?: CallOrigination;
 }
 
 type SendChannel = "imessage" | "sms" | "email";
@@ -357,7 +365,74 @@ export function messagingTools(deps: MessagingDeps): RegisteredTool[] {
 
   // [sunshine:reactions] config.features.tapbacks = false is the off switch (upstream's flag, unused until now).
   const tapbacks = deps.config.features?.tapbacks !== false;
-  return [sendMessage, sendTyping, ...(tapbacks ? [react] : []), sendFileTool(deps)];
+  // [sunshine:phone-calls] Off unless config.features.phoneCalls is true (INSTINCT_PHONE_CALLS=1).
+  const calls = deps.config.features?.phoneCalls === true;
+  return [
+    sendMessage,
+    sendTyping,
+    ...(tapbacks ? [react] : []),
+    sendFileTool(deps),
+    ...(calls ? [phoneCallTool({ channel: deps.channel, ...(deps.callOrigination ? { callOrigination: deps.callOrigination } : {}) })] : []),
+  ];
+}
+
+/** A phone number the carrier will take: `+`, a country code, 7 to 15 digits in all. */
+export const E164 = /^\+[1-9]\d{6,14}$/;
+export const CALL_REASON_MAX = 2000;
+/** Inkbox's cap on the voicemail text. */
+export const VOICEMAIL_MESSAGE_MAX = 1000;
+
+const phoneCallParams = Type.Object({
+  toNumber: Type.String({ description: "The number to call, in E.164 (+14155550100). Not a contact name: look the number up first and have the owner confirm it." }),
+  reason: Type.String({
+    description: 'The task brief Inkbox Voice AI follows on the call, in the second person, with every name, time and detail it needs: "Book a table for 4 at 7pm tonight under Maria. If 7 is full, take 7:30. Confirm the time back."',
+  }),
+  voicemailMessage: Type.Optional(Type.String({ description: "What to say if voicemail answers (under 1000 characters). Omit to let Voice AI compose one from the reason." })),
+});
+
+/**
+ * Place a call through Inkbox Voice AI. The call is placed and the tool returns; the
+ * outcome reaches the owner as a text when the call ends (call.ended webhook), so the
+ * model is never the one saying what was agreed on the phone.
+ */
+export function phoneCallTool(deps: PhoneCallDeps): RegisteredTool {
+  if (deps.callOrigination && !CALL_ORIGINATIONS.includes(deps.callOrigination)) {
+    throw new Error(`phone_call: unknown call origination "${deps.callOrigination}" (use ${CALL_ORIGINATIONS.join(", ")})`);
+  }
+  return defineTool({
+    name: "phone_call",
+    label: "Phone call",
+    description:
+      "Place a phone call that Inkbox Voice AI makes on the owner's behalf, following `reason` as its brief. Only after the owner has said yes to this exact call: the number and what will be said. Returns the call id and status; the result of the call arrives later as a text to the owner, so do not report an outcome yourself.",
+    parameters: phoneCallParams,
+    meta: {
+      capabilities: ["phone.call"],
+      group: "messaging",
+      describe: (args) => {
+        const a = args as { toNumber?: string; reason?: string };
+        return `phone_call ${a.toNumber ?? ""}: ${(a.reason ?? "").slice(0, 80)}`;
+      },
+    },
+    execute: async (args) => {
+      const toNumber = normalizePhone(args.toNumber);
+      if (!E164.test(toNumber)) return fail(`"${args.toNumber}" is not a phone number in E.164 form (+14155550100).`);
+      const reason = args.reason.trim();
+      if (!reason) return fail("Nothing to say: `reason` is empty. Give Voice AI the task for the call.");
+      if (reason.length > CALL_REASON_MAX) return fail(`The reason is ${reason.length} characters; keep the brief under ${CALL_REASON_MAX}.`);
+      const voicemailMessage = args.voicemailMessage?.trim();
+      if (voicemailMessage && voicemailMessage.length > VOICEMAIL_MESSAGE_MAX) {
+        return fail(`The voicemail message is ${voicemailMessage.length} characters; Inkbox allows ${VOICEMAIL_MESSAGE_MAX}.`);
+      }
+      const call = await deps.channel.placeCall({
+        toNumber,
+        reason,
+        ...(voicemailMessage ? { voicemailMessage } : {}),
+        ...(deps.callOrigination ? { origination: deps.callOrigination } : {}),
+      });
+      const minutes = call.minutesRemaining !== undefined ? ` ${call.minutesRemaining} call minutes left on the plan this month.` : "";
+      return textResult(`Call ${call.id}: ${call.status}.${minutes}`);
+    },
+  });
 }
 
 /**

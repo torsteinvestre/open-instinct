@@ -33,6 +33,15 @@ One directory per skill, named like the skill. The file is always `SKILL.md`.
 Keep everything the skill needs in that one file: `load_skill` returns
 `SKILL.md` only.
 
+A second folder, `<data>/skills` (`/data/skills` on Maritime), belongs to the
+owner. It is read after this one and re-read every 30 seconds. That is where an
+agent installs a skill the owner asks for (`git clone` a skill repo, or write
+the SKILL.md), and it survives image updates because it lives in the data
+directory. The skills here are public playbooks any principal may load; owner
+skills are private to the owner unless their frontmatter adds
+`visibility: public`. A shipped skill wins a name clash, symlinks there are not
+followed, and a SKILL.md over 64 KB is not loaded.
+
 ## Format
 
 ```markdown
@@ -54,6 +63,7 @@ Frontmatter fields, as parsed by `@earendil-works/pi-coding-agent`
 | `name` | no, defaults to the directory name | lowercase `a-z`, `0-9`, hyphens; max 64 chars; no leading, trailing or double hyphens |
 | `description` | yes | max 1024 chars; this is the only text the model sees before deciding to load the skill, so say what the skill does and when to use it |
 | `disable-model-invocation` | no | `true` hides the skill from the prompt index; it can then only be loaded by name (a scheduled prompt or a command). None of ours set it |
+| `visibility` | no | owner skills in `<data>/skills` only: `public` lets every principal see and load it; anything else (or nothing) keeps it owner-only. Shipped skills are always public |
 
 Other keys are allowed and ignored. A SKILL.md without a description is
 skipped with a warning diagnostic.

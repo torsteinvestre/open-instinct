@@ -11,9 +11,9 @@
 export type PrincipalKind = "owner" | "contact" | "agent" | "stranger";
 
 /** Trust tiers, highest first. See docs/PERMISSIONS.md. */
-export type Tier = "owner" | "partner" | "family" | "friend" | "contact" | "stranger";
+export type Tier = "owner" | "staff" | "partner" | "family" | "friend" | "contact" | "stranger";
 
-export const TIER_ORDER: readonly Tier[] = ["owner", "partner", "family", "friend", "contact", "stranger"];
+export const TIER_ORDER: readonly Tier[] = ["owner", "staff", "partner", "family", "friend", "contact", "stranger"];
 
 export interface Principal {
   kind: PrincipalKind;
@@ -64,7 +64,8 @@ export type Capability =
   | "trust.manage"
   | "schedule.manage"
   | "web.read"
-  | "apps.use";
+  | "apps.use"
+  | "phone.call";
 
 /** What a tier gets for a capability by default. */
 export type Permission = "yes" | "ask" | "limit" | "no" | "intro" | "partial";
@@ -243,12 +244,24 @@ export interface OwnerProfile {
   city?: string;
   /** Free-form facts the owner wants the agent to know, shown to the owner only. */
   about?: string;
+  /**
+   * The agent was handed out before its owner's phone was known (a signup form
+   * that asked only for a name). While `phones` is empty, the first person who
+   * texts it 1:1 on iMessage or SMS a message containing `claimCode` becomes the
+   * owner, and this flag and the code are cleared. Without a valid `claimCode`
+   * nobody can claim (fail closed).
+   */
+  claimOnFirstContact?: boolean;
+  /** One-time code the front door gives only to the person who signed up. See owner-claim.ts. */
+  claimCode?: string;
+  /** ISO time after which `claimCode` no longer works. Optional. */
+  claimExpiresAt?: string;
 }
 
 export interface InstinctConfig {
   version: 1;
   owner: OwnerProfile;
-  agent: { name: string; handle?: string; persona?: string };
+  agent: { name: string; handle?: string; persona?: string; /** Inkbox Voice AI voice id for phone calls. INKBOX_VOICE overrides it. */ voice?: string };
   model: { primary: string; fallback?: string; cheap?: string; thinking?: "off" | "minimal" | "low" | "medium" | "high" };
   computer: { mode: "auto" | "desktopd" | "maritime" | "none"; desktopdUrl?: string; maritimeMcpUrl?: string };
   apps: { enabled: boolean; toolkits: string[] };
@@ -284,6 +297,13 @@ export interface InstinctConfig {
     toolLoader?: boolean;
     /** [sunshine:read-receipts] On unless false: a one-to-one iMessage shows "Read" as soon as it arrives. */
     readReceipts?: boolean;
+    /** Text a one-line "on it" on iMessage/SMS when a reply passes the budget, instead of silence until it is done. */
+    ackSlowReplies?: boolean;
+    /**
+     * [sunshine:phone-calls] Off unless true: upstream's phone_call tool and its prompt rule. Calls wait for a
+     * decision on the Inkbox plan, the cost and the law on recording calls.
+     */
+    phoneCalls?: boolean;
   };
 }
 
@@ -319,6 +339,12 @@ export interface ToolMeta {
   group: "messaging" | "owner" | "memory" | "contacts" | "network" | "schedule" | "files" | "computer" | "apps" | "web" | "system";
   /** Extract a USD amount from the args for spend checks, if applicable. */
   amountUsd?: (args: unknown) => number | undefined;
+  /**
+   * The tool writes any "spend" audit entries itself, so the runtime skips its generic one.
+   * Set it on tools that carry the purchase capability but move no money on their own call
+   * (status checks, listings), which would otherwise log empty spend entries.
+   */
+  recordsOwnSpend?: boolean;
   /** Short human description for the audit log. */
   describe?: (args: unknown) => string;
   /**

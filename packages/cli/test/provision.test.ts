@@ -195,6 +195,19 @@ describe("invite", () => {
     expect(r.out).toContain("No INKBOX_ADMIN_API_KEY");
   });
 
+  it("refuses --tier staff without an agent handle, and accepts it with --handle", async () => {
+    const dir = tmpDir();
+    const env = { INSTINCT_DATA_DIR: dir };
+    const bad = await run(["invite", "Research", "--tier", "staff", "--email", "research@team.example"], env);
+    expect(bad.code).toBe(2);
+    expect(bad.err).toContain('Tier "staff" is only for agents');
+    expect(bad.err).toContain("--handle");
+    expect(new ContactStore(new StateDir(dir)).all()).toHaveLength(0);
+    const ok = await run(["invite", "Research", "--tier", "staff", "--handle", "@research-bot"], env);
+    expect(ok.code, ok.err).toBe(0);
+    expect(new ContactStore(new StateDir(dir)).get("research")).toMatchObject({ tier: "staff", agentHandle: "research-bot" });
+  });
+
   it("requires a name and a valid tier", async () => {
     const env = { INSTINCT_DATA_DIR: tmpDir() };
     expect((await run(["invite", "--tier", "friend"], env)).code).toBe(2);

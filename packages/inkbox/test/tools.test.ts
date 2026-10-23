@@ -2,9 +2,9 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, truncateSync
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ContactStore, StateDir, defaultConfig, type InstinctConfig, type OutboundMessage, type Principal, type ToolContext } from "@open-instinct/core";
+import { ContactStore, PolicyEngine, StateDir, defaultConfig, defaultPolicy, type InstinctConfig, type OutboundMessage, type Principal, type ToolContext } from "@open-instinct/core";
 import type { FileSend, InkboxChannel } from "../src/channel.js";
-import { messagingTools, resolveTarget, sendFileReplyTarget, sendFileTool, sendMessageReplyTarget, type MessagingDeps } from "../src/tools.js";
+import { messagingTools, phoneCallTool, resolveTarget, sendFileReplyTarget, sendFileTool, sendMessageReplyTarget, type MessagingDeps } from "../src/tools.js";
 
 let dir: string;
 let contacts: ContactStore;
@@ -364,5 +364,100 @@ describe("send_file", () => {
     await expect(fileTool().execute({ path: "big.bin" }, ctxFor(owner, "imessage:conv_1"))).rejects.toThrow(/capped at 10\.0 MiB/);
     await fileTool().execute({ path: "big.bin", to: "owner", channel: "email" }, ctxFor(owner, "imessage:conv_1"));
     expect(sentFiles[0]?.file.content.length).toBe(10 * 1024 * 1024 + 1);
+  });
+});
+
+describe("phone_call", () => {
+  let placed: Array<Record<string, unknown>>;
+  let phoneChannel: InkboxChannel;
+  beforeEach(() => {
+    placed = [];
+    phoneChannel = {
+      ...channel,
+      placeCall: vi.fn(async (input: Record<string, unknown>) => {
+        placed.push(input);
+        return { id: "call_9", status: "initiated", origination: "shared_imessage_number", minutesRemaining: 12 };
+      }),
+    } as unknown as InkboxChannel;
+  });
+
+  function phone(callOrigination?: "dedicated_number" | "shared_imessage_number" | "dedicated_imessage_number") {
+    const on = { ...config, features: { ...config.features, phoneCalls: true } }; // [sunshine:phone-calls]
+    const t = messagingTools({ channel: phoneChannel, contacts, config: on, ...(callOrigination ? { callOrigination } : {}) }).find((x) => x.spec.name === "phone_call");
+    if (!t) throw new Error("missing phone_call");
+    return t.spec;
+  }
+
+  it("[sunshine:phone-calls] is not offered unless config.features.phoneCalls is true", () => {
+    expect(messagingTools({ channel: phoneChannel, contacts, config }).map((t) => t.spec.name)).not.toContain("phone_call");
+  });
+
+  it("is a messaging tool gated by phone.call only", () => {
+    const spec = phone();
+    expect(spec.meta).toMatchObject({ capabilities: ["phone.call"], group: "messaging" });
+    expect(spec.meta?.describe?.({ toNumber: "+14155550123", reason: "Book a table for 4 at 7pm under Maria" })).toBe("phone_call +14155550123: Book a table for 4 at 7pm under Maria");
+  });
+
+  it("places a hosted-agent call and returns the call id, status and the plan minutes left, nothing else", async () => {
+    const r = await phone().execute({ toNumber: "(415) 555-0123", reason: "  Book a table for 4 at 7pm under Maria. " }, ctxFor(owner, "imessage:conv_1"));
+    expect(r).toEqual({ content: [{ type: "text", text: "Call call_9: initiated. 12 call minutes left on the plan this month." }] });
+    expect(placed).toEqual([{ toNumber: "+14155550123", reason: "Book a table for 4 at 7pm under Maria." }]);
+  });
+
+  it("leaves the minutes out when Inkbox returned none", async () => {
+    phoneChannel = { ...channel, placeCall: vi.fn(async () => ({ id: "call_9", status: "initiated", origination: "shared_imessage_number" })) } as unknown as InkboxChannel;
+    const r = await phone().execute({ toNumber: "+14155550123", reason: "Say hi" }, ctxFor(owner, "imessage:conv_1"));
+    expect(r).toEqual({ content: [{ type: "text", text: "Call call_9: initiated." }] });
+  });
+
+  it("passes the voicemail message and a forced origination through", async () => {
+    await phone("dedicated_number").execute({ toNumber: "+14155550123", reason: "Say hi", voicemailMessage: " Maria will call back. " }, ctxFor(owner, "chat:cli"));
+    expect(placed[0]).toEqual({ toNumber: "+14155550123", reason: "Say hi", voicemailMessage: "Maria will call back.", origination: "dedicated_number" });
+  });
+
+  it("refuses a bad number, an empty brief and an over-long voicemail before placing anything", async () => {
+    const ctx = ctxFor(owner, "chat:cli");
+    const bad = await phone().execute({ toNumber: "Sam Lee", reason: "Say hi" }, ctx);
+    expect(bad).toEqual({ content: [{ type: "text", text: '"Sam Lee" is not a phone number in E.164 form (+14155550100).' }], isError: true });
+    expect((await phone().execute({ toNumber: "12345", reason: "Say hi" }, ctx)).isError).toBe(true);
+    expect(await phone().execute({ toNumber: "+14155550123", reason: "   " }, ctx)).toEqual({
+      content: [{ type: "text", text: "Nothing to say: `reason` is empty. Give Voice AI the task for the call." }],
+      isError: true,
+    });
+    const long = await phone().execute({ toNumber: "+14155550123", reason: "Say hi", voicemailMessage: "v".repeat(1001) }, ctx);
+    expect(long).toEqual({ content: [{ type: "text", text: "The voicemail message is 1001 characters; Inkbox allows 1000." }], isError: true });
+    const essay = await phone().execute({ toNumber: "+14155550123", reason: "r".repeat(2001) }, ctx);
+    expect(essay).toEqual({ content: [{ type: "text", text: "The reason is 2001 characters; keep the brief under 2000." }], isError: true });
+    expect(placed).toEqual([]);
+  });
+
+  it("surfaces Inkbox's refusal as the tool error (a plan limit, for example)", async () => {
+    (phoneChannel.placeCall as unknown as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("Inkbox 402: call minutes exhausted"));
+    await expect(phone().execute({ toNumber: "+14155550123", reason: "Say hi" }, ctxFor(owner, "chat:cli"))).rejects.toThrow(/call minutes exhausted/);
+  });
+
+  it("rejects an unknown origination at construction, before any call", () => {
+    expect(() => phoneCallTool({ channel: phoneChannel, callOrigination: "carrier_pigeon" as never })).toThrow(/unknown call origination "carrier_pigeon"/);
+  });
+
+  it("is held for the owner's yes even when the owner asks, asks for staff, is denied for partners and below, opened by a grant", () => {
+    const spec = phone();
+    const engine = new PolicyEngine(defaultPolicy(), { now: () => new Date("2026-10-16T12:00:00Z") });
+    const args = { toNumber: "+14155550123", reason: "Say hi" };
+    // Never "allow" outright: the owner's own thread can carry text the owner did not write.
+    const ownerAsk = engine.evaluate(owner, spec.meta!, args);
+    expect(ownerAsk.outcome).toBe("ask");
+    if (ownerAsk.outcome !== "ask") return;
+    expect(ownerAsk.approvalPrompt).toBe("phone_call +14155550123: Say hi. Want me to go ahead?");
+    const staff: Principal = { kind: "contact", id: "agent:teammate", tier: "staff", displayName: "Teammate" };
+    expect(engine.evaluate(staff, spec.meta!, args)).toMatchObject({ outcome: "ask", approvalPrompt: "Teammate asks: phone_call +14155550123: Say hi. Want me to go ahead?" });
+    const partner: Principal = { kind: "contact", id: "contact:sam-lee", tier: "partner", displayName: "Sam Lee", contactId: "sam-lee" };
+    expect(engine.evaluate(partner, spec.meta!, args)).toMatchObject({ outcome: "deny", reason: "tier partner may not phone.call" });
+    expect(engine.evaluate(friend, spec.meta!, args).outcome).toBe("deny");
+    expect(engine.evaluate({ kind: "stranger", id: "stranger:+1", tier: "stranger", displayName: "+1" }, spec.meta!, args).outcome).toBe("deny");
+    engine.addGrant({ to: "contact:sam-lee", capabilities: ["phone.call"], note: "may ring the venue" });
+    expect(engine.evaluate(partner, spec.meta!, args).outcome).toBe("allow");
+    const otherFriend: Principal = { ...friend, id: "contact:sam-jones", contactId: "sam-jones", displayName: "Sam Jones" };
+    expect(engine.evaluate(otherFriend, spec.meta!, args).outcome).toBe("deny");
   });
 });

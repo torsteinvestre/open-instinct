@@ -1,6 +1,7 @@
 export * from "./types.js";
 export * from "./state.js";
 export * from "./config.js";
+export * from "./owner-claim.js";
 export * from "./policy.js";
 export * from "./approvals.js";
 export * from "./audit.js";

@@ -121,6 +121,18 @@ describe("approval_settle", () => {
     expect(settled).toEqual([]);
   });
 
+  it("never settles a phone call approval: only the owner's own plain yes dials", async () => {
+    const settled: string[] = [];
+    const { run, text, deps } = setup({ onApprovalSettled: async (a) => void settled.push(a.token) });
+    const call = deps.approvals.create({ conversationKey: "imessage:owner", requestedBy: "owner", summary: "phone_call +14155550100: Book a table for 4 at 7pm under Maria", capability: "phone.call" });
+    expect(text(await run("approval_settle", { decision: "yes" }))).toContain("is a phone call");
+    expect(text(await run("approval_settle", { decision: "yes", token: call.token }))).toContain("only the owner's own yes settles it");
+    expect(text(await run("approval_settle", { decision: "no", token: call.token }))).toContain("is a phone call");
+    expect(deps.approvals.get(call.token)?.status).toBe("pending");
+    expect(settled).toEqual([]);
+    expect(deps.audit.read({ kinds: ["approval"] })).toEqual([]);
+  });
+
   it("asks which one when several are pending and no token is given", async () => {
     const { run, text, deps } = setup();
     const a = deps.approvals.create({ conversationKey: "a2a:1", requestedBy: "agent:x", summary: "intro with X", capability: "owner.relay" });

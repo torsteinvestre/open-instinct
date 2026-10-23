@@ -32,6 +32,7 @@ COPY packages/apps/package.json packages/apps/
 COPY packages/network/package.json packages/network/
 COPY packages/payments/package.json packages/payments/
 COPY packages/ample/package.json packages/ample/
+COPY packages/atomicmail/package.json packages/atomicmail/
 COPY packages/server/package.json packages/server/
 # [sunshine:watcher]
 COPY packages/watcher/package.json packages/watcher/

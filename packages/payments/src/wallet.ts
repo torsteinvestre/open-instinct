@@ -41,6 +41,11 @@ export interface LinkWalletOptions {
   clientSecret: string;
   publishableKey: string;
   redirectUri: string;
+  /**
+   * Prefixed to the OAuth state (`<prefix>.<random>`). A gateway that fronts many agents with one
+   * registered redirect URI reads the prefix (the agent's handle) to route the callback.
+   */
+  statePrefix?: string;
   fetchImpl?: typeof fetch;
   now?: () => Date;
   /** Builds the Link client. Tests inject a stub; production uses `new Link(options)`. */
@@ -65,6 +70,7 @@ export interface StoredTokens {
 export class LinkWallet {
   private readonly state: WalletState;
   private readonly oauth: OAuthClient;
+  private readonly statePrefix: string;
   private readonly now: () => Date;
   private readonly linkFactory: (options: LinkClientOptions) => LinkClientLike;
   private readonly fetchImpl: typeof fetch | undefined;
@@ -85,6 +91,7 @@ export class LinkWallet {
       fetchImpl: opts.fetchImpl ?? globalThis.fetch,
     };
     this.now = opts.now ?? (() => new Date());
+    this.statePrefix = opts.statePrefix ? `${opts.statePrefix.replace(/[^A-Za-z0-9_-]/g, "")}.` : "";
     this.linkFactory = opts.linkFactory ?? defaultLinkFactory;
   }
 
@@ -95,7 +102,7 @@ export class LinkWallet {
   /** Start a connect flow. Writes the verifier and state to secrets/link-oauth.json (0600). */
   authorizeUrl(): { url: string; state: string } {
     const verifier = generateVerifier();
-    const state = generateState();
+    const state = `${this.statePrefix}${generateState()}`;
     const pending: PendingAuthorization = { state, verifier, createdAt: this.now().toISOString() };
     writeSecret(this.pendingPath(), pending);
     const url = buildAuthorizeUrl({

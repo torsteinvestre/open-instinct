@@ -1,7 +1,7 @@
 import type { Capability, Tier } from "@open-instinct/core";
 
 /** Local mirror of core's TIER_ORDER, highest first. */
-export const TIERS: readonly Tier[] = ["owner", "partner", "family", "friend", "contact", "stranger"];
+export const TIERS: readonly Tier[] = ["owner", "staff", "partner", "family", "friend", "contact", "stranger"];
 
 /**
  * Local mirror of the Capability union. Kept here because a TypeScript union has no runtime

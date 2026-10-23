@@ -13,13 +13,14 @@ Open Instinct is unrelated to OpenInstinct, a separate project published by Meri
 3. [Two kinds of API key](#two-kinds-of-api-key)
 4. [The shared router and `connect @handle`](#the-shared-router-and-connect-handle)
 5. [Dedicated lines](#dedicated-lines)
-6. [Webhooks and signing keys](#webhooks-and-signing-keys)
-7. [Contact rules and whitelist mode](#contact-rules-and-whitelist-mode)
-8. [A2A invitations and how our tiers sit on top](#a2a-invitations-and-how-our-tiers-sit-on-top)
-9. [Plan limits](#plan-limits)
-10. [Agent self-signup, for people without an org](#agent-self-signup-for-people-without-an-org)
-11. [Environment variables](#environment-variables)
-12. [What the code does with all this](#what-the-code-does-with-all-this)
+6. [Phone calls](#phone-calls)
+7. [Webhooks and signing keys](#webhooks-and-signing-keys)
+8. [Contact rules and whitelist mode](#contact-rules-and-whitelist-mode)
+9. [A2A invitations and how our tiers sit on top](#a2a-invitations-and-how-our-tiers-sit-on-top)
+10. [Plan limits](#plan-limits)
+11. [Agent self-signup, for people without an org](#agent-self-signup-for-people-without-an-org)
+12. [Environment variables](#environment-variables)
+13. [What the code does with all this](#what-the-code-does-with-all-this)
 
 ## What Inkbox is
 
@@ -120,17 +121,56 @@ itself require a dedicated line. Initiating contact with an unconnected recipien
 a suitable dedicated line and remains subject to the service's sending limits. Groups
 also require a suitable line; group replies use their existing conversation ID.
 
+## Phone calls
+
+Inkbox Voice AI makes phone calls for the agent. The agent hands Inkbox a number and a task brief
+("book a table for 4 at 7pm under Maria; if 7 is full take 7:30; confirm the time back"); Inkbox
+dials, speaks, listens, hangs up, and posts a `call.ended` webhook with the transcript, a verdict
+(completed, no answer, declined, failed) and the action items it noted. The agent never hears
+the audio and never writes the summary: the owner's text is built from the transcript.
+
+What the pieces do:
+
+| Piece | Where | What |
+|---|---|---|
+| `phone_call` tool | `packages/inkbox/src/tools.ts` | `toNumber` (E.164), `reason` (the brief), optional `voicemailMessage`. Places the call in `hosted_agent` mode with `on_voicemail=leave_message` and returns the call id and status, nothing else |
+| `phone.call` capability | `packages/core/src/policy.ts` | `ask` for the owner and for staff, `no` for everyone else. Every call waits for the owner's own plain yes to the exact number and brief, even when the owner asked for it: the owner's thread can carry text the owner did not write (a pasted page, a forwarded email), and a call is outward-facing and billed, so an injected instruction must never dial. `approval_settle` refuses call approvals, as it does payments. Prompt rule 8 tells the agent to call the tool once and wait, and never to call the owner's contacts unasked |
+| Voice AI authority | `placeCall` in `packages/inkbox/src/channel.ts` | pinned to `contact_scoped` on every call. Inkbox lets an organization save a `yolo` authority for its Voice AI; the explicit per-call value downscopes the call so that setting never widens what the voice agent may do with the owner's number and brief |
+| `call.ended` subscription | `DEFAULT_WEBHOOK_EVENTS`, subscribed at `init`, by the gateway at signup, and added to older subscriptions when a self-hosted server boots (`ensureWebhookSubscription`) or the gateway boots (`backfillWebhookEvents`, one `ensureWebhookEvents` per ready user) | the only call event the agent listens to |
+| The report | `packages/inkbox/src/calls.ts` | one text to the owner: the outcome in a sentence, the last turns of the transcript, then the action items. Delivered through the runtime's owner route, so a dashboard-only owner gets it too. When the webhook's inline transcript is `null` the verbatim transcript is fetched with the identity key first |
+| Voice | `INKBOX_VOICE` or `config.json` `agent.voice` | at boot the server sets the identity's Voice AI config: the voice and a short instruction ("You are <owner>'s assistant calling on their behalf; be brief, polite, confirm names and times, never share the owner's card details or personal data"). No voice configured: the org default voice, config untouched |
+
+Where the call comes from (`origination`), in order:
+
+1. `INKBOX_CALL_ORIGINATION`, when set: `dedicated_number` (the identity's own local number; it must have one),
+   `shared_imessage_number` (the organization's shared iMessage pool) or `dedicated_imessage_number`
+   (the identity's dedicated iMessage line).
+2. Otherwise the identity's dedicated iMessage line when it has one, else the shared iMessage pool.
+   The caller id the owner's contacts already know is the one that calls them.
+
+Plan caveats, from the Inkbox pricing page at the time of writing: the Developer plan has one local number
+and 30 call minutes a month; the Startup plan 9 numbers. Calls are US numbers. Whether the shared
+iMessage line can originate calls on your organization's plan is not stated on the pricing page:
+confirm it with Inkbox (or place one test call to your own phone) before relying on it, and watch the
+`rate_limit.minutes_remaining` field Inkbox returns with every placed call. A call refused by the plan
+surfaces as the tool's error, which the agent reports plainly. The tool result also carries the
+`minutes_remaining` figure when Inkbox returns one, so the agent can tell the owner when the plan is nearly out.
+
+Calls are recorded and transcribed by Inkbox. Laws on recording a call and on telling the other party vary by
+jurisdiction (some require every party's consent); you are responsible for the calls your agent places, so
+check the rules where you and the people it calls are.
+
 ## Webhooks and signing keys
 
 Inkbox tells the agent about new messages by posting HTTP webhooks. There is no polling.
 
 ### Subscriptions
 
-A subscription is per identity and names a URL plus a list of event types. Open Instinct subscribes these eight:
+A subscription is per identity and names a URL plus a list of event types. Open Instinct subscribes these nine:
 
 ```
 imessage.received, imessage.reaction_received, text.received, message.received,
-a2a.task.created, a2a.task.message, a2a.task.canceled, a2a.sent_task.updated
+a2a.task.created, a2a.task.message, a2a.task.canceled, a2a.sent_task.updated, call.ended
 ```
 
 | Event | Channel | What the agent sees |
@@ -142,6 +182,7 @@ a2a.task.created, a2a.task.message, a2a.task.canceled, a2a.sent_task.updated
 | `a2a.task.created`, `a2a.task.message` | A2A | another agent is asking something |
 | `a2a.task.canceled` | A2A | the caller gave up |
 | `a2a.sent_task.updated` | A2A | a reply to a task our agent sent |
+| `call.ended` | phone | a call the agent placed is over: outcome, transcript, action items. Reported to the owner, never shown to the model |
 
 Delivery lifecycle events (`*.sent`, `*.delivered`, `*.failed`) are not subscribed, and the parser ignores them if they arrive.
 
@@ -250,7 +291,7 @@ The two gates compared:
 | Decides | whether a message or task is delivered | what the sender may ask for |
 | Lives in | Inkbox, per identity | `policy.json` and `contacts.json` in your data directory |
 | Edited with | the admin key, the console, `instinct invite --handle` | `instinct trust`, `instinct invite`, or plain language to the agent |
-| Granularity | allow or block | six tiers plus scoped grants |
+| Granularity | allow or block | seven tiers plus scoped grants |
 
 ## A2A invitations and how our tiers sit on top
 
@@ -353,6 +394,8 @@ Each of these is read by the server, the CLI or the gateway. Nothing else in the
 | `INKBOX_SIGNING_KEY` | same, or by hand | the server, the gateway | webhook verification. Also read from `secrets/webhook.json` |
 | `INKBOX_BASE_URL` | you | CLI, server, gateway | Inkbox API origin used consistently for provisioning, identity, messaging, hydration and A2A. Default `https://inkbox.ai` |
 | `INSTINCT_TUNNEL` | `dev --tunnel`, or you in `deploy/.env` | the server | `1` opens the tunnel to a webhook-only listener |
+| `INKBOX_VOICE` | you | the server | a Voice AI voice id (`instinct` has no picker yet; see the console's voice list). Set at boot with the assistant instructions. Unset: the org default voice |
+| `INKBOX_CALL_ORIGINATION` | you | the server | force where `phone_call` dials from: `dedicated_number`, `shared_imessage_number` or `dedicated_imessage_number`. Unset: the identity's iMessage line |
 
 Without `INKBOX_API_KEY` and `INKBOX_AGENT_HANDLE` the agent still boots. Replies go to a console outbox and are printed. That is how local development without a phone works.
 
@@ -368,6 +411,7 @@ The `@open-instinct/inkbox` package wraps the pieces above. The [package README]
 | `InkboxInboundHydrator` | conversation membership, full mail bodies, attachment retrieval | the server before runtime admission |
 | `InkboxChannel` | iMessage, SMS and email sends, typing, tapbacks, read receipts | the runtime's outbox |
 | `InkboxA2A` | A2A send and reply | the network tools `ask_instinct` and `reply_instinct` |
+| `phone_call`, `parseCallEnded`, `handleCallEnded` | Voice AI outbound calls, transcripts, the `call.ended` event, hosted-agent config | the messaging tools; the server's webhook routes; boot (voice) |
 
 Where things end up on disk, so you know what to back up:
 

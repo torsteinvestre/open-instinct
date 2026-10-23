@@ -140,8 +140,14 @@ The agent sees one line per skill (name and description) and reads the file only
 task matches, so the description is what decides whether a skill is used.
 
 The folder is `<repo>/skills` in development and `/app/skills` in the Docker image. To use
-your own folder, set `INSTINCT_SKILLS_DIR=/path/to/skills` on the server. One folder is
-loaded; put your skills next to the shipped ones or copy the ones you want into yours.
+your own folder instead, set `INSTINCT_SKILLS_DIR=/path/to/skills` on the server. A second
+folder, `<data>/skills`, is always read after it and re-read every 30 seconds: a skill the
+owner (or the agent, when asked) puts there, as `<data>/skills/<name>/SKILL.md`, is in the
+index within 30 seconds. Shipped skills win: an owner skill with the same name as one is
+skipped (the log says so). Owner skills are private by default: only the owner sees them in
+the index or can load them. To let contacts and strangers use one too, add
+`visibility: public` to its frontmatter. Symlinks inside the folder are not followed, the
+search goes three folders deep, and a SKILL.md over 64 KB is not loaded.
 
 ## 6. Edit what it remembers
 
@@ -160,7 +166,7 @@ food, travel and scheduling preferences there and keep medical or financial note
 
 ## 7. Change who may ask for what
 
-Six tiers (owner, partner, family, friend, contact, stranger) and a table of what each tier
+Seven tiers (owner, staff, partner, family, friend, contact, stranger) and a table of what each tier
 may do, in [PERMISSIONS.md](PERMISSIONS.md). Three ways to change it:
 
 ```bash
@@ -234,9 +240,11 @@ The data directory is `/data` inside the agent's microVM, and the same files app
 - Tiers and grants: the policy tools (`trust_set_tier`, `trust_grant`) work over text, so
   "Sam is my partner" or "Sam can book us dinner this week" does the same as the CLI.
 
-Skills ship inside the image (`deploy/Dockerfile.agent` copies `skills/` to `/app/skills`),
-so a new skill means a new image, or an `INSTINCT_SKILLS_DIR` that points at a folder under
-`/data` you maintain yourself.
+Skills ship inside the image (`deploy/Dockerfile.agent` copies `skills/` to `/app/skills`).
+A skill that should not wait for a new image goes under `/data/skills/<name>/SKILL.md`:
+the agent can put it there itself when you ask ("install the haiku skill from this repo"),
+and it is live within 30 seconds. It is yours alone unless its frontmatter says
+`visibility: public` (see section 5).
 
 
 Two more layers are always present: **reach** (everything happens in this chat: connect links, files and takeover links travel through the thread) and **setup** (what is set up right now, so the agent says exactly what is missing instead of guessing). Both are built in; `instinct prompt` shows them.

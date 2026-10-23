@@ -106,7 +106,7 @@ export const HELP_GROUPS: HelpGroup[] = [
       {
         name: "trust",
         usage: "trust list | set <contact> <tier> | grant <contact> <cap,cap> [--until YYYY-MM-DD] [--max-usd N] [--purpose text] [--note text] | revoke <grantId>",
-        summary: "Change tiers and scoped grants. Tiers: partner, family, friend, contact, stranger.",
+        summary: "Change tiers and scoped grants. Tiers: staff (agents only: needs an agent handle), partner, family, friend, contact, stranger.",
         example: 'instinct trust grant sam-lee calendar.write,plans.commit --until 2026-10-12 --max-usd 150 --note "dinner this week"',
       },
     ],

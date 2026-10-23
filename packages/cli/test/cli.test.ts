@@ -185,6 +185,26 @@ describe("trust", () => {
     expect((await run(["trust", "revoke", grant.id], env)).code).toBe(1);
   });
 
+  it("set refuses staff for a contact without an agent handle, new or existing, and allows it with one", async () => {
+    const dir = tmpDir();
+    const env = { INSTINCT_DATA_DIR: dir };
+    const fresh = await run(["trust", "set", "Research", "staff"], env);
+    expect(fresh.code).toBe(2);
+    expect(fresh.err).toContain('Tier "staff" is only for agents');
+    expect(new ContactStore(new StateDir(dir)).all()).toHaveLength(0);
+
+    await run(["trust", "set", "Sam Lee", "friend"], env);
+    const existing = await run(["trust", "set", "sam-lee", "staff"], env);
+    expect(existing.code).toBe(2);
+    expect(existing.err).toContain("Sam Lee has no agent handle");
+    expect(new ContactStore(new StateDir(dir)).get("sam-lee")?.tier).toBe("friend");
+
+    new ContactStore(new StateDir(dir)).upsert({ name: "Research", agentHandle: "research-bot" });
+    const ok = await run(["trust", "set", "research", "staff"], env);
+    expect(ok.code, ok.err).toBe(0);
+    expect(new ContactStore(new StateDir(dir)).get("research")?.tier).toBe("staff");
+  });
+
   it("grant refuses unknown capabilities and unknown contacts", async () => {
     const env = { INSTINCT_DATA_DIR: tmpDir() };
     await run(["trust", "set", "Sam", "friend"], env);

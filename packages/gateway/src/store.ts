@@ -64,7 +64,9 @@ export class UserStore {
     return undefined;
   }
 
+  /** A record whose phone is not known yet (`""`) is never matched. */
   byPhone(phone: string): UserRecord | undefined {
+    if (!phone) return undefined;
     for (const u of this.load().values()) if (u.phone === phone) return clone(u);
     return undefined;
   }

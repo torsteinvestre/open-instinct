@@ -7,12 +7,17 @@
  * bound to the carrier or to the process (iMessage and SMS from the owner's phone, the
  * local chat endpoint, scheduled and system runs). An email whose From matches the owner
  * is reduced to the `owner:email` principal at tier partner, because a From header can be
- * forged and the mail webhook carries no SPF/DKIM/DMARC result. The literal sender
- * `owner` is never a sentinel on a network channel.
+ * forged and the mail webhook carries no SPF/DKIM/DMARC result. For the same reason no
+ * email sender ever resolves above OWNER_EMAIL_TIER: a forged From of a staff contact
+ * gets partner at most. The `staff` tier applies only to a contact's agent over A2A,
+ * where Inkbox authenticates the caller handle; the same contact reached by phone or
+ * email is a `contact` principal capped at partner. The literal sender `owner` is never
+ * a sentinel on a network channel.
  */
 import { parsePhoneNumberFromString, type CountryCode } from "libphonenumber-js"; // [sunshine:phone]
 import type { ContactStore } from "./contacts.js";
-import type { Contact, InboundMessage, InstinctConfig, Principal } from "./types.js";
+import { TIER_ORDER } from "./types.js";
+import type { Contact, InboundMessage, InstinctConfig, Principal, Tier } from "./types.js";
 
 /** [sunshine:phone] ISO 3166 country code ("NO", "SE", "GB", "US") used to read numbers written without one. */
 export type PhoneCountry = CountryCode;
@@ -74,8 +79,25 @@ export function looksLikePhone(s: string): boolean {
 /** Principal id for the owner writing by email: recognised, but not trusted as the owner. */
 export const OWNER_EMAIL_PRINCIPAL_ID = "owner:email";
 
-/** Tier the owner's email address gets. Partner excludes bash, files, computer, email.read and memory. */
-export const OWNER_EMAIL_TIER = "partner";
+/**
+ * Tier the owner's email address gets, and the highest tier any email sender can reach.
+ * Partner excludes bash, files, computer, email.read and memory.
+ */
+export const OWNER_EMAIL_TIER = "partner" satisfies Tier;
+
+/** Highest tier a contact reached by phone, email or a bare handle (anything but A2A) can hold. */
+export const NON_AGENT_MAX_TIER = "partner" satisfies Tier;
+
+/** `tier`, lowered to `max` when it is above it. Never raises a tier. */
+export function capTierValue(tier: Tier, max: Tier): Tier {
+  return TIER_ORDER.indexOf(tier) < TIER_ORDER.indexOf(max) ? max : tier;
+}
+
+/** A copy of the principal with its tier lowered to `max` when it is above it. */
+export function capTier(p: Principal, max: Tier): Principal {
+  const tier = capTierValue(p.tier, max);
+  return tier === p.tier ? p : { ...p, tier };
+}
 
 /** Channels where a message from the owner's address really is the owner. */
 export const OWNER_VERIFIED_CHANNELS: ReadonlySet<InboundMessage["channel"]> = new Set(["imessage", "sms", "chat", "scheduled", "system"]);
@@ -112,11 +134,12 @@ function ownerByEmailPrincipal(config: InstinctConfig, email: string): Principal
   };
 }
 
+/** A contact speaking for themselves. `staff` is for agents over A2A only, so it is capped here. */
 function contactPrincipal(c: Contact): Principal {
   const p: Principal = {
     kind: "contact",
     id: `contact:${c.id}`,
-    tier: c.tier,
+    tier: capTierValue(c.tier, NON_AGENT_MAX_TIER),
     displayName: c.name,
     contactId: c.id,
   };
@@ -152,6 +175,18 @@ function strangerPrincipal(msg: InboundMessage, address: string): Principal {
 }
 
 export function resolvePrincipal(msg: InboundMessage, config: InstinctConfig, contacts: ContactStore): Principal {
+  const p = resolveUncapped(msg, config, contacts);
+  // A From header can be forged and the mail webhook carries no SPF/DKIM/DMARC result, so
+  // whoever an email claims to be, it never runs above OWNER_EMAIL_TIER.
+  const from = (msg.from ?? "").trim();
+  if (msg.channel === "email" && p.kind === "owner") return ownerByEmailPrincipal(config, from);
+  if (msg.channel === "email" || (msg.channel !== "a2a" && p.kind !== "owner" && looksLikeEmail(from))) {
+    return capTier(p, OWNER_EMAIL_TIER);
+  }
+  return p;
+}
+
+function resolveUncapped(msg: InboundMessage, config: InstinctConfig, contacts: ContactStore): Principal {
   const from = (msg.from ?? "").trim();
 
   // Dashboard chat, scheduled jobs and system events are always the owner speaking. These

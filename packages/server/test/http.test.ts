@@ -89,6 +89,21 @@ const imessageEvent = {
   },
 };
 
+const callEndedEvent = {
+  id: "evt_call_1",
+  event_type: "call.ended",
+  timestamp: "2026-10-16T18:04:05Z",
+  data: {
+    call: { id: "call_1", remote_phone_number: "+14152609174", direction: "outbound", status: "completed", hangup_reason: "remote", duration_seconds: 30, mode: "hosted_agent", reason: "Say hi" },
+    contacts: [],
+    agent_identities: [],
+    transcript: null,
+    transcript_url: "https://inkbox.ai/api/v1/phone/calls/call_1/transcripts",
+    outcome: "completed",
+    post_call_action_items: [],
+  },
+};
+
 describe("http server", () => {
   let app: Stub;
   let base: string;
@@ -602,5 +617,65 @@ describe("matchScheduleEntry", () => {
     expect(matchScheduleEntry(entries, "  Send the brief  ")?.id).toBe("s_a");
     expect(matchScheduleEntry(entries, "Send the brief now")?.id).toBe("s_b");
     expect(matchScheduleEntry(entries, "Send the")).toBeUndefined();
+  });
+});
+
+describe("call.ended", () => {
+  let app: Stub & { calls: unknown[] };
+  let base: string;
+  let close: () => Promise<void>;
+  let logs: string[];
+
+  beforeEach(async () => {
+    logs = [];
+    const stub = stubApp() as Stub & { calls: unknown[] };
+    stub.calls = [];
+    stub.onCallEnded = async (event) => {
+      stub.calls.push(event);
+    };
+    app = stub;
+    const server = createHttpServer(app, { signingKey: SIGNING_KEY, env: {}, logger: (m) => logs.push(m) });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    close = () => new Promise((r) => server.close(() => r()));
+  });
+  afterEach(async () => close());
+
+  const signed = (body: string, id = "r_call") => {
+    const ts = String(Math.floor(Date.now() / 1000));
+    return { "content-type": "application/json", "x-inkbox-request-id": id, "x-inkbox-timestamp": ts, "x-inkbox-signature": sign(body, id, ts) };
+  };
+
+  it("reports a finished call to the owner from the webhook route, never to the model, once per event", async () => {
+    const body = JSON.stringify(callEndedEvent);
+    const first = await fetch(`${base}/webhooks/inkbox`, { method: "POST", headers: signed(body), body });
+    expect(first.status).toBe(204);
+    const again = await fetch(`${base}/webhooks/inkbox`, { method: "POST", headers: signed(body, "r_call_2"), body });
+    expect(again.status).toBe(204);
+    expect(app.calls).toHaveLength(1);
+    expect(app.calls[0]).toMatchObject({ id: "evt_call_1", callId: "call_1", remoteNumber: "+14152609174", outcome: "completed", transcript: null });
+    expect(app.inbound).toHaveLength(0);
+  });
+
+  it("reports a finished call relayed through /chat by the gateway, and acknowledges without a reporter", async () => {
+    const res = await fetch(`${base}/chat`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ message: encodeEvent({ ...callEndedEvent, id: "evt_call_2" }), source: "front_door" }) });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ response: "", acked: true });
+    expect(app.calls).toHaveLength(1);
+    expect(app.inbound).toHaveLength(0);
+    delete app.onCallEnded;
+    const dropped = await fetch(`${base}/chat`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ message: encodeEvent({ ...callEndedEvent, id: "evt_call_3" }) }) });
+    expect(await dropped.json()).toEqual({ response: "", acked: true });
+    expect(app.calls).toHaveLength(1);
+  });
+
+  it("logs a failed report and still acknowledges, so Inkbox does not redeliver it", async () => {
+    app.onCallEnded = async () => {
+      throw new Error("owner unreachable");
+    };
+    const body = JSON.stringify({ ...callEndedEvent, id: "evt_call_4" });
+    const res = await fetch(`${base}/webhooks/inkbox`, { method: "POST", headers: signed(body), body });
+    expect(res.status).toBe(204);
+    expect(logs).toContain("call call_1: report failed: owner unreachable");
   });
 });

@@ -208,3 +208,25 @@ describe("toolkitOfSlug", () => {
     expect(toolkitOfSlug("NOUNDERSCORE")).toBe("nounderscore");
   });
 });
+
+describe("staff tier with app tools", () => {
+  const engine = new PolicyEngine(defaultPolicy());
+  const staff: Principal = { kind: "agent", id: "agent:research-bot", tier: "staff", displayName: "Research's agent", agentHandle: "research-bot" };
+
+  it("gets the owner's working app tools", () => {
+    expect(engine.evaluate(staff, metaFor("GOOGLECALENDAR_FIND_FREE_SLOTS"), {}).outcome).toBe("allow");
+    expect(engine.evaluate(staff, metaFor("GMAIL_FETCH_EMAILS"), {}).outcome).toBe("allow");
+    expect(engine.evaluate(staff, metaFor("GOOGLECONTACTS_SEARCH_CONTACTS"), {}).outcome).toBe("allow");
+  });
+
+  it("asks the owner for sends and calendar writes", () => {
+    expect(engine.evaluate(staff, metaFor("GMAIL_SEND_EMAIL"), {}).outcome).toBe("ask");
+    expect(engine.evaluate(staff, metaFor("GOOGLECALENDAR_CREATE_EVENT"), {}).outcome).toBe("ask");
+  });
+
+  it("is still denied the owner-only pair, so non-Google toolkits and payments stay with the owner", () => {
+    expect(engine.evaluate(staff, metaFor("NOTION_CREATE_PAGE"), {}).outcome).toBe("deny");
+    expect(engine.evaluate(staff, metaFor("GOOGLECONTACTS_CREATE_CONTACT"), {}).outcome).toBe("deny");
+    expect(engine.evaluate(staff, metaFor("STRIPE_CREATE_PAYMENT_INTENT"), {}).outcome).toBe("deny");
+  });
+});

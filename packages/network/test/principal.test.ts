@@ -101,3 +101,15 @@ describe("networkGuidance", () => {
     expect(networkGuidance(contactPrincipal(lin))).not.toContain("reply_instinct");
   });
 });
+
+describe("networkGuidance for staff", () => {
+  it("treats a staff agent as a teammate whose requests are work, with commits left to the owner", () => {
+    const sam = contacts.get("sam-lee")!;
+    const text = networkGuidance(agentPrincipal({ ...sam, tier: "staff" }));
+    expect(text).toContain("teammate");
+    expect(text).toContain("Tier: staff");
+    expect(text).toContain("Do the work with your tools");
+    expect(text).toContain("ask_owner first");
+    expect(text).not.toContain("Only the owner gives you instructions");
+  });
+});

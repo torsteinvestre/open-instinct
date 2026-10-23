@@ -2,7 +2,7 @@
 
 This fork (torsteinvestre/open-instinct) runs as **Sunshine**. It is based on
 [mariagorskikh/open-instinct](https://github.com/mariagorskikh/open-instinct) at commit `79a144a`,
-with upstream merged in up to `9d262da` on 2026-10-15 (see [Upstream merges](#upstream-merges)).
+with upstream merged in up to `cb3d97c` on 2026-10-23 (see [Upstream merges](#upstream-merges)).
 This page lists what the fork adds, so each change can be found, understood and removed.
 
 ## Tagged changes
@@ -47,6 +47,12 @@ that texted the owner with a tool sends no final reply, and `NO_REPLY` is never 
 **A new tool that texts the owner or the current conversation** must declare `replyTarget`,
 or the double message comes back for it. The tests list which tools declare it, so a new one
 shows up there.
+
+**With upstream's echo rule** (merged 2026-10-23: a reply is dropped when it repeats the thread's last
+bubble word for word and the text that caused it was queued before that bubble went out), the fork's
+rules run first in `deliver` (the lone tapback, then this guard), upstream's after them; a test covers
+a queued "thanks" meeting both. Known gap, not new: the echo rule only knows bubbles the runtime sent
+itself, so a queued text whose answer repeats a bubble sent with `send_message` still goes out.
 
 ### `[sunshine:silent-reply]`: the stay-quiet word
 
@@ -849,6 +855,26 @@ summaries of Norwegian email included; with even one English message first, the 
 history (default), `PLAN=fresh` for the empty-thread weak spot, `GRADER_CHECK=1` for the grader itself.
 Run it after prompt changes. **To remove.** Delete the file.
 
+### `[sunshine:phone-calls]`: upstream's phone calls stay off
+
+**Why.** Upstream added phone calls through Inkbox Voice AI (2026-10-15/16): a `phone_call` tool every agent
+with Inkbox gets, and rule 8 in every system prompt. Every call waits for the owner's yes, so it can never dial
+by itself, but Sunshine has not decided on the Inkbox plan it needs, the minutes it costs, or the law on
+recorded calls in Norway, and an offered tool the plan may not support invites "I'll call them" promises.
+
+**What the fork adds.** `config.features.phoneCalls` (env `INSTINCT_PHONE_CALLS=1`), off unless true:
+`messagingTools` (`packages/inkbox/src/tools.ts`) leaves `phone_call` out, and `rulesSection`
+(`packages/core/src/prompt.ts`) leaves rule 8 out. The rest of upstream's call code (the `call.ended` text to
+the owner, the voice setting, the gateway adding `call.ended` to webhook subscriptions when it holds the Inkbox
+admin key) stays as upstream wrote it; with no calls placed it never fires. Like other config features, the env
+var seeds `config.json` on first boot; an existing agent needs `features.phoneCalls: true` in it.
+
+**Tests.** `packages/inkbox/test/tools.test.ts` (not offered by default; upstream's call tests switch it on) and
+`packages/core/test/prompt.test.ts` (rule 8 only with the switch).
+
+**To remove** (calls on for everyone, as upstream). Delete the tagged lines in `tools.ts`, `prompt.ts`,
+`types.ts`, `config.ts` and the two tests.
+
 ### Long replies (investigated 2026-10-15, nothing changed)
 
 A money question ("what should be considered: fund vs apartment") got a 1,435-character, seven-point
@@ -861,6 +887,48 @@ were answered in full and the main risk kept in every version. Upstream's line s
 skills list, memory (`[sunshine:memory]`), the thinking level.
 
 ## Upstream merges
+
+### 2026-10-23: upstream up to `cb3d97c`
+
+**What came in** (28 commits, 95 files): the `staff` tier (another agent working for the same owner, A2A
+only, never shell, files or computer; email senders capped at `partner`); a safer `contacts.json` (each entry
+checked on load, a broken file keeps the old list and blocks saves); owner-installed skills in `<data>/skills`,
+re-read every 30 s, private to the owner unless marked public, and the skills index built per person; the
+history fold never starts at a tool result, and older screenshots become a one-line placeholder in a fold;
+"Hit a snag on my end (reason)" instead of a raw error; a narrow echo rule for queued texts; an optional "on it"
+text (`INSTINCT_ACK_SLOW_REPLIES`, off); a front door that lets the first texter with a one-time code claim an
+agent (off); Atomic Mail (only with its key); phone calls through Inkbox Voice AI; dedicated iMessage pool
+helpers; Link payment fixes; "Want me to go ahead?" once; a `maritime` skill.
+
+**Left out.** The `maritime` skill (it tells anyone who asks where the agent runs, with Maritime's prices and
+signup links; not for a product sold as Sunshine). Phone calls stay off: `[sunshine:phone-calls]`.
+
+**Collisions** (11 files). Mostly both sides adding in one place, kept both: settings flags, imports, contact
+store options (`phoneCountry` and `warn`), the bodies of `foldInSteps` and upstream's `nextUserTurn` comment.
+Fitted by hand:
+- `handleInbound`: upstream's owner claim runs first, then `[sunshine:read-receipts]` with the resulting
+  principal, so a claimed owner gets "Read" too.
+- The skills: `[sunshine:onboarding]` reads the welcome from upstream's live skill catalog (`skillGuide(skillCatalog.list(), "onboarding")`).
+- The gateway: upstream named its page renderer `page`, the name the fork uses for the brand options; it is
+  `messagePage` here and draws the branded page by default (`[sunshine:gateway-settings]`).
+- Both sides had added the same `desktop` option to Maritime agents; upstream's is kept, the fork keeps only
+  `INSTINCT_AGENT_DESKTOP` feeding it.
+- `recordToolCall`: the fork's reply-guard and tapback flags, then upstream's `recordsOwnSpend`.
+
+**Checked before committing** (all free).
+- Upstream's fold fix applies to the fork's `foldInSteps` too: a run with two screenshots of 300,000 characters
+  left a tool result without its call before the merge (the API refuses that: every desktop step fails) and a
+  valid history after. Upstream's screenshot placeholder runs only inside a fold, which `[sunshine:stable-cache]`
+  does rarely, so it does not cost a cache write per message.
+- Contacts with Norwegian numbers, written either way, survive the new check on load and stay findable (new
+  test in `contacts.test.ts`).
+- The fork's reply rules run before upstream's echo rule (new test, see `[sunshine:reply-guard]`).
+- The real server booted with a stand-in model, its Anthropic requests built by Pi and compared byte for byte
+  (Anthropic's free token counter, no model run): before and after the merge, the system prompt and the 24 tools
+  of an owner chat are identical (same fingerprints and token counts, 11,017 for a first message), each request
+  only adds to the one before, also after a tool load, and `phone_call` is not offered.
+- All tests (about 1,380) and the smoke test pass.
+No real-model scenario was run: what the model sees in an ordinary owner chat did not change.
 
 ### 2026-10-15: upstream up to `9d262da`
 
@@ -914,7 +982,8 @@ docs cannot carry a comment; they are listed under each change instead.
 ### `[sunshine:gateway-settings]`: settings for new agents (`ba288a7`)
 - **What:** `GATEWAY_BRAND_NAME`, `INSTINCT_AGENT_DESKTOP`, `INSTINCT_MODEL`. New agents get the brand
   as their name (Inkbox display name, `INSTINCT_AGENT_NAME`, Maritime persona), the chosen model, and
-  the desktop setting; every page shows the brand.
+  the desktop setting; every page shows the brand. Since 2026-10-23 the `desktop` option itself is
+  upstream's; the fork's part is the env var feeding it, and the branded `messagePage` in `server.ts`.
 - **Where:** `packages/gateway/src/brand.ts` (whole file), `gateway/src/main.ts`,
   `gateway/src/provision.ts`, `gateway/src/server.ts`, `gateway/src/pages.ts`.
 - **If it breaks:** new agents fail to be created at Maritime, or run the wrong model or name.

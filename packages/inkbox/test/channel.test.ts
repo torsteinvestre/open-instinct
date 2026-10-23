@@ -314,3 +314,99 @@ describe("InkboxChannel.sendFile", () => {
     expect(sends("/api/v1/mail/mailboxes/maria-instinct@inkbox.ai/messages")).toHaveLength(0);
   });
 });
+
+describe("InkboxChannel phone calls", () => {
+  const callRow = (over: Record<string, unknown> = {}) => ({
+    id: "call_1",
+    local_phone_number: null,
+    remote_phone_number: "+14152609174",
+    direction: "outbound",
+    status: "initiated",
+    client_websocket_url: null,
+    hangup_reason: null,
+    started_at: null,
+    ended_at: null,
+    is_blocked: false,
+    origin: "shared_imessage_number",
+    mode: "hosted_agent",
+    reason: "Say hi",
+    hosted_agent_authority_mode: "contact_scoped",
+    voicemail_detection: "enabled",
+    on_voicemail: "leave_message",
+    post_call_action_items: [],
+    forwardings: [],
+    created_at: "2026-10-16T18:00:00Z",
+    updated_at: "2026-10-16T18:00:00Z",
+    rate_limit: { calls_used: 1, calls_remaining: 9, calls_limit: 10, minutes_used: 3, minutes_remaining: 27, minutes_limit: 30 },
+    ...over,
+  });
+
+  it("places a Voice AI call from the shared iMessage pool by default, leaving a voicemail message", async () => {
+    fake = fakeFetch({ ...sdkRoutes({ imessage_number: null }), "POST /api/v1/phone/place-call": { body: callRow() } });
+    vi.stubGlobal("fetch", fake.fetchImpl);
+    const out = await channel().placeCall({ toNumber: "+14152609174", reason: "Say hi", voicemailMessage: "Maria says hi." });
+    expect(out).toEqual({ id: "call_1", status: "initiated", origination: "shared_imessage_number", minutesRemaining: 27 });
+    expect(sends("/api/v1/phone/place-call")[0]?.body).toEqual({
+      to_number: "+14152609174",
+      origination: "shared_imessage_number",
+      mode: "hosted_agent",
+      // Pinned on every call, so an org-level "yolo" authority never widens what Voice AI may do.
+      hosted_agent_authority_mode: "contact_scoped",
+      on_voicemail: "leave_message",
+      voicemail_message: "Maria says hi.",
+      agent_identity_id: "ident_1",
+      reason: "Say hi",
+    });
+  });
+
+  it("prefers the identity's dedicated iMessage line, and dials from the phone number only when told to", async () => {
+    const dedicated = { id: "im_1", number: "+16505550199", type: "dedicated_outbound" };
+    fake = fakeFetch({ ...sdkRoutes({ imessage_number: dedicated }), "POST /api/v1/phone/place-call": (req: Recorded) => ({ body: callRow({ origin: (req.body as { origination: string }).origination }) }) });
+    vi.stubGlobal("fetch", fake.fetchImpl);
+    const ch = channel();
+    expect((await ch.placeCall({ toNumber: "+14152609174", reason: "Say hi" })).origination).toBe("dedicated_imessage_number");
+    expect(sends("/api/v1/phone/place-call")[0]?.body).toMatchObject({ origination: "dedicated_imessage_number", agent_identity_id: "ident_1" });
+    expect((sends("/api/v1/phone/place-call")[0]?.body as Record<string, unknown>).from_number).toBeUndefined();
+    await ch.placeCall({ toNumber: "+14152609174", reason: "Say hi", origination: "dedicated_number" });
+    expect(sends("/api/v1/phone/place-call")[1]?.body).toMatchObject({ origination: "dedicated_number", from_number: "+16505550123", hosted_agent_authority_mode: "contact_scoped" });
+  });
+
+  it("refuses dedicated_number on an identity without a phone number", async () => {
+    fake = fakeFetch(sdkRoutes({ phone_number: null }));
+    vi.stubGlobal("fetch", fake.fetchImpl);
+    await expect(channel().placeCall({ toNumber: "+14152609174", reason: "Say hi", origination: "dedicated_number" })).rejects.toThrow(/no dedicated phone number/);
+    expect(sends("/api/v1/phone/place-call")).toHaveLength(0);
+  });
+
+  it("reads a transcript in sequence order and drops empty rows", async () => {
+    fake = fakeFetch({
+      ...sdkRoutes(),
+      "GET /api/v1/phone/calls/call_1/transcripts": {
+        body: [
+          { id: "t2", call_id: "call_1", seq: 2, ts_ms: 2000, party: "remote", text: " Hi, this is Maria. ", created_at: "2026-10-16T18:00:02Z" },
+          { id: "t1", call_id: "call_1", seq: 1, ts_ms: 0, party: "local", text: "Hello, this is a test call.", created_at: "2026-10-16T18:00:00Z" },
+          { id: "t3", call_id: "call_1", seq: 3, ts_ms: 3000, party: "system", text: "", created_at: "2026-10-16T18:00:03Z" },
+        ],
+      },
+    });
+    vi.stubGlobal("fetch", fake.fetchImpl);
+    expect(await channel().callTranscript("call_1")).toEqual([
+      { party: "local", text: "Hello, this is a test call." },
+      { party: "remote", text: "Hi, this is Maria." },
+    ]);
+  });
+
+  it("sets the Voice AI voice and instructions for this identity", async () => {
+    fake = fakeFetch({
+      ...sdkRoutes(),
+      "PUT /api/v1/phone/hosted-agent-config": { body: { agent_identity_id: "ident_1", voice: "ember", effective_voice: "ember", effective_model: "m", instructions: "x", authority_mode: "contact_scoped" } },
+    });
+    vi.stubGlobal("fetch", fake.fetchImpl);
+    await channel().setVoiceConfig({ voice: "ember", instructions: "Be brief." });
+    const put = fake.calls.find((c) => c.method === "PUT" && c.path === "/api/v1/phone/hosted-agent-config");
+    expect(put?.body).toEqual({ agent_identity_id: "ident_1", voice: "ember", instructions: "Be brief." });
+    await channel().setVoiceConfig({ instructions: "Be brief." });
+    const second = fake.calls.filter((c) => c.method === "PUT" && c.path === "/api/v1/phone/hosted-agent-config")[1];
+    expect(second?.body).toEqual({ agent_identity_id: "ident_1", instructions: "Be brief." });
+  });
+});

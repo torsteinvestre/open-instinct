@@ -429,6 +429,10 @@ function ownerTools({ approvals, config, outbox, audit, onApprovalSettled }: Cor
       if (SPEND_CAPABILITIES.has(target.capability) || target.amountUsd !== undefined) {
         return textResult(`${target.summary} involves money, so only the owner's own yes settles it. Ask whether they want to go ahead; a plain yes or no from them is handled automatically.`);
       }
+      // A phone call is outward-facing and billed: the same rule, so an injected "tell it yes" never dials.
+      if (target.capability === "phone.call") {
+        return textResult(`${target.summary} is a phone call, so only the owner's own yes settles it. Ask whether they want to go ahead; a plain yes or no from them is handled automatically.`);
+      }
       const approved = decision === "yes";
       const resolved = approvals.resolve(target.token, approved);
       if (!resolved) return textResult("That approval is no longer pending.");

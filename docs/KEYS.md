@@ -101,11 +101,16 @@ Variables: `LINK_CLIENT_ID`, `LINK_CLIENT_SECRET`, `STRIPE_PUBLISHABLE_KEY`, opt
 
 1. Have a [Stripe account](https://dashboard.stripe.com/register). Your customers must be
    US or Canadian consumers; your business can be anywhere.
-2. Apply for a Link Agent Wallet OAuth client through the form linked from the
-   [Link Agent Wallet OAuth docs](https://docs.stripe.com/agentic-commerce/agents/link-agent-wallet/oauth).
-   Give the exact redirect URIs you will use (`https://<your-gateway>/oauth/link/callback/<userId>`
-   for the gateway, or `http://127.0.0.1:8080/oauth/link/callback` for a laptop).
-3. Stripe sends a `client_id` and `client_secret`. Your publishable key is in the Stripe dashboard.
+2. Apply for a Link Agent Wallet OAuth client through the "Link OAuth App Registration"
+   Google Form linked from the [Link CLI docs](https://docs.stripe.com/agentic-commerce/link-cli).
+   There is no self-serve button in the dashboard. The form asks about your app, your users,
+   where the agent runs, the scopes (`agentic payments`), a confidential client, and the
+   exact redirect URIs you will use (`https://<your-gateway>/oauth/link/callback`
+   for the gateway, one URI for every agent, or `http://127.0.0.1:8080/oauth/link/callback` for a laptop).
+   Stripe reviews applications every 3 to 5 days, so apply before you need payments.
+   Walkthrough: [PAYMENTS.md](PAYMENTS.md#registering-an-oauth-client).
+3. Stripe sends a `client_id` and an encrypted `client_secret`. Your publishable key is in
+   the Stripe dashboard; it is the only one of the three you can fetch yourself.
 4. Export the three variables. The owner connects their wallet from a link the agent texts,
    and approves each purchase in the Link app.
 
@@ -119,6 +124,9 @@ the screen at checkout instead of paying.
 | `BRAVE_SEARCH_API_KEY` | Better web search than the DuckDuckGo fallback | [brave.com/search/api](https://brave.com/search/api/) |
 | `CONTEXT_DEV_API_KEY` | Sourced answers and public page research through `context_answers` | [context.dev](https://context.dev) |
 | `AMPLE_SIGNUP=1`, or `AMPLE_CLIENT_ID` and `AMPLE_CLIENT_SECRET` | Web apps the agent builds, deployed to public URLs through `ample_deploy`. `AMPLE_SIGNUP=1` needs no key: each agent signs up for its own account ([AMPLE.md](AMPLE.md)) | [ample.computer](https://ample.computer), `ample auth signup` |
+| `INKBOX_VOICE` | The Voice AI voice `phone_call` speaks with (a voice id from the Inkbox console's voice list). Unset: the organization's default voice ([INKBOX.md](INKBOX.md#phone-calls)) | Inkbox console |
+| `INKBOX_CALL_ORIGINATION` | Which line `phone_call` dials from: `dedicated_number`, `shared_imessage_number` or `dedicated_imessage_number`. Unset: the identity's iMessage line | you choose it |
+| `ATOMIC_MAIL_API_KEY` | A second inbox the agent can read and send from, through Atomic Mail's hosted MCP. Needs a key from an active inbox ([ATOMICMAIL.md](ATOMICMAIL.md)) | [dashboard.atomicmail.ai](https://dashboard.atomicmail.ai) |
 | `INSTINCT_CHAT_TOKEN` | A bearer token on the owner's HTTP surface; set it whenever the port is reachable beyond your machine | you choose it |
 | `GATEWAY_SIGNUP_SECRET` | The invite code the gateway's signup form requires | you choose it |
 

@@ -1,7 +1,8 @@
 /**
  * Pi's coding-agent file tools, bound to the owner's workspace directory and
  * tagged with capabilities so the policy engine can gate them. Only the owner
- * tier has files.read / files.write by default.
+ * tier has files.read / files.write by default; staff (the owner's own agents)
+ * deliberately has neither, because bash needs both and is a real shell.
  *
  * Two guards sit in front of Pi here:
  *

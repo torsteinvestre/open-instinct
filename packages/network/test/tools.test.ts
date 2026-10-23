@@ -505,3 +505,47 @@ describe("invite_to_network", () => {
     expect(contacts.all()).toHaveLength(4);
   });
 });
+
+describe("staff is only for agents", () => {
+  it("trust_set_tier refuses staff for a contact without an agent handle and allows it with one", async () => {
+    const { tools, contacts, audit } = setup();
+    const bad = await run(tools, "trust_set_tier", { contact: "alex", tier: "staff" }, ctx(owner));
+    expect(bad.isError).toBe(true);
+    expect(bad.text).toContain('Tier "staff" is only for agents');
+    expect(bad.text).toContain("Alex Kim has no agent handle");
+    expect(contacts.get("alex-kim")?.tier).toBe("friend");
+    expect(audit.entries.some((e) => e.detail.action === "set_tier")).toBe(false);
+    const ok = await run(tools, "trust_set_tier", { contact: "@sam-instinct", tier: "staff" }, ctx(owner));
+    expect(ok.isError).toBe(false);
+    expect(contacts.get("sam-lee")?.tier).toBe("staff");
+  });
+
+  it("contacts_upsert refuses staff without a handle, and accepts it when the handle comes in the same call", async () => {
+    const { tools, contacts } = setup();
+    const bad = await run(tools, "contacts_upsert", { name: "Research", tier: "staff" }, ctx(owner));
+    expect(bad.isError).toBe(true);
+    expect(bad.text).toContain('Tier "staff" is only for agents');
+    expect(contacts.get("research")).toBeUndefined();
+    const badExisting = await run(tools, "contacts_upsert", { name: "Alex Kim", tier: "staff" }, ctx(owner));
+    expect(badExisting.isError).toBe(true);
+    expect(contacts.get("alex-kim")?.tier).toBe("friend");
+    const ok = await run(tools, "contacts_upsert", { name: "Research", tier: "staff", agentHandle: "@Research-Bot" }, ctx(owner));
+    expect(ok.isError).toBe(false);
+    expect(contacts.get("research")).toMatchObject({ tier: "staff", agentHandle: "research-bot" });
+  });
+
+  it("invite_to_network refuses staff before creating a contact or an invitation", async () => {
+    const { tools, contacts, provisioner } = setup({ provisioner: true });
+    const fresh = await run(tools, "invite_to_network", { contact: "Jordan Blake", tier: "staff", email: "jordan@example.com" }, ctx(owner));
+    expect(fresh.isError).toBe(true);
+    expect(fresh.text).toContain('Tier "staff" is only for agents');
+    expect(contacts.get("jordan-blake")).toBeUndefined();
+    const known = await run(tools, "invite_to_network", { contact: "Alex Kim", tier: "staff" }, ctx(owner));
+    expect(known.isError).toBe(true);
+    expect(contacts.get("alex-kim")?.tier).toBe("friend");
+    expect(provisioner.invitations).toHaveLength(0);
+    const ok = await run(tools, "invite_to_network", { contact: "sam", tier: "staff" }, ctx(owner));
+    expect(ok.isError).toBe(false);
+    expect(contacts.get("sam-lee")?.tier).toBe("staff");
+  });
+});

@@ -158,7 +158,7 @@ const server = createGateway({
 server.listen(8787);
 ```
 
-`createGateway` returns a `GatewayServer`: a `node:http` server with one extra method, `resumePending()`, which restarts provisioning for records left in `provisioning`. Optional hooks: `routerInfoFor(user)` for per-user router info (QR), `notifyExisting(user, connectUrl)` for the duplicate-phone path, `signupLimits`, `trustProxy`, `composioToolkits` and `link`. `checkSignupPolicy(cfg)` is the startup rule `startGateway` applies.
+`createGateway` returns a `GatewayServer`: a `node:http` server with one extra method, `resumePending()`, which restarts provisioning for records left in `provisioning`. Optional hooks: `routerInfoFor(user)` for per-user router info (QR), `notifyExisting(user, connectUrl)` for the duplicate-phone path, `onInbound(user, event)` for every verified inbound event before it is queued (a front door can learn the sender's phone from the first text; it gets a deep copy so it cannot change the event, and a throw or rejected promise is logged, never fatal; to let the signer-up claim an agent provisioned without a phone, set `INSTINCT_CLAIM_OWNER_ON_FIRST_CONTACT=1` with a one-time `INSTINCT_OWNER_CLAIM_CODE` shown only to them, see `docs/ARCHITECTURE.md`), `checkAgentStatus` to force the Maritime status check before every relay (or never), `maritime.desktop: false` for cheaper VMs without a desktop, `signupLimits`, `trustProxy`, `composioToolkits` and `link`. `checkSignupPolicy(cfg)` is the startup rule `startGateway` applies.
 
 `relayEvent`, `relayGatewayEvent`, `provisionUser`, `validateSignup`, `renderLanding`, `renderConnect` and `renderPending` are exported separately for other front doors.
 

@@ -17,6 +17,7 @@ import { HistoryArchive } from "../src/history.js"; // [sunshine:history]
 import { ToolRegistry, defineTool, textResult, type RegisteredTool } from "../src/tools.js";
 import type { InboundMessage, OutboundMessage, Policy, Principal } from "../src/types.js";
 import { inbound, tempState, testConfig } from "./helpers.js";
+import { MAX_CLAIM_ATTEMPTS } from "../src/owner-claim.js";
 
 const OWNER_PHONE = "+16175550100";
 const SAM_PHONE = "+16175550199";
@@ -226,6 +227,180 @@ describe("AgentRuntime.handleInbound", () => {
     expect(h.deps.audit.read({ kinds: ["outbound"] })).toHaveLength(1);
   });
 
+  it("texts a one-line ack into an iMessage thread when the reply passes the budget and ackSlowReplies is on", async () => {
+    const config = testConfig();
+    config.features.ackSlowReplies = true;
+    const h = harness({ replyBudgetMs: 25, deps: { config } });
+    h.faux.setResponses([toolTurn("slow", {}), textTurn("Here is the slow result")]);
+    const result = await h.runtime.handleInbound(inbound({ channel: "imessage", from: OWNER_PHONE, conversationKey: "imessage:c1", text: "research this" }));
+    expect(result.reply).toBe("On it. I will text you when it is done.");
+    await vi.waitFor(() => expect(h.sent).toHaveLength(1));
+    expect(h.sent[0]!.msg).toMatchObject({ channel: "imessage", conversationKey: "imessage:c1", text: "On it. I will text you when it is done." });
+    h.gate.open();
+    await vi.waitFor(() => expect(h.sent).toHaveLength(2));
+    expect(h.sent[1]!.msg.text).toBe("Here is the slow result");
+
+    // Off by default.
+    const quiet = harness({ replyBudgetMs: 25 });
+    quiet.faux.setResponses([toolTurn("slow", {}), textTurn("done")]);
+    await quiet.runtime.handleInbound(inbound({ channel: "imessage", from: OWNER_PHONE, conversationKey: "imessage:c2", text: "slow" }));
+    await new Promise((r) => setTimeout(r, 40));
+    expect(quiet.sent).toHaveLength(0);
+    quiet.gate.open();
+  });
+
+  it("acks a slow owner text once on the waitForCompletion path, never for the text queued behind it", async () => {
+    const config = testConfig();
+    config.features.ackSlowReplies = true;
+    // The queued text's own turn is slow too, so only the queue rule keeps it from acking.
+    const second = makeGate();
+    const slowToo = defineTool({
+      name: "slow_too",
+      label: "Slow too",
+      description: "waits for a second gate",
+      parameters: Type.Object({}),
+      meta: { capabilities: ["converse"], group: "system" },
+      execute: async () => {
+        await second.promise;
+        return textResult("done too");
+      },
+    });
+    const h = harness({ replyBudgetMs: 30, deps: { config }, extraTools: [slowToo] });
+    h.faux.setResponses([toolTurn("slow", {}), textTurn("Booked the 7pm table."), toolTurn("slow_too", {}), textTurn("And I added it to your calendar.")]);
+    const q1 = h.runtime.handleInbound(inbound({ channel: "imessage", from: OWNER_PHONE, conversationKey: "imessage:c1", text: "book dinner", id: "q1" }), { waitForCompletion: true });
+    await vi.waitFor(() => expect(h.calls.map((c) => c.tool)).toContain("slow"));
+    const q2 = h.runtime.handleInbound(inbound({ channel: "imessage", from: OWNER_PHONE, conversationKey: "imessage:c1", text: "and put it on my calendar", id: "q2" }), { waitForCompletion: true });
+    await new Promise((r) => setTimeout(r, 120));
+    expect(h.sent.map((s) => s.msg.text)).toEqual(["On it. I will text you when it is done."]);
+    h.gate.open();
+    await vi.waitFor(() => expect(h.sent).toHaveLength(2));
+    await new Promise((r) => setTimeout(r, 120));
+    expect(h.sent.map((s) => s.msg.text)).toEqual(["On it. I will text you when it is done.", "Booked the 7pm table."]);
+    second.open();
+    await Promise.all([q1, q2]);
+    expect(h.sent.map((s) => s.msg.text)).toEqual(["On it. I will text you when it is done.", "Booked the 7pm table.", "And I added it to your calendar."]);
+  });
+
+  it("does not ack a fast reply, a group text or a contact", async () => {
+    const acking = () => {
+      const config = testConfig();
+      config.features.ackSlowReplies = true;
+      const h = harness({ replyBudgetMs: 30, deps: { config } });
+      h.deps.contacts.upsert({ name: "Sam Lee", tier: "partner", phones: [SAM_PHONE] });
+      return h;
+    };
+    const acks = (h: Harness) => h.sent.map((s) => s.msg.text).filter((t) => t.startsWith("On it"));
+
+    const fast = acking();
+    fast.faux.setResponses([textTurn("Quick answer")]);
+    await fast.runtime.handleInbound(inbound({ channel: "imessage", from: OWNER_PHONE, conversationKey: "imessage:c1", text: "quick" }), { waitForCompletion: true });
+    await new Promise((r) => setTimeout(r, 60));
+    expect(fast.sent.map((s) => s.msg.text)).toEqual(["Quick answer"]);
+
+    // A turn that ends before the budget with nothing to say leaves no stray ack behind.
+    const silent = acking();
+    silent.faux.setResponses([textTurn("")]);
+    await silent.runtime.handleInbound(inbound({ channel: "imessage", from: OWNER_PHONE, conversationKey: "imessage:c1", text: "ok thanks" }), { waitForCompletion: true });
+    await new Promise((r) => setTimeout(r, 60));
+    expect(silent.sent).toHaveLength(0);
+
+    for (const msg of [
+      inbound({ channel: "imessage", from: OWNER_PHONE, conversationKey: "imessage:g", text: "slow", meta: { isGroup: true, participants: [OWNER_PHONE, SAM_PHONE] } }),
+      inbound({ channel: "imessage", from: SAM_PHONE, conversationKey: "imessage:sam", text: "slow" }),
+    ]) {
+      const h = acking();
+      h.faux.setResponses([toolTurn("slow", {}), textTurn("answer")]);
+      const run = h.runtime.handleInbound(msg, { waitForCompletion: true });
+      await vi.waitFor(() => expect(h.calls).toHaveLength(1));
+      await new Promise((r) => setTimeout(r, 80));
+      h.gate.open();
+      await run;
+      expect(acks(h)).toEqual([]);
+      expect(h.sent.map((s) => s.msg.text)).toEqual(["answer"]);
+    }
+  });
+
+  describe("duplicate replies in a carrier thread", () => {
+    const text = (id: string, body: string, extra: Partial<InboundMessage> = {}) =>
+      inbound({ channel: "imessage", from: OWNER_PHONE, conversationKey: "imessage:c1", text: body, id, ...extra });
+
+    it("drops the echo when a text queued behind the answer gets the same answer", async () => {
+      const h = harness();
+      h.faux.setResponses([toolTurn("slow", {}), textTurn("11:40 AM in Hahn Auditorium."), textTurn("11:40 AM in Hahn Auditorium.")]);
+      const first = h.runtime.handleInbound(text("m1", "when is shishir"), { waitForCompletion: true });
+      await vi.waitFor(() => expect(h.calls).toHaveLength(1));
+      const second = h.runtime.handleInbound(text("m2", "when is shishir speaking"), { waitForCompletion: true });
+      await flush();
+      h.gate.open();
+      await Promise.all([first, second]);
+      expect(h.sent.map((s) => s.msg.text)).toEqual(["11:40 AM in Hahn Auditorium."]);
+      expect(h.deps.audit.read({ kinds: ["outbound"] }).filter((e) => e.detail["skipped"] === "duplicate reply")).toHaveLength(1);
+    });
+
+    it("delivers the same answer to two separate requests", async () => {
+      const h = harness();
+      h.faux.setResponses([textTurn("Done."), textTurn("Done.")]);
+      await h.runtime.handleInbound(text("m1", "add milk to the list"), { waitForCompletion: true });
+      await h.runtime.handleInbound(text("m2", "add eggs too"), { waitForCompletion: true });
+      expect(h.sent.map((s) => s.msg.text)).toEqual(["Done.", "Done."]);
+    });
+
+    it("always delivers a failure line, even to a queued text", async () => {
+      const h = harness();
+      const fail = () => fauxAssistantMessage([], { stopReason: "error", errorMessage: "rate limited" });
+      h.faux.setResponses([toolTurn("slow", {}), fail(), fail()]);
+      const first = h.runtime.handleInbound(text("m1", "book it"), { waitForCompletion: true });
+      await vi.waitFor(() => expect(h.calls).toHaveLength(1));
+      const second = h.runtime.handleInbound(text("m2", "book it please"), { waitForCompletion: true });
+      await flush();
+      h.gate.open();
+      await Promise.all([first, second]);
+      const snag = "Hit a snag on my end (rate limited). Give me a minute and try that again.";
+      expect(h.sent.map((s) => s.msg.text)).toEqual([snag, snag]);
+
+      // And on a plain retry later.
+      h.faux.setResponses([fail()]);
+      await h.runtime.handleInbound(text("m3", "try again"), { waitForCompletion: true });
+      expect(h.sent.map((s) => s.msg.text)).toEqual([snag, snag, snag]);
+    });
+
+    it("resends an identical reply when the first send failed", async () => {
+      const h = harness();
+      const send = h.deps.outbox.send;
+      let failNext = true;
+      h.deps.outbox.send = async (msg, ctx) => {
+        if (failNext) {
+          failNext = false;
+          throw new Error("carrier down");
+        }
+        return send(msg, ctx);
+      };
+      h.faux.setResponses([toolTurn("slow", {}), textTurn("Your table is at 7."), textTurn("Your table is at 7.")]);
+      const first = h.runtime.handleInbound(text("m1", "when is dinner"), { waitForCompletion: true });
+      await vi.waitFor(() => expect(h.calls).toHaveLength(1));
+      const second = h.runtime.handleInbound(text("m2", "dinner time?"), { waitForCompletion: true });
+      await flush();
+      h.gate.open();
+      await expect(first).rejects.toBeInstanceOf(InboundUncertainError);
+      await second;
+      expect(h.sent.map((s) => s.msg.text)).toEqual(["Your table is at 7."]);
+    });
+
+    it("never deduplicates in a group thread", async () => {
+      const h = harness();
+      h.deps.contacts.upsert({ name: "Sam Lee", tier: "partner", phones: [SAM_PHONE] });
+      const meta = { isGroup: true, participants: [OWNER_PHONE, SAM_PHONE] };
+      h.faux.setResponses([toolTurn("slow", {}), textTurn("Sounds good."), textTurn("Sounds good.")]);
+      const first = h.runtime.handleInbound(text("g1", "dinner at 7?", { conversationKey: "imessage:g", meta }), { waitForCompletion: true });
+      await vi.waitFor(() => expect(h.calls).toHaveLength(1));
+      const second = h.runtime.handleInbound(text("g2", "or 7:30?", { conversationKey: "imessage:g", meta }), { waitForCompletion: true });
+      await flush();
+      h.gate.open();
+      await Promise.all([first, second]);
+      expect(h.sent.map((s) => s.msg.text)).toEqual(["Sounds good.", "Sounds good."]);
+    });
+  });
+
   it("deduplicates by message id", async () => {
     const h = harness();
     h.faux.setResponses([textTurn("once")]);
@@ -237,6 +412,149 @@ describe("AgentRuntime.handleInbound", () => {
     expect(second.reply).toBeUndefined();
     expect(h.faux.state.callCount).toBe(1);
     expect(h.deps.audit.read({ kinds: ["inbound"] })).toHaveLength(1);
+  });
+
+  describe("owner claim on first contact", () => {
+    const CODE = "K7P2-QX9M-4HTB-W8ZD";
+    const CLAIMER = "+16175550177";
+    const claimConfig = (extra: Partial<ReturnType<typeof testConfig>["owner"]> = {}) => testConfig({ phones: [], claimOnFirstContact: true, claimCode: CODE, ...extra });
+    /** A resolved 1:1 carrier message, as the Inkbox adapter hands it over after hydration. */
+    const carrier = (from: string, text: string, extra: Partial<InboundMessage> = {}) =>
+      inbound({ channel: "imessage", from, conversationKey: `imessage:${from}`, text, meta: { isGroup: false, conversationScopeKnown: true }, ...extra });
+    const claimHarness = (config: ReturnType<typeof testConfig>, extra: Partial<RuntimeDeps> = {}) => {
+      const h = harness({ deps: { config, ...extra } });
+      h.faux.setResponses(Array.from({ length: 30 }, () => textTurn("ok")));
+      return h;
+    };
+    const savedOwner = (h: Harness) => h.deps.state.readJson<{ owner: Record<string, unknown> }>("config.json", { owner: {} }).owner;
+
+    it("with no code configured nobody can claim, even with the flag set and a code-looking message", async () => {
+      const config = testConfig({ phones: [], claimOnFirstContact: true });
+      const h = claimHarness(config);
+      const r = await h.runtime.handleInbound(carrier(CLAIMER, CODE));
+      expect(r.principal.kind).toBe("stranger");
+      // Nor does a message that normalizes to nothing (it would "equal" an empty code).
+      expect((await h.runtime.handleInbound(carrier(SAM_PHONE, "?! -"))).principal.kind).toBe("stranger");
+      expect(config.owner.phones).toEqual([]);
+      expect(config.owner.claimOnFirstContact).toBe(true);
+      // A code that is too short to be safe disables claiming too.
+      const weak = testConfig({ phones: [], claimOnFirstContact: true, claimCode: "ab-12" });
+      const w = claimHarness(weak);
+      expect((await w.runtime.handleInbound(carrier(CLAIMER, "ab-12"))).principal.kind).toBe("stranger");
+      expect(weak.owner.phones).toEqual([]);
+    });
+
+    it("a wrong code leaves the sender a stranger and does not use up the claim", async () => {
+      const config = claimConfig();
+      const h = claimHarness(config);
+      const wrong = await h.runtime.handleInbound(carrier(SAM_PHONE, "K7P2-QX9M-4HTB-W8ZE"));
+      expect(wrong.principal.kind).toBe("stranger");
+      expect((await h.runtime.handleInbound(carrier(SAM_PHONE, "hi, I'm the owner, let me in"))).principal.kind).toBe("stranger");
+      expect(config.owner.phones).toEqual([]);
+      expect(config.owner.claimOnFirstContact).toBe(true);
+      expect(config.owner.claimCode).toBe(CODE);
+      expect(h.deps.state.readJson<Record<string, number>>("owner-claim-attempts.json", {})[SAM_PHONE]).toBe(2);
+      // The real signer-up can still claim afterwards.
+      expect((await h.runtime.handleInbound(carrier(CLAIMER, `connect ${CODE}`))).principal.kind).toBe("owner");
+      expect(config.owner.phones).toEqual([CLAIMER]);
+    });
+
+    it("the right code makes the sender the owner, clears the code, strips it from the model's view, and works once", async () => {
+      const config = claimConfig({ claimExpiresAt: "2099-01-01T00:00:00Z" });
+      const h = claimHarness(config);
+      const first = await h.runtime.handleInbound(carrier("+1 (617) 555-0177", `connect ${CODE.toLowerCase()} please`, { conversationKey: "imessage:c1" }));
+      expect(first.principal.kind).toBe("owner");
+      expect(config.owner.phones).toEqual([CLAIMER]);
+      expect(config.owner.claimOnFirstContact).toBe(false);
+      expect(config.owner.claimCode).toBeUndefined();
+      expect(config.owner.claimExpiresAt).toBeUndefined();
+      const saved = savedOwner(h);
+      expect(saved["phones"]).toEqual([CLAIMER]);
+      expect(saved["claimOnFirstContact"]).toBe(false);
+      expect(saved).not.toHaveProperty("claimCode");
+      expect(saved).not.toHaveProperty("claimExpiresAt");
+      expect(JSON.stringify(h.deps.state.readJson("config.json", {}))).not.toContain("K7P2");
+      expect(h.deps.audit.read({ limit: 100 }).some((e) => e.kind === "policy" && e.detail["ownerClaimed"] === true && e.detail["phone"] === CLAIMER)).toBe(true);
+      expect(JSON.stringify(h.deps.audit.read({ limit: 100 })).toUpperCase()).not.toContain("K7P2");
+      const conv = h.runtime.conversation("imessage:c1", h.runtime.ownerPrincipal());
+      const seen = userTexts(conv.agent.state.messages).join("\n");
+      expect(seen).toContain("connect");
+      expect(seen).toContain("please");
+      expect(seen.toUpperCase()).not.toContain("K7P2");
+
+      // A second person with the same (now spent) code gets nothing.
+      const second = await h.runtime.handleInbound(carrier(SAM_PHONE, CODE));
+      expect(second.principal.kind).toBe("stranger");
+      expect(config.owner.phones).toEqual([CLAIMER]);
+    });
+
+    it("accepts the code typed with spaces and lower case as the whole message, and the model sees a fixed welcome", async () => {
+      const config = claimConfig();
+      const h = claimHarness(config);
+      const r = await h.runtime.handleInbound(carrier(CLAIMER, "k7p2 qx9m 4htb w8zd"));
+      expect(r.principal.kind).toBe("owner");
+      const conv = h.runtime.conversation(`imessage:${CLAIMER}`, h.runtime.ownerPrincipal());
+      const seen = userTexts(conv.agent.state.messages).join("\n");
+      expect(seen).toContain("one-time sign-up code");
+      expect(seen.toUpperCase()).not.toContain("K7P2");
+    });
+
+    it("never claims from a group thread, an unresolved scope, a reaction, an email, A2A or when phones are already set", async () => {
+      const config = claimConfig();
+      const g = claimHarness(config);
+      await g.runtime.handleInbound(carrier(SAM_PHONE, CODE, { conversationKey: "imessage:g1", meta: { isGroup: true, conversationScopeKnown: true, participants: [SAM_PHONE, "+16175550122"] } }));
+      expect(config.owner.phones).toEqual([]);
+      await expect(g.runtime.handleInbound(carrier(SAM_PHONE, CODE, { meta: { conversationScopeKnown: false } }))).rejects.toThrow(/scope/);
+      expect(config.owner.phones).toEqual([]);
+      await g.runtime.handleInbound(carrier(SAM_PHONE, CODE, { meta: {} }));
+      expect(config.owner.phones).toEqual([]);
+      await g.runtime.handleInbound(carrier(SAM_PHONE, CODE, { meta: { isGroup: false, conversationScopeKnown: true, reaction: { type: "like" } } }));
+      expect(config.owner.phones).toEqual([]);
+      await g.runtime.handleInbound(inbound({ channel: "email", from: "sam@example.com", conversationKey: "email:t1", text: CODE }));
+      expect(config.owner.phones).toEqual([]);
+      await g.runtime.handleInbound(a2aFrom(SAM_HANDLE, CODE));
+      expect(config.owner.phones).toEqual([]);
+      expect(config.owner.claimOnFirstContact).toBe(true);
+      expect(config.owner.claimCode).toBe(CODE);
+
+      const taken = testConfig({ claimOnFirstContact: true, claimCode: CODE });
+      const t = claimHarness(taken);
+      const r = await t.runtime.handleInbound(carrier(SAM_PHONE, CODE));
+      expect(r.principal.kind).toBe("stranger");
+      expect(taken.owner.phones).toEqual([OWNER_PHONE]);
+    });
+
+    it("a duplicate delivery cannot claim", async () => {
+      const config = claimConfig();
+      const h = claimHarness(config);
+      await h.runtime.handleInbound(carrier(SAM_PHONE, "hello", { id: "evt_same" }));
+      const dup = await h.runtime.handleInbound(carrier(SAM_PHONE, CODE, { id: "evt_same" }));
+      expect(dup.blocked).toBe("duplicate");
+      expect(dup.principal.kind).toBe("stranger");
+      expect(config.owner.phones).toEqual([]);
+      expect(config.owner.claimCode).toBe(CODE);
+    });
+
+    it("stops a number from claiming after too many wrong codes, without locking out others", async () => {
+      const config = claimConfig();
+      const h = claimHarness(config);
+      for (let i = 0; i < MAX_CLAIM_ATTEMPTS; i++) await h.runtime.handleInbound(carrier(SAM_PHONE, `guess${i}xxxxxx`));
+      expect((await h.runtime.handleInbound(carrier(SAM_PHONE, CODE))).principal.kind).toBe("stranger");
+      expect(config.owner.phones).toEqual([]);
+      expect(h.deps.audit.read({ limit: 200 }).some((e) => e.kind === "policy" && e.detail["ownerClaimLocked"] === true)).toBe(true);
+      expect((await h.runtime.handleInbound(carrier(CLAIMER, CODE))).principal.kind).toBe("owner");
+      expect(h.deps.state.readJson("owner-claim-attempts.json", { x: 1 })).toEqual({});
+    });
+
+    it("an expired code cannot claim", async () => {
+      const config = claimConfig({ claimExpiresAt: "2026-10-01T00:00:00Z" });
+      const h = claimHarness(config, { now: () => new Date("2026-10-15T00:00:00Z") });
+      expect((await h.runtime.handleInbound(carrier(CLAIMER, CODE))).principal.kind).toBe("stranger");
+      expect(config.owner.phones).toEqual([]);
+      const live = claimConfig({ claimExpiresAt: "2026-10-01T00:00:00Z" });
+      const l = claimHarness(live, { now: () => new Date("2026-09-30T00:00:00Z") });
+      expect((await l.runtime.handleInbound(carrier(CLAIMER, CODE))).principal.kind).toBe("owner");
+    });
   });
 
   it("queues a busy conversation until its current run is persisted", async () => {
@@ -348,6 +666,27 @@ describe("AgentRuntime.handleInbound", () => {
     h.faux.setResponses([textTurn("ok")]);
     await h.runtime.handleInbound(inbound({ channel: "chat", from: "owner", conversationKey: "chat:main", text: "hi" }));
     expect(h.runtime.conversation("chat:main", h.runtime.ownerPrincipal()).agent.state.systemPrompt).not.toContain("Working with other Instincts");
+  });
+
+  it("builds the skills section per principal, so a stranger never sees the owner's private skills", async () => {
+    const seen: string[] = [];
+    const h = harness({
+      deps: {
+        skillsPrompt: (p) => {
+          seen.push(p.kind);
+          return p.kind === "owner" && p.tier === "owner" ? "## skills\nprivate-haiku public-dining" : "## skills\npublic-dining";
+        },
+      },
+    });
+    h.faux.setResponses([textTurn("hi"), textTurn("ok")]);
+    await h.runtime.handleInbound(inbound({ channel: "imessage", from: "+15555550001", conversationKey: "imessage:s1", text: "hello" }));
+    const strangerConv = h.runtime.conversation("imessage:s1", { kind: "stranger", id: "stranger:imessage:+15555550001", tier: "stranger", displayName: "x" });
+    expect(strangerConv.agent.state.systemPrompt).toContain("public-dining");
+    expect(strangerConv.agent.state.systemPrompt).not.toContain("private-haiku");
+    await h.runtime.handleInbound(inbound({ channel: "chat", from: "owner", conversationKey: "chat:main", text: "hi" }));
+    expect(h.runtime.conversation("chat:main", h.runtime.ownerPrincipal()).agent.state.systemPrompt).toContain("private-haiku");
+    expect(seen).toContain("stranger");
+    expect(seen).toContain("owner");
   });
 
   it("keeps the live transcript bounded across many turns in one process", async () => {
@@ -840,6 +1179,25 @@ describe("policy guard", () => {
     expect(spend[0]!.detail.amountUsd).toBe(12);
     expect(h.deps.audit.spentTodayUsd("America/New_York")).toBe(12);
   });
+
+  it("leaves spend to tools that record their own, so a request is not counted before it completes", async () => {
+    const h = harness();
+    h.deps.registry.register(
+      defineTool({
+        name: "pay_request",
+        label: "Pay",
+        description: "asks for a card",
+        parameters: Type.Object({ merchant: Type.String(), amountUsd: Type.Number() }),
+        meta: { capabilities: ["purchase"], group: "apps", amountUsd: (a) => (a as { amountUsd: number }).amountUsd, recordsOwnSpend: true },
+        execute: async () => textResult("requested"),
+      }),
+    );
+    h.faux.setResponses([toolTurn("pay_request", { merchant: "Acme", amountUsd: 20 }), textTurn("Requested.")]);
+    await h.runtime.handleInbound(inbound({ channel: "chat", from: "owner", conversationKey: "chat:main", text: "pay acme" }));
+    expect(h.deps.audit.read({ kinds: ["tool_call"] }).some((e) => e.detail.tool === "pay_request")).toBe(true);
+    expect(h.deps.audit.read({ kinds: ["spend"] })).toHaveLength(0);
+    expect(h.deps.audit.spentTodayUsd("America/New_York")).toBe(0);
+  });
 });
 
 describe("approval flow", () => {
@@ -976,6 +1334,88 @@ describe("approval scoping", () => {
     const again = await h.runtime.handleInbound(inbound({ channel: "chat", from: "owner", conversationKey: "chat:main", text: "do it again" }));
     expect(again.reply).toContain("That needs another ok.");
     expect(h.calls).toHaveLength(1);
+    expect(h.deps.approvals.pending()).toHaveLength(1);
+  });
+
+  it("holds every phone call for the owner's own yes: the exact approved call dials once, anything else waits or is refused", async () => {
+    const dialed: Array<{ toNumber: string; reason: string }> = [];
+    const phoneCall = defineTool({
+      name: "phone_call",
+      label: "Phone call",
+      description: "places a Voice AI call",
+      parameters: Type.Object({ toNumber: Type.String(), reason: Type.String() }),
+      meta: {
+        capabilities: ["phone.call"],
+        group: "messaging",
+        describe: (a) => {
+          const x = a as { toNumber: string; reason: string };
+          return `phone_call ${x.toNumber}: ${x.reason}`;
+        },
+      },
+      execute: async (args) => {
+        dialed.push(args);
+        return textResult("Call call_1: initiated.");
+      },
+    });
+    const h = harness({ extraTools: [phoneCall] });
+    const restaurant = { toNumber: "+14155550100", reason: "Book a table for 4 at 7pm under Maria" };
+
+    // The owner asks in their own thread. The policy still holds the call: a page or an email the
+    // owner pasted could be what asked for it. Nothing is dialed until they say yes to this exact call.
+    h.faux.setResponses([toolTurn("phone_call", restaurant), textTurn("I need your ok to call them.")]);
+    const asked = await h.runtime.handleInbound(inbound({ channel: "imessage", from: OWNER_PHONE, conversationKey: "imessage:owner", text: "call the restaurant and book a table for 4 at 7" }));
+    expect(asked.reply).toBe("I need your ok to call them.");
+    expect(dialed).toHaveLength(0);
+    const pending = h.deps.approvals.pending();
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({ conversationKey: "imessage:owner", requestedBy: "owner", capability: "phone.call", toolName: "phone_call", argsHash: hashArgs(restaurant) });
+    expect(pending[0]!.amountUsd).toBeUndefined();
+    // The approval text lands in the owner's own thread and names the number and the brief, without a
+    // "<name> asks:" prefix: the owner is the asker.
+    const approvalText = h.sent.find((s) => s.msg.conversationKey === "imessage:owner" && s.msg.text.includes("+14155550100"));
+    expect(approvalText).toBeDefined();
+    expect(approvalText!.msg.channel).toBe("imessage");
+    expect(approvalText!.msg.text).toContain("Book a table for 4 at 7pm under Maria");
+    expect(approvalText!.msg.text).not.toContain("asks:");
+    expect(approvalText!.msg.text).toMatch(/Want me to go ahead\?$/);
+    // The policy prompt already ends with the question; the owner must read it once, not twice.
+    expect(approvalText!.msg.text.match(/go ahead\?/g)).toHaveLength(1);
+    expect(approvalText!.msg.text).not.toContain("?.");
+    const blocked = h.runtime.conversation("imessage:owner", asked.principal).agent.state.messages.find((m) => m.role === "toolResult")!;
+    expect(JSON.stringify(blocked.content)).toContain("Waiting for Maria's approval");
+
+    // Approved, but the model dials a different number: that is not the approved call. Blocked again, new approval.
+    const other = { toNumber: "+14155550199", reason: "Book a table for 4 at 7pm under Maria" };
+    h.faux.setResponses([toolTurn("phone_call", other), textTurn("That number needs its own ok.")]);
+    const yes = await h.runtime.handleInbound(inbound({ channel: "imessage", from: OWNER_PHONE, conversationKey: "imessage:owner", text: "yes" }));
+    expect(yes.reply).toMatch(/^Approved: /);
+    await vi.waitFor(() => expect(h.sent.some((s) => s.msg.conversationKey === "imessage:owner" && s.msg.text === "That number needs its own ok.")).toBe(true));
+    expect(dialed).toHaveLength(0);
+    const second = h.deps.approvals.pending();
+    expect(second).toHaveLength(1);
+    expect(second[0]!.token).not.toBe(pending[0]!.token);
+    expect(second[0]!.argsHash).toBe(hashArgs(other));
+
+    // The exact approved call dials once. The same call again is held again.
+    h.faux.setResponses([toolTurn("phone_call", other), textTurn("Calling them now.")]);
+    await h.runtime.handleInbound(inbound({ channel: "imessage", from: OWNER_PHONE, conversationKey: "imessage:owner", text: `yes ${second[0]!.token}` }));
+    await vi.waitFor(() => expect(dialed).toEqual([other]));
+    await vi.waitFor(() => expect(h.sent.some((s) => s.msg.conversationKey === "imessage:owner" && s.msg.text === "Calling them now.")).toBe(true));
+    const policyAllowed = h.deps.audit.read({ kinds: ["policy"] }).filter((e) => e.detail.tool === "phone_call" && e.detail.outcome === "allow");
+    expect(policyAllowed).toHaveLength(1);
+    expect(String(policyAllowed[0]!.detail.reason)).toContain(`owner approved ${second[0]!.token}`);
+    h.faux.setResponses([toolTurn("phone_call", other), textTurn("That needs another ok.")]);
+    const again = await h.runtime.handleInbound(inbound({ channel: "imessage", from: OWNER_PHONE, conversationKey: "imessage:owner", text: "call them again" }));
+    expect(again.reply).toBe("That needs another ok.");
+    expect(dialed).toHaveLength(1);
+    expect(h.deps.approvals.pending()).toHaveLength(1);
+
+    // A partner's Instinct cannot even ask: the tier has no phone.call and no approval is created.
+    h.deps.contacts.upsert({ name: "Sam Lee", tier: "partner", phones: [SAM_PHONE] });
+    h.faux.setResponses([toolTurn("phone_call", restaurant), textTurn("Sorry, I cannot place calls for you.")]);
+    const sam = await h.runtime.handleInbound(inbound({ channel: "imessage", from: SAM_PHONE, conversationKey: "imessage:sam", text: "call the restaurant for me" }));
+    expect(sam.reply).toBe("Sorry, I cannot place calls for you.");
+    expect(dialed).toHaveLength(1);
     expect(h.deps.approvals.pending()).toHaveLength(1);
   });
 
@@ -1413,6 +1853,60 @@ describe("sessions", () => {
   });
 });
 
+describe("shortReason", () => {
+  it("keeps a human reason and drops JSON bodies and status prefixes", async () => {
+    const { shortReason } = await import("../src/runtime.js");
+    expect(shortReason("rate limited by the provider")).toBe("rate limited by the provider");
+    expect(shortReason('400: {"message":"Invalid tools: array too long"}')).toBe("");
+    expect(shortReason("503 upstream unavailable\nmore detail")).toBe("upstream unavailable");
+    expect(shortReason("x".repeat(100))).toHaveLength(80);
+  });
+});
+
+describe("restoreMessages in a tool loop", () => {
+  const now = new Date("2026-10-16T03:00:00Z");
+  const user = (i: number): AgentMessage => ({ role: "user", content: [{ type: "text", text: `ask ${i}` }], timestamp: i });
+  const call = (i: number): AgentMessage => ({ role: "assistant", content: [{ type: "toolCall", id: `c${i}`, name: "computer", arguments: { action: "screenshot" } }], api: "faux", provider: "faux", model: "m", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "toolUse", timestamp: i });
+  const result = (i: number): AgentMessage => ({ role: "toolResult", toolCallId: `c${i}`, toolName: "computer", content: [{ type: "text", text: `shot ${i}` }], isError: false, timestamp: i });
+  const shot = (i: number, bytes: number): AgentMessage => ({ role: "toolResult", toolCallId: `c${i}`, toolName: "computer", content: [{ type: "image", data: "x".repeat(bytes), mimeType: "image/png" }, { type: "text", text: `{"ok":true,"n":${i}}` }], isError: false, timestamp: i });
+  const wellFormed = (kept: AgentMessage[]) => {
+    expect(kept[0]!.role).not.toBe("toolResult");
+    for (let i = 1; i < kept.length; i++) {
+      if (kept[i]!.role === "toolResult") expect(kept[i - 1]!.role === "assistant" || kept[i - 1]!.role === "toolResult").toBe(true);
+    }
+  };
+
+  it("starts at an assistant turn when no user turn is left in the window", () => {
+    const msgs: AgentMessage[] = [user(0)];
+    for (let i = 1; i <= 40; i++) msgs.push(call(i), result(i));
+    const kept = restoreMessages(msgs, now, 20);
+    expect(kept[0]!.role).toBe("user"); // the summary
+    expect(kept[1]!.role).toBe("assistant");
+    wellFormed(kept);
+  });
+
+  it("never starts the kept slice at a tool result when the newest screenshot alone is over budget", () => {
+    // One screenshot is bigger than the whole char budget, so the old fold walked forward
+    // until it sat on the tool result and the API rejected the turn with "messages with role
+    // 'tool' must be a response to a preceding message with 'tool_calls'".
+    const msgs: AgentMessage[] = [user(0), call(1), shot(1, 50_000), call(2), shot(2, 50_000)];
+    const kept = restoreMessages(msgs, now, 60, 10_000);
+    wellFormed(kept);
+    expect(kept.some((m) => m.role === "toolResult" && m.content.some((c) => c.type === "image"))).toBe(true);
+  });
+
+  it("swaps older screenshots for a placeholder and keeps the newest two", () => {
+    const msgs: AgentMessage[] = [user(0)];
+    for (let i = 1; i <= 5; i++) msgs.push(call(i), shot(i, 100));
+    const kept = restoreMessages(msgs, now, 60, 1_000_000);
+    const withImages = kept.filter((m) => m.role === "toolResult" && m.content.some((c) => c.type === "image"));
+    expect(withImages.map((m) => (m as { toolCallId: string }).toolCallId)).toEqual(["c4", "c5"]);
+    const dropped = kept.find((m) => m.role === "toolResult" && (m as { toolCallId: string }).toolCallId === "c1")!;
+    expect(dropped.content[0]).toEqual({ type: "text", text: "(an earlier screenshot, dropped to save space)" });
+    expect(dropped.content[1]).toEqual({ type: "text", text: '{"ok":true,"n":1}' });
+  });
+});
+
 describe("restoreMessages", () => {
   const user = (i: number): AgentMessage => ({ role: "user", content: [{ type: "text", text: `question ${i}` }], timestamp: i });
   const assistant = (i: number): AgentMessage => ({ role: "assistant", content: [{ type: "text", text: `answer ${i}` }], api: "faux", provider: "faux", model: "m", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop", timestamp: i });
@@ -1799,6 +2293,22 @@ describe("[sunshine:reactions] a tapback as the reply", () => {
     expect(h.reactions).toEqual(["love"]);
     expect(h.sent).toHaveLength(0);
     expect(skippedReplies(h)[0]?.detail.preview).toBe("You're welcome!");
+  });
+
+  // Upstream's echo rule (a queued text answered with the same bubble) runs after the fork's own rules.
+  it("a queued 'thanks' after an answer gets its tapback; the tapback rule holds the text before upstream's echo rule", async () => {
+    const h = withTapback();
+    h.faux.setResponses([toolTurn("slow", {}), textTurn("11:40 in Hahn."), toolTurn("tapback", { reaction: "like", alone: true }), textTurn("11:40 in Hahn.")]);
+    const text = (id: string, body: string) => inbound({ id, channel: "imessage", from: OWNER_PHONE, conversationKey: "imessage:owner", text: body });
+    const first = h.runtime.handleInbound(text("m1", "when is shishir"), { waitForCompletion: true });
+    await vi.waitFor(() => expect(h.calls).toHaveLength(1));
+    const second = h.runtime.handleInbound(text("m2", "thanks"), { waitForCompletion: true });
+    h.gate.open();
+    await Promise.all([first, second]);
+    expect(h.sent.map((s) => s.msg.text)).toEqual(["11:40 in Hahn."]);
+    expect(h.reactions).toEqual(["like"]);
+    expect(skippedReplies(h)).toHaveLength(1);
+    expect(h.deps.audit.read({ kinds: ["outbound"] }).filter((e) => e.detail["skipped"] === "duplicate reply")).toHaveLength(0);
   });
 
   it("a tapback with an answer lets the answer through", async () => {

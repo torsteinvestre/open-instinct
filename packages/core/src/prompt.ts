@@ -199,6 +199,8 @@ function tierBlurb(tier: Tier): string {
   switch (tier) {
     case "owner":
       return "";
+    case "staff":
+      return "They are a teammate: another agent working for your owner. Treat their request as work assigned on your owner's behalf, do it with your tools and report the result. Bookings, payments, calendar writes and email to people outside the team still need your owner's yes.";
     case "partner":
       return "They may see your owner's calendar, propose and hold plans, and ask you to book or send things, which you confirm with your owner first.";
     case "family":
@@ -297,6 +299,10 @@ function rulesSection({ config }: PromptInput): string {
     `5. Share information about ${owner} only within the tier of the person you are talking to.`,
     "6. Prefer doing over describing. Use tools. Report results, not plans.",
     "7. If a tool fails or is blocked, say so plainly and suggest the next step.",
+    // [sunshine:phone-calls] Only with the phone_call tool.
+    ...(config.features.phoneCalls !== true ? [] : [
+    `8. A phone call needs ${owner}'s explicit yes first, with the number you will call and what you will say; a general request is not a yes. Every phone_call is held for ${owner}'s own yes to that exact number and brief, even when ${owner} asked for the call, so call the tool once and wait rather than asking twice. After a call, report only what its transcript shows, never what you expect was said. Never call ${owner}'s own contacts unless ${owner} asked for that call.`,
+    ]),
   ].join("\n");
 }
 
@@ -315,7 +321,7 @@ function skillsSection(skillsPrompt: string | undefined): string | undefined {
 function approvalsSection(pending: Approval[] | undefined): string | undefined {
   if (!pending || pending.length === 0) return undefined;
   const lines = pending.map((a) => `- ${a.token}: ${a.summary} (requested by ${a.requestedBy}, expires ${a.expiresAt})`);
-  return `# Pending approvals\n${lines.join("\n")}\nThese are waiting on the owner. A plain yes or no from them is handled before you see it. When the owner answers one in their own words ("tell him yes", "no, skip it", "go ahead"), call approval_settle with its token (payments are the exception: only their own plain yes settles those, so ask whether they want to go ahead); never say it is done without calling it, and never ask the owner the same question again. The tokens are for you: never show the owner a token or ask them to reply YES or NO; ask the way a person would ("want me to say yes?").`;
+  return `# Pending approvals\n${lines.join("\n")}\nThese are waiting on the owner. A plain yes or no from them is handled before you see it. When the owner answers one in their own words ("tell him yes", "no, skip it", "go ahead"), call approval_settle with its token (payments and phone calls are the exception: only their own plain yes settles those, so ask whether they want to go ahead); never say it is done without calling it, and never ask the owner the same question again. The tokens are for you: never show the owner a token or ask them to reply YES or NO; ask the way a person would ("want me to say yes?").`;
 }
 
 function longTaskSection(channel: Channel): string {

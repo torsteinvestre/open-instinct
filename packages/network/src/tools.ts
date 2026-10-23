@@ -56,6 +56,15 @@ function refuse(text: string): ToolResultLike {
   return { content: [{ type: "text", text }], isError: true };
 }
 
+/**
+ * Staff is for the owner's own agents, reached over authenticated A2A. A contact without an
+ * agent handle can never be staff; core's ContactStore enforces the same rule.
+ */
+function staffRefusal(name: string, tier: string | undefined, agentHandle: string | undefined): ToolResultLike | undefined {
+  if (tier !== "staff" || (agentHandle && agentHandle.replace(/^@+/, "").trim())) return undefined;
+  return refuse(`Tier "staff" is only for agents, and ${name} has no agent handle. Save their agent's Inkbox handle first (contacts_upsert with agentHandle), or pick partner or lower.`);
+}
+
 function ownerOnly(ctx: ToolContext, what: string): ToolResultLike | undefined {
   return isOwner(ctx.principal) ? undefined : refuse(`Only the owner can ${what}. Offer to pass the request to the owner instead.`);
 }
@@ -187,6 +196,8 @@ export function networkTools(deps: NetworkToolDeps): RegisteredTool[] {
       if (args.agentHandle) input.agentHandle = args.agentHandle.replace(/^@+/, "").toLowerCase();
       if (args.tier) input.tier = args.tier;
       if (args.notes) input.notes = args.notes;
+      const staffBlocked = staffRefusal(existing?.name ?? args.name, args.tier, input.agentHandle ?? existing?.agentHandle);
+      if (staffBlocked) return staffBlocked;
       const c = contacts.upsert(input);
       audit.append({ kind: "policy", conversationKey: ctx.conversationKey, principal: ctx.principal.id, detail: { action: "contacts_upsert", contactId: c.id, tier: c.tier } });
       return textResult(`${existing ? "Updated" : "Added"} ${contactLine(c, true)}`);
@@ -205,6 +216,8 @@ export function networkTools(deps: NetworkToolDeps): RegisteredTool[] {
       if (!ASSIGNABLE_TIERS.includes(args.tier)) return refuse(`Tier must be one of ${ASSIGNABLE_TIERS.join(", ")}. Nobody else can be owner.`);
       const found = lookupContact(contacts, args.contact);
       if (!found.contact) return refuse(found.error);
+      const staffBlocked = staffRefusal(found.contact.name, args.tier, found.contact.agentHandle);
+      if (staffBlocked) return staffBlocked;
       const before = found.contact.tier;
       const updated = contacts.setTier(found.contact.id, args.tier);
       if (!updated) return refuse(`Could not update ${found.contact.name}.`);
@@ -489,6 +502,9 @@ export function networkTools(deps: NetworkToolDeps): RegisteredTool[] {
       if (!ASSIGNABLE_TIERS.includes(args.tier)) return refuse(`Tier must be one of ${ASSIGNABLE_TIERS.join(", ")}.`);
 
       let c = lookupContact(contacts, args.contact).contact;
+      // Check before creating anything: a new contact made here never has an agent handle.
+      const staffBlocked = staffRefusal(c?.name ?? args.contact.trim(), args.tier, c?.agentHandle);
+      if (staffBlocked) return staffBlocked;
       if (!c) {
         if (/^(contact:|\+|\d)/.test(args.contact) || args.contact.includes("@")) return refuse(`No contact matches "${args.contact}". Give a name to create one.`);
         c = contacts.upsert({ name: args.contact.trim(), emails: args.email ? [args.email.toLowerCase()] : [] });

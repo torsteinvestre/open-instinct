@@ -149,6 +149,8 @@ describe("provisionUser", () => {
     expect(keys).not.toContain("INSTINCT_AGENT_NAME");
     expect(keys).not.toContain("INSTINCT_OWNER_TIMEZONE"); // [sunshine:timezone]
     expect(maritimeCreateBody(readyUser(), { maritime: { apiKey: "k", agentImage: "img", idleTtlSeconds: 60 } })["idleTtlSeconds"]).toBe(60);
+    expect(maritimeCreateBody(readyUser(), { maritime: { apiKey: "k", agentImage: "img" } })["desktop"]).toBe(true);
+    expect(maritimeCreateBody(readyUser(), { maritime: { apiKey: "k", agentImage: "img", desktop: false } })["desktop"]).toBe(false);
     expect(webhookUrlFor("https://gw.example.com///", "usr x")).toBe("https://gw.example.com/webhooks/inkbox/usr%20x");
   });
 
@@ -189,8 +191,8 @@ describe("provisionUser", () => {
     expect(byKey["LINK_CLIENT_ID"]).toEqual({ key: "LINK_CLIENT_ID", value: "lc_1", isSecret: false });
     expect(byKey["LINK_CLIENT_SECRET"]).toEqual({ key: "LINK_CLIENT_SECRET", value: "ls_1", isSecret: true });
     expect(byKey["STRIPE_PUBLISHABLE_KEY"]).toEqual({ key: "STRIPE_PUBLISHABLE_KEY", value: "pk_test_1", isSecret: false });
-    expect(byKey["LINK_REDIRECT_URI"]).toEqual({ key: "LINK_REDIRECT_URI", value: "https://gw.example.com/oauth/link/callback/usr_l", isSecret: false });
-    expect(linkRedirectUriFor("https://gw.example.com", "usr x")).toBe("https://gw.example.com/oauth/link/callback/usr%20x");
+    expect(byKey["LINK_REDIRECT_URI"]).toEqual({ key: "LINK_REDIRECT_URI", value: "https://gw.example.com/oauth/link/callback", isSecret: false });
+    expect(linkRedirectUriFor("https://gw.example.com/", "usr x")).toBe("https://gw.example.com/oauth/link/callback");
   });
 
   it("resumes after a failure without repeating finished steps", async () => {

@@ -25,7 +25,7 @@ describe("DEFAULT_TIER_TABLE", () => {
         expect(DEFAULT_TIER_TABLE[tier][cap], `${tier}/${cap}`).toBeDefined();
       }
     }
-    expect(ALL_CAPABILITIES.length).toBe(26);
+    expect(ALL_CAPABILITIES.length).toBe(27);
   });
 
   it("matches docs/PERMISSIONS.md on the rows that have special values", () => {
@@ -42,15 +42,32 @@ describe("DEFAULT_TIER_TABLE", () => {
     expect(DEFAULT_TIER_TABLE.stranger["owner.relay"]).toBe("yes");
     expect(DEFAULT_TIER_TABLE.partner["email.read"]).toBe("no");
     expect(DEFAULT_TIER_TABLE.partner["email.send"]).toBe("ask");
+    expect(DEFAULT_TIER_TABLE.owner["phone.call"]).toBe("ask");
+    expect(DEFAULT_TIER_TABLE.staff["phone.call"]).toBe("ask");
+    expect(DEFAULT_TIER_TABLE.partner["phone.call"]).toBe("no");
+    expect(DEFAULT_TIER_TABLE.stranger["phone.call"]).toBe("no");
     expect(DEFAULT_TIER_TABLE.family["owner.location.approx"]).toBe("yes");
     expect(DEFAULT_TIER_TABLE.friend["owner.location.approx"]).toBe("no");
   });
 
-  it("gives only the owner the dangerous capabilities", () => {
-    for (const cap of ["computer.use", "files.read", "files.write", "memory.write", "network.invite", "trust.manage", "schedule.manage", "email.read"] as Capability[]) {
+  it("gives only the owner the capabilities that change the owner's own records", () => {
+    for (const cap of ["memory.write", "network.invite", "trust.manage", "schedule.manage"] as Capability[]) {
       expect(DEFAULT_TIER_TABLE.owner[cap]).toBe("yes");
       for (const tier of TIER_ORDER.filter((t) => t !== "owner")) expect(DEFAULT_TIER_TABLE[tier][cap], `${tier}/${cap}`).toBe("no");
     }
+  });
+
+  it("gives the shell capabilities (bash = files.read + files.write, computer.use) to the owner only", () => {
+    for (const cap of ["computer.use", "files.read", "files.write"] as Capability[]) {
+      expect(DEFAULT_TIER_TABLE.owner[cap]).toBe("yes");
+      for (const tier of TIER_ORDER.filter((t) => t !== "owner")) expect(DEFAULT_TIER_TABLE[tier][cap], `${tier}/${cap}`).toBe("no");
+    }
+  });
+
+  it("gives email.read to the owner and staff only", () => {
+    expect(DEFAULT_TIER_TABLE.owner["email.read"]).toBe("yes");
+    expect(DEFAULT_TIER_TABLE.staff["email.read"]).toBe("yes");
+    for (const tier of TIER_ORDER.filter((t) => t !== "owner" && t !== "staff")) expect(DEFAULT_TIER_TABLE[tier]["email.read"], tier).toBe("no");
   });
 });
 
@@ -66,18 +83,20 @@ describe("PolicyEngine.evaluate across tiers", () => {
   });
 
   it("gates calendar.freebusy at friend and above", () => {
-    const expected: Record<string, string> = { owner: "allow", partner: "allow", family: "allow", friend: "allow", contact: "deny", stranger: "deny" };
+    const expected: Record<string, string> = { owner: "allow", staff: "allow", partner: "allow", family: "allow", friend: "allow", contact: "deny", stranger: "deny" };
     for (const tier of TIER_ORDER) expect(engine.evaluate(principalOf(tier), meta(["calendar.freebusy"]), {}).outcome, tier).toBe(expected[tier]);
   });
 
-  it("gates calendar.write as yes/ask/ask/no/no/no", () => {
-    const expected: Record<string, string> = { owner: "allow", partner: "ask", family: "ask", friend: "deny", contact: "deny", stranger: "deny" };
+  it("gates calendar.write as yes/ask/ask/ask/no/no/no", () => {
+    const expected: Record<string, string> = { owner: "allow", staff: "ask", partner: "ask", family: "ask", friend: "deny", contact: "deny", stranger: "deny" };
     for (const tier of TIER_ORDER) expect(engine.evaluate(principalOf(tier), meta(["calendar.write"]), {}).outcome, tier).toBe(expected[tier]);
   });
 
-  it("keeps computer.use for the owner only", () => {
-    for (const tier of TIER_ORDER) {
-      expect(engine.evaluate(principalOf(tier), meta(["computer.use"]), {}).outcome).toBe(tier === "owner" ? "allow" : "deny");
+  it("keeps computer.use and the file tools (bash needs both files.*) for the owner only", () => {
+    for (const caps of [["computer.use"], ["files.read"], ["files.write"], ["files.read", "files.write"]] as Capability[][]) {
+      for (const tier of TIER_ORDER) {
+        expect(engine.evaluate(principalOf(tier), meta(caps), {}).outcome, `${tier}/${caps.join("+")}`).toBe(tier === "owner" ? "allow" : "deny");
+      }
     }
   });
 
@@ -157,7 +176,12 @@ describe("PolicyEngine spend limits (owner, limit permission)", () => {
     expect(engine.evaluate(principalOf("partner"), purchaseMeta, { amountUsd: 10, merchant: "Uber" }).outcome).toBe("ask");
     expect(engine.evaluate(owner, purchaseMeta, { amountUsd: 10, merchant: "Uber" }).outcome).toBe("allow");
     expect(engine.evaluate(owner, purchaseMeta, { amountUsd: 10, merchant: "Amazon" }).outcome).toBe("ask");
-    expect(engine.evaluate(owner, purchaseMeta, { amountUsd: 10, merchantName: "Uber" }).outcome).toBe("ask");
+    // payment_request names the merchant merchantName; the lists must still apply.
+    expect(engine.evaluate(owner, purchaseMeta, { amountUsd: 10, merchantName: "Lucky Casino" }).outcome).toBe("deny");
+    expect(engine.evaluate(owner, purchaseMeta, { amountUsd: 10, merchantName: "Uber" }).outcome).toBe("allow");
+    // Every merchant field counts: an allowed `merchant` cannot cover a blocked or unlisted `merchantName`.
+    expect(engine.evaluate(owner, purchaseMeta, { amountUsd: 10, merchant: "Uber", merchantName: "Lucky Casino" }).outcome).toBe("deny");
+    expect(engine.evaluate(owner, purchaseMeta, { amountUsd: 10, merchant: "Uber", merchantName: "Amazon" }).outcome).toBe("ask");
   });
 
   it("blocks a blocked merchant wherever it appears in the arguments", () => {
@@ -361,5 +385,32 @@ describe("loadPolicy / savePolicy", () => {
     expect(partial.spend.perDayUsd).toBe(300);
     expect(partial.grants).toEqual([]);
     expect(partial.strangerLimits.conversationsPerDay).toBe(3);
+  });
+});
+
+describe("staff tier", () => {
+  it("sits between owner and partner and gets the owner's working read capabilities", () => {
+    expect(TIER_ORDER.indexOf("staff")).toBe(1);
+    for (const cap of ["email.read", "calendar.read", "contacts.read", "web.read", "apps.use", "network.ask"] as const) {
+      expect(DEFAULT_TIER_TABLE.staff[cap], cap).toBe("yes");
+    }
+  });
+
+  it("never gets a shell, the file tools or the computer", () => {
+    for (const cap of ["computer.use", "files.read", "files.write"] as const) {
+      expect(DEFAULT_TIER_TABLE.staff[cap], cap).toBe("no");
+    }
+  });
+
+  it("asks the owner before anything that commits them", () => {
+    for (const cap of ["calendar.write", "email.send", "plans.commit", "purchase", "travel.book"] as const) {
+      expect(DEFAULT_TIER_TABLE.staff[cap], cap).toBe("ask");
+    }
+  });
+
+  it("never touches the owner's own records", () => {
+    for (const cap of ["memory.write", "trust.manage", "schedule.manage", "network.invite"] as const) {
+      expect(DEFAULT_TIER_TABLE.staff[cap], cap).toBe("no");
+    }
   });
 });

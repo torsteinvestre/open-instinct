@@ -2,7 +2,7 @@ import type { Capability } from "@open-instinct/core";
 
 /**
  * Owner-only tag for the Composio meta tools and for toolkits this table does not
- * know. Core's tier table opens `apps.use` to partner, family and friend (it is a
+ * know. Core's tier table opens `apps.use` to staff, partner, family and friend (it is a
  * transport tag; the per-tool capability does the gating), so `apps.use` alone would
  * let a friend's Instinct manage the owner's OAuth connections or run any tool
  * through COMPOSIO_MULTI_EXECUTE_TOOL. Until core grows a dedicated `apps.manage`
@@ -12,9 +12,10 @@ import type { Capability } from "@open-instinct/core";
 export const APPS_MANAGE: readonly Capability[] = ["apps.use", "trust.manage"];
 
 /**
- * Owner-only tag for Google Contacts write actions. Partner holds `contacts.read`
- * (partial), which core treats as allow, so a read tag on CREATE/UPDATE/DELETE would
- * let a partner's Instinct rewrite the owner's address book. Until core grows
+ * Owner-only tag for Google Contacts write actions. Staff holds `contacts.read` and
+ * partner holds it in part, which core treats as allow, so a read tag on
+ * CREATE/UPDATE/DELETE would let a teammate's or partner's Instinct rewrite the owner's
+ * address book. Until core grows
  * `contacts.write`, `memory.write` (owner only) stands in: the address book is the
  * owner's memory about people.
  */
@@ -23,7 +24,7 @@ export const CONTACTS_WRITE: readonly Capability[] = ["contacts.read", "memory.w
 /**
  * Map a Composio tool slug (for example `GMAIL_SEND_EMAIL`) to the capabilities
  * a call needs. The policy engine checks every capability against the caller's
- * tier, so this table decides what a partner or a friend can do through the
+ * tier, so this table decides what staff, a partner or a friend can do through the
  * owner's connected apps. Keep it conservative: an unknown slug is owner-only.
  *
  * Gmail, Google Calendar and Google Contacts have exact rows. Every other toolkit

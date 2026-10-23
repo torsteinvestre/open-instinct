@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { ContactStore, slugify } from "../src/contacts.js";
+import { describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import { ContactStore, StaffNeedsAgentError, slugify } from "../src/contacts.js";
 import { tempState } from "./helpers.js";
 
 describe("slugify", () => {
@@ -116,5 +117,189 @@ describe("ContactStore", () => {
     c.phones.push("+10000000000");
     expect(store.get("sam-lee")?.tier).toBe("contact");
     expect(store.get("sam-lee")?.phones).toEqual([]);
+  });
+});
+
+describe("ContactStore reload", () => {
+  it("sees a contacts.json written by someone else without a restart", async () => {
+    const state = tempState();
+    const store = new ContactStore(state);
+    store.upsert({ name: "Sam Lee" });
+    expect(store.all()).toHaveLength(1);
+    // Another process (a host seeding a teammate) rewrites the file. Make sure the mtime moves.
+    await new Promise((r) => setTimeout(r, 15));
+    const now = new Date().toISOString();
+    state.writeJson("contacts.json", [
+      ...store.all(),
+      { id: "research-bot", name: "Research", tier: "staff", phones: [], emails: [], agentHandle: "research-bot", createdAt: now, updatedAt: now },
+    ]);
+    expect(store.all()).toHaveLength(2);
+    expect(store.findByHandle("research-bot")?.tier).toBe("staff");
+    // Our own writes keep working and do not lose the external entry.
+    store.setTier("sam-lee", "family");
+    expect(new ContactStore(state).all().map((c) => c.id).sort()).toEqual(["research-bot", "sam-lee"]);
+  });
+});
+
+describe("ContactStore staff tier", () => {
+  it("refuses staff for a contact without an agent handle on every path, leaving the file unchanged", () => {
+    const state = tempState();
+    const store = new ContactStore(state);
+    expect(() => store.upsert({ name: "Research", tier: "staff" })).toThrow(StaffNeedsAgentError);
+    expect(() => store.upsert({ name: "Research", tier: "staff" })).toThrow(/only for agents/);
+    expect(store.all()).toHaveLength(0);
+    store.upsert({ name: "Sam Lee", tier: "friend", emails: ["sam@example.com"] });
+    expect(() => store.setTier("sam-lee", "staff")).toThrow(StaffNeedsAgentError);
+    expect(() => store.upsert({ name: "Sam Lee", tier: "staff" })).toThrow(StaffNeedsAgentError);
+    expect(store.get("sam-lee")?.tier).toBe("friend");
+    expect(new ContactStore(state).get("sam-lee")?.tier).toBe("friend");
+  });
+
+  it("allows staff once the contact has an agent handle, given now or earlier", () => {
+    const store = new ContactStore(tempState());
+    expect(store.upsert({ name: "Research", tier: "staff", agentHandle: "@Research-Bot" })).toMatchObject({ tier: "staff", agentHandle: "research-bot" });
+    store.upsert({ name: "Ops", agentHandle: "ops-bot" });
+    expect(store.setTier("ops", "staff")?.tier).toBe("staff");
+    expect(store.upsert({ name: "Ops", tier: "staff" }).tier).toBe("staff");
+  });
+});
+
+describe("ContactStore load safety", () => {
+  const seed = (store: ContactStore) => {
+    store.upsert({ name: "Sam Lee", tier: "partner", emails: ["sam@example.com"] });
+    store.upsert({ name: "Alex Kim", tier: "friend" });
+  };
+
+  it("keeps the previous list when contacts.json stops parsing, and refuses to save until it is fixed", () => {
+    const state = tempState();
+    const warnings: string[] = [];
+    const store = new ContactStore(state, { warn: (m) => warnings.push(m) });
+    seed(store);
+    expect(store.all()).toHaveLength(2);
+
+    const broken = '[{"id": "sam-lee", "name": "Sam Lee", "tier": "partner",, }';
+    fs.writeFileSync(state.path("contacts.json"), broken);
+    expect(store.all().map((c) => c.id)).toEqual(["sam-lee", "alex-kim"]);
+    expect(store.findByEmail("sam@example.com")?.tier).toBe("partner");
+    expect(warnings.some((w) => w.includes("contacts.json could not be read"))).toBe(true);
+
+    expect(() => store.upsert({ name: "New Person" })).toThrow(/could not be read.*not overwritten/);
+    expect(() => store.setTier("alex-kim", "family")).toThrow(/could not be read/);
+    expect(() => store.remove("alex-kim")).toThrow(/could not be read/);
+    // The owner's broken file is untouched, so their edit is not lost either.
+    expect(fs.readFileSync(state.path("contacts.json"), "utf8")).toBe(broken);
+    // Repeated reads of the same broken file warn once, not on every lookup.
+    store.all();
+    expect(warnings.filter((w) => w.includes("could not be read"))).toHaveLength(1);
+
+    // Fixing the file is picked up and unblocks saves.
+    const now = new Date().toISOString();
+    fs.writeFileSync(state.path("contacts.json"), JSON.stringify([{ id: "sam-lee", name: "Sam Lee", tier: "family", phones: [], emails: [], createdAt: now, updatedAt: now }]));
+    expect(store.all().map((c) => c.id)).toEqual(["sam-lee"]);
+    expect(store.upsert({ name: "New Person" }).id).toBe("new-person");
+    expect(new ContactStore(state).all().map((c) => c.id)).toEqual(["sam-lee", "new-person"]);
+  });
+
+  // [sunshine:phone] Upstream's check on load must keep Norwegian numbers, written either way, findable.
+  it("keeps contacts with Norwegian numbers through the check on load", () => {
+    const state = tempState();
+    const now = new Date().toISOString();
+    fs.writeFileSync(
+      state.path("contacts.json"),
+      JSON.stringify([
+        { id: "zia", name: "Zia", tier: "friend", phones: ["+4791234567"], emails: [], agentHandle: "sunshine-zia-ab12", createdAt: now, updatedAt: now },
+        { id: "kari", name: "Kari", tier: "family", phones: ["412 34 567"], emails: [], createdAt: now, updatedAt: now },
+      ]),
+    );
+    const store = new ContactStore(state, { phoneCountry: "NO", warn: () => {} });
+    expect(store.findByPhone("+47 912 34 567")).toMatchObject({ id: "zia", tier: "friend", agentHandle: "sunshine-zia-ab12" });
+    expect(store.findByPhone("91234567")?.id).toBe("zia");
+    expect(store.findByPhone("+4741234567")?.id).toBe("kari");
+    expect(store.findByHandle("sunshine-zia-ab12")?.id).toBe("zia");
+    expect(store.setTier("zia", "partner")?.tier).toBe("partner");
+    expect(new ContactStore(state, { phoneCountry: "NO" }).findByPhone("912 34 567")).toMatchObject({ id: "zia", tier: "partner" });
+  });
+
+  it("refuses to save on a cold start with a malformed file instead of replacing it with one entry", () => {
+    const state = tempState();
+    fs.writeFileSync(state.path("contacts.json"), "{ not json");
+    const store = new ContactStore(state, { warn: () => {} });
+    expect(store.all()).toEqual([]);
+    expect(() => store.upsert({ name: "Sam Lee" })).toThrow(/could not be read/);
+    expect(fs.readFileSync(state.path("contacts.json"), "utf8")).toBe("{ not json");
+  });
+
+  it("treats a JSON value that is not an array as unreadable", () => {
+    const state = tempState();
+    const store = new ContactStore(state, { warn: () => {} });
+    seed(store);
+    fs.writeFileSync(state.path("contacts.json"), JSON.stringify({ contacts: [] }));
+    expect(store.all()).toHaveLength(2);
+    expect(() => store.upsert({ name: "X" })).toThrow(/expected a JSON array/);
+  });
+
+  it("validates each entry: missing address lists become [], unknown or owner tiers become stranger, unusable entries are skipped", () => {
+    const state = tempState();
+    const warnings: string[] = [];
+    fs.writeFileSync(
+      state.path("contacts.json"),
+      JSON.stringify([
+        { id: "sam-lee", name: "Sam Lee", tier: "partner" },
+        { id: "boss", name: "Boss", tier: "owner", phones: ["+14155550100"] },
+        { id: "vip", name: "VIP", tier: "vip", emails: "vip@example.com", phones: [42, "+14155550111"] },
+        { id: "bad-handle", name: "Bad Handle", tier: "friend", agentHandle: "@owner" },
+        { name: "No Id" },
+        "just a string",
+        null,
+      ]),
+    );
+    const store = new ContactStore(state, { warn: (m) => warnings.push(m) });
+    expect(store.all().map((c) => c.id)).toEqual(["sam-lee", "boss", "vip", "bad-handle"]);
+    expect(store.get("sam-lee")).toMatchObject({ tier: "partner", phones: [], emails: [] });
+    // Lookups that walk phones and emails no longer crash on a hand-written entry.
+    expect(store.findByPhone("+14155550199")).toBeUndefined();
+    expect(store.findByEmail("nobody@example.com")).toBeUndefined();
+    expect(store.search("sam")).toHaveLength(1);
+    expect(store.get("boss")?.tier).toBe("stranger");
+    expect(store.get("vip")).toMatchObject({ tier: "stranger", emails: [], phones: ["+14155550111"] });
+    expect(store.get("bad-handle")?.agentHandle).toBeUndefined();
+    expect(store.findByHandle("owner")).toBeUndefined();
+    expect(warnings.filter((w) => w.includes("skipped entry"))).toHaveLength(3);
+    // A valid load allows saves again.
+    expect(store.setTier("sam-lee", "family")?.tier).toBe("family");
+  });
+
+  it("notices an external rewrite even when it lands within the same mtime tick as our own save", () => {
+    const state = tempState();
+    const store = new ContactStore(state);
+    store.upsert({ name: "Sam Lee" });
+    const file = state.path("contacts.json");
+    // Pin our file to a whole-second mtime so another writer can match it exactly.
+    const tick = 1_700_000_000;
+    fs.utimesSync(file, tick, tick);
+    expect(store.all().map((c) => c.id)).toEqual(["sam-lee"]);
+    expect(fs.statSync(file).mtimeMs).toBe(tick * 1000);
+    // Another writer replaces the file atomically within the same tick: only the inode and size differ.
+    const now = new Date().toISOString();
+    const tmp = `${file}.other`;
+    fs.writeFileSync(tmp, JSON.stringify([...store.all(), { id: "ops", name: "Ops", tier: "friend", phones: [], emails: [], createdAt: now, updatedAt: now }]));
+    fs.utimesSync(tmp, tick, tick);
+    fs.renameSync(tmp, file);
+    expect(fs.statSync(file).mtimeMs).toBe(tick * 1000);
+    expect(store.all().map((c) => c.id)).toEqual(["sam-lee", "ops"]);
+  });
+
+  it("does not re-read the file after its own save", () => {
+    const state = tempState();
+    const store = new ContactStore(state);
+    store.upsert({ name: "Sam Lee" });
+    const spy = vi.spyOn(fs, "readFileSync");
+    try {
+      store.all();
+      store.get("sam-lee");
+      expect(spy.mock.calls.filter(([p]) => String(p).endsWith("contacts.json"))).toHaveLength(0);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

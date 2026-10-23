@@ -4,7 +4,7 @@
  * Sends go through the official SDK's AgentIdentity so request shapes stay
  * correct as the API evolves. The identity is fetched once and cached.
  */
-import { Inkbox, type AgentIdentity, type MailAttachmentInput } from "@inkbox/sdk";
+import { Inkbox, type AgentIdentity, type CallOrigin, type MailAttachmentInput } from "@inkbox/sdk";
 import type { InboundMessage, OutboundMessage, Outbox, Principal } from "@open-instinct/core";
 import { createRest } from "./http.js";
 
@@ -47,6 +47,37 @@ export interface FileSendResult {
   channel: FileSend["channel"];
   /** The reusable Inkbox media URL, for iMessage and SMS sends. */
   mediaUrl?: string;
+}
+
+/** Where an outbound call is placed from. Mirrors the SDK's CallOrigin wire values. */
+export type CallOrigination = "dedicated_number" | "shared_imessage_number" | "dedicated_imessage_number";
+export const CALL_ORIGINATIONS: readonly CallOrigination[] = ["dedicated_number", "shared_imessage_number", "dedicated_imessage_number"];
+
+export interface PlaceCallInput {
+  /** E.164. */
+  toNumber: string;
+  /** The task brief Inkbox Voice AI follows on the call. */
+  reason: string;
+  /** What Voice AI says if voicemail answers. Omitted: it composes one from the reason. */
+  voicemailMessage?: string;
+  /** Omitted: the identity's own iMessage line (dedicated when it has one, else the shared pool). */
+  origination?: CallOrigination;
+}
+
+export interface PlacedCall {
+  id: string;
+  /** initiated, ringing, answered, completed, failed or canceled. */
+  status: string;
+  origination: CallOrigination;
+  /** Minutes left on the organization's plan this month, when Inkbox reported them. */
+  minutesRemaining?: number;
+}
+
+/** One turn of a call transcript, as the owner should read it. */
+export interface CallTurn {
+  /** "local" is Voice AI (the agent), "remote" is the person called. */
+  party: string;
+  text: string;
 }
 
 export interface ParsedKey {
@@ -319,6 +350,58 @@ export class InkboxChannel implements Outbox {
     const target = await identity.getIMessage(messageId);
     if (target.conversationId !== key.id) throw new Error("The reaction target must belong to the current conversation");
     await identity.sendIMessageReaction({ messageId, reaction });
+  }
+
+  /**
+   * The line a call goes out on when the caller did not choose: the identity's dedicated
+   * iMessage number when it has one, else the organization's shared iMessage pool. The
+   * dedicated phone number is never the default; it is a different caller id from the one
+   * the owner's contacts know.
+   */
+  async defaultCallOrigination(): Promise<CallOrigination> {
+    const identity = await this.identity();
+    return identity.imessageNumber ? "dedicated_imessage_number" : "shared_imessage_number";
+  }
+
+  /**
+   * Place an outbound call that Inkbox Voice AI drives. Voicemail gets a message, never a hang-up.
+   * The authority mode is pinned to `contact_scoped` on every call: an organization whose saved
+   * Voice AI authority is `yolo` would otherwise widen what the voice agent may do on the owner's
+   * behalf, and the policy guard only ever approved the number and the brief.
+   */
+  async placeCall(input: PlaceCallInput): Promise<PlacedCall> {
+    const identity = await this.identity();
+    const origination = input.origination ?? (await this.defaultCallOrigination());
+    if (origination === "dedicated_number" && !identity.phoneNumber) throw new Error("This identity has no dedicated phone number to call from");
+    const call = await identity.placeCall({
+      toNumber: input.toNumber,
+      origination: origination as CallOrigin,
+      mode: "hosted_agent" as Parameters<AgentIdentity["placeCall"]>[0]["mode"],
+      hostedAgentAuthorityMode: "contact_scoped" as Parameters<AgentIdentity["placeCall"]>[0]["hostedAgentAuthorityMode"],
+      reason: input.reason,
+      onVoicemail: "leave_message" as Parameters<AgentIdentity["placeCall"]>[0]["onVoicemail"],
+      ...(input.voicemailMessage ? { voicemailMessage: input.voicemailMessage } : {}),
+    });
+    const out: PlacedCall = { id: call.id, status: call.status, origination };
+    if (typeof call.rateLimit?.minutesRemaining === "number") out.minutesRemaining = call.rateLimit.minutesRemaining;
+    return out;
+  }
+
+  /** The verbatim transcript of a call, in order. Empty when Inkbox kept none. */
+  async callTranscript(callId: string): Promise<CallTurn[]> {
+    const identity = await this.identity();
+    const rows = await identity.listTranscripts(callId);
+    return rows
+      .slice()
+      .sort((a, b) => a.seq - b.seq)
+      .filter((r) => typeof r.text === "string" && r.text.trim().length > 0)
+      .map((r) => ({ party: r.party, text: r.text.trim() }));
+  }
+
+  /** Replace the identity's Voice AI voice and steering instructions (a full-replace PUT on Inkbox). */
+  async setVoiceConfig(input: { voice?: string; instructions: string }): Promise<void> {
+    const identity = await this.identity();
+    await identity.setHostedAgentConfig({ ...(input.voice ? { voice: input.voice } : {}), instructions: input.instructions });
   }
 
   async markRead(conversationKey: string): Promise<void> {

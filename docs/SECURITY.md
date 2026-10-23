@@ -26,8 +26,8 @@ Six kinds of actor touch the system. Each one has a different door.
 | Actor | Door | Trust |
 |---|---|---|
 | The owner | iMessage or SMS from a phone in `config.owner.phones`; the local `/chat` endpoint; scheduled runs | Full, within the spend policy |
-| Trusted people | iMessage, SMS or email from a number or address in `contacts.json`; their agent over A2A | A tier: `partner`, `family`, `friend` or `contact` |
-| Other agents | A2A tasks through Inkbox | The tier of the person they act for; unknown callers are `stranger` |
+| Trusted people | iMessage, SMS or email from a number or address in `contacts.json`; their agent over A2A | A tier: `partner`, `family`, `friend` or `contact`. Email never runs above `partner` |
+| Other agents | A2A tasks through Inkbox | The tier of the person they act for; unknown callers are `stranger`. The owner's own agents can be `staff` (A2A only, never files, shell or computer) |
 | Strangers | Any message from an unknown number, address or agent | `stranger`: one short introduction, leave a message, rate limited |
 | Web content | Pages the agent fetches, screenshots it reads, emails it opens, files it is sent | None. It is data |
 | The hosting platform | Maritime (the VM and `/chat`), Inkbox (messages and webhooks), Composio (app tokens), the model provider | Trusted by necessity; see below |
@@ -46,12 +46,14 @@ described in the next section.
 | Trusted person | Ask for more than their tier allows | Policy guard; denied asks are reported to the owner |
 | Trusted person | Hide an instruction inside a normal message | Untrusted wrapping; policy guard |
 | Other agent | Ask for calendar titles, memory or a purchase | Policy guard; free/busy only for friends, nothing for strangers |
-| Other agent | Claim to be the owner or a trusted agent | Inkbox contact rules plus our contact lookup by handle; `owner` is a reserved handle |
+| Other agent | Claim to be the owner or a trusted agent | Inkbox contact rules plus our contact lookup by handle; `owner` is a reserved handle; `staff` is only assignable to a contact with an agent handle and only applies over A2A |
+| Stranger | Text an agent handed out without an owner phone first, to become its owner | Claiming needs the one-time `INSTINCT_OWNER_CLAIM_CODE` the front door shows only to the signer-up; no code means no claim; 10 wrong tries per number; 1:1 carrier messages only; code cleared after use |
 | Stranger | Flood the agent with messages | Stranger limits: 3 new conversations a day, 10 messages each, 3 relayed messages a day |
 | Stranger | Read anything about the owner | Strangers get no memory, no profile, no tools except `notify_owner` |
 | Web page | Prompt injection in page text or a screenshot | Untrusted wrapping; policy guard runs on every tool call |
 | Web page | Point `web_fetch` at the agent's own services | SSRF guard |
 | Web page | Make the agent change a payment amount or merchant | Owner sees the exact amount and merchant in Link before any card exists |
+| Web page, email or forwarded text | Prompt injection that dials a number through `phone_call` | `phone.call` is `ask` for everyone, the owner included: each call waits for the owner's own plain yes to that exact number and brief, and `approval_settle` cannot settle it; the Voice AI authority is pinned to `contact_scoped` per call, so an org-level `yolo` setting never widens what the call may do |
 | Attacker on the network | Forge a webhook that looks like an iMessage from the owner | Webhook signatures; `/chat` token and bind address |
 | Attacker on the network | Replay a captured webhook | 5 minute timestamp window; event id dedupe |
 | Attacker with the data dir | Read secrets or transcripts | Secrets at `0600`; bash sees no credentials; but see the limits below |
@@ -129,7 +131,8 @@ by default; this guard removes that.
 whose name contains `KEY`, `SECRET`, `TOKEN`, `PASSWORD` or `CREDENTIAL` is dropped, so
 `env` in the shell shows no provider or Inkbox keys.
 
-File tools are owner-only. No other tier sees them.
+File tools are owner-only. No other tier sees them, `staff` included: `bash` needs both `files.read`
+and `files.write`, and staff has neither, nor `computer.use`.
 
 ### Takeover for credentials and payments
 
@@ -202,7 +205,7 @@ Be clear about these before you trust the agent with anything that matters.
 | Prompt injection against the owner conversation | Wrapping and the guard limit what an injected instruction can do. They cannot stop the model from being fooled into a harmful action that the owner is allowed to take, such as sending an email to the wrong person. Review before you say yes |
 | `bash` is a real shell | It can read any file the process user can read. It is not a sandbox. The container user and the `0600` modes are the limit |
 | DNS rebinding against `web_fetch` | The SSRF guard filters addresses at resolve time and does not pin them. Pass a pinned `fetchImpl` to close it |
-| Email sender identity | The mail webhook carries no SPF, DKIM or DMARC result. Email is never treated as the owner, but a forged email from a contact's address runs at that contact's tier |
+| Email sender identity | The mail webhook carries no SPF, DKIM or DMARC result. Email is never treated as the owner and never runs above `partner`, but a forged email from a contact's address runs at that contact's tier, up to `partner` |
 | Someone with the owner's phone | iMessage from the owner's number is the owner. Lock your phone |
 | The desktop's own browser state | Logins persist in the VM's browser profile under `/home/desk`. Anyone with access to the VM has them |
 | Merchant matching in payments | The block list scans every object key and scalar value, including `payment_request`'s `merchantName`, and may deny incidental mentions. The allow list only recognizes fields such as `merchant`, `vendor` and `store`, so `payment_request` asks when an allow list is set |

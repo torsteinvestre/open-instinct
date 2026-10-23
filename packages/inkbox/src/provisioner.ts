@@ -26,6 +26,53 @@ export class InkboxPlanLimitError extends Error {
   }
 }
 
+/** A connect or disconnect on the dedicated iMessage pool was refused. `code` is Inkbox's machine-readable reason when it gave one. */
+export class InkboxConnectError extends Error {
+  constructor(
+    readonly status: number,
+    readonly code: string | undefined,
+    message: string,
+  ) {
+    super(message);
+    this.name = "InkboxConnectError";
+  }
+}
+
+export interface ConnectRecipientInput {
+  identityId: string;
+  /** E.164. */
+  recipientNumber: string;
+  /** Plain text, under 160 characters. The only message allowed until the recipient replies. */
+  firstMessage: string;
+  /** A UUID made once per connect and reused on retries of the same connect. */
+  idempotencyKey: string;
+}
+
+export interface ConnectRecipientResult {
+  assignmentId: string;
+  conversationId?: string;
+  messageId?: string;
+  /** True when the recipient was already connected to this identity; no message was sent. */
+  alreadyConnected: boolean;
+}
+
+export const CONNECT_FIRST_MESSAGE_MAX = 160;
+
+function connectErrorCode(body: unknown): string | undefined {
+  if (!body || typeof body !== "object") return undefined;
+  const b = body as Dict;
+  if (typeof b.error === "string") return b.error;
+  if (typeof b.code === "string") return b.code;
+  const detail = b.detail;
+  if (typeof detail === "string" && /^[a-z_]+$/.test(detail)) return detail;
+  if (detail && typeof detail === "object") {
+    const d = detail as Dict;
+    if (typeof d.error === "string") return d.error;
+    if (typeof d.code === "string") return d.code;
+  }
+  return undefined;
+}
+
 export const DEFAULT_WEBHOOK_EVENTS = [
   "imessage.received",
   "imessage.reaction_received",
@@ -35,6 +82,7 @@ export const DEFAULT_WEBHOOK_EVENTS = [
   "a2a.task.message",
   "a2a.task.canceled",
   "a2a.sent_task.updated",
+  "call.ended",
 ] as const;
 
 export interface ProvisionInput {
@@ -190,6 +238,20 @@ export class InkboxProvisioner {
     return out;
   }
 
+  /**
+   * Make sure an existing subscription carries every event in `eventTypes`, keeping the
+   * ones it already has. Returns the events that were added. For identities subscribed
+   * before a new event existed (call.ended arrived after the first fleets were provisioned).
+   */
+  async ensureWebhookEvents(subscriptionId: string, eventTypes: readonly string[] = DEFAULT_WEBHOOK_EVENTS): Promise<string[]> {
+    const raw = await this.rest.request<Dict>("GET", `/webhooks/subscriptions/${encodeURIComponent(subscriptionId)}`);
+    const have = new Set((Array.isArray(raw.event_types) ? raw.event_types : []).filter((e): e is string => typeof e === "string"));
+    const missing = eventTypes.filter((e) => !have.has(e));
+    if (missing.length === 0) return [];
+    await this.rest.request("PATCH", `/webhooks/subscriptions/${encodeURIComponent(subscriptionId)}`, { event_types: [...have, ...missing] }, { scope: "identity" });
+    return missing;
+  }
+
   /** The shared iMessage router: humans text `connect @handle` to this number. */
   async routerInfo(): Promise<{ number: string; connectCommand: string; smsLink: string; qrPngDataUrl: string }> {
     const raw = await this.rest.request<Dict>("GET", "/imessage/triage-number");
@@ -199,6 +261,56 @@ export class InkboxProvisioner {
       smsLink: str(raw.sms_link) ?? "",
       qrPngDataUrl: str(raw.connect_qr_png_data_url) ?? str(raw.qr_png_data_url) ?? "",
     };
+  }
+
+  /**
+   * Dedicated iMessage pool: bind a recipient's phone to an identity and send the
+   * opening text from one of the organization's pool numbers. The recipient never
+   * has to text first. Admin key only. Until the recipient replies, nothing else
+   * may be sent on that connection (Inkbox answers 409 imessage_awaiting_inbound).
+   */
+  async connectRecipient(input: ConnectRecipientInput): Promise<ConnectRecipientResult> {
+    const text = input.firstMessage.trim();
+    if (!text) throw new Error("connectRecipient: the first message is empty");
+    if (text.length >= CONNECT_FIRST_MESSAGE_MAX) throw new Error(`connectRecipient: the first message must be under ${CONNECT_FIRST_MESSAGE_MAX} characters (got ${text.length})`);
+    try {
+      const raw = await this.rest.requestUrl<Dict>(
+        "POST",
+        `${this.rest.baseUrl}/api/v1/imessage/connect`,
+        { agent_identity_id: input.identityId, recipient_number: input.recipientNumber, first_message: text },
+        { "Idempotency-Key": input.idempotencyKey },
+      );
+      const assignment = raw.assignment && typeof raw.assignment === "object" ? (raw.assignment as Dict) : undefined;
+      const message = raw.message && typeof raw.message === "object" ? (raw.message as Dict) : undefined;
+      const out: ConnectRecipientResult = { assignmentId: str(assignment?.id) ?? "", alreadyConnected: raw.already_connected === true };
+      const conversationId = str(raw.conversation_id);
+      if (conversationId) out.conversationId = conversationId;
+      const messageId = str(message?.id);
+      if (messageId) out.messageId = messageId;
+      return out;
+    } catch (err) {
+      if (err instanceof InkboxHttpError) throw new InkboxConnectError(err.status, connectErrorCode(err.body), err.message);
+      throw err;
+    }
+  }
+
+  /** Stop routing a recipient to an identity on the pool. Already disconnected counts as done. */
+  async disconnectRecipient(input: { identityId: string; recipientNumber: string; idempotencyKey: string }): Promise<{ assignmentId?: string; disconnected: boolean }> {
+    try {
+      const raw = await this.rest.requestUrl<Dict>(
+        "POST",
+        `${this.rest.baseUrl}/api/v1/imessage/disconnect`,
+        { agent_identity_id: input.identityId, recipient_number: input.recipientNumber },
+        { "Idempotency-Key": input.idempotencyKey },
+      );
+      const out: { assignmentId?: string; disconnected: boolean } = { disconnected: raw.disconnected !== false };
+      const id = str(raw.assignment_id);
+      if (id) out.assignmentId = id;
+      return out;
+    } catch (err) {
+      if (err instanceof InkboxHttpError) throw new InkboxConnectError(err.status, connectErrorCode(err.body), err.message);
+      throw err;
+    }
   }
 
   async enableA2A(handle: string): Promise<void> {

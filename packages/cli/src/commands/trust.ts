@@ -103,6 +103,12 @@ export async function runTrust(ctx: CliContext, argv: string[]): Promise<number>
       if (!ref || !tierText) throw new UsageError("usage: instinct trust set <contact> <tier>", "trust");
       const tier = parseTier(tierText, "trust");
       const found = findContact(contacts, ref);
+      if (tier === "staff" && !found?.agentHandle) {
+        throw new UsageError(
+          `Tier "staff" is only for agents, and ${found?.name ?? ref} has no agent handle. Save it first: instinct invite "${found?.name ?? ref}" --tier staff --handle <handle>, or pick partner or lower.`,
+          "trust",
+        );
+      }
       const contact = found ? contacts.setTier(found.id, tier) : contacts.upsert({ name: ref, tier });
       if (!contact) throw new CliError(`Could not update ${ref}`);
       ctx.print(`${c.green(found ? "Updated" : "Added")} ${contact.name} (${contact.id}) -> ${c.bold(contact.tier)}`);

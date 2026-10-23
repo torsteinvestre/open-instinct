@@ -36,7 +36,7 @@ An analogy: the VM is a desk that folds into the wall when nobody is sitting at 
 | Inkbox org admin key | Provisions the agent's iMessage identity, mints its scoped key, subscribes webhooks | Inkbox dashboard. Set it as `INKBOX_ADMIN_API_KEY`. The gateway needs it for signup. A single user needs it once, for `instinct init`. |
 | Anthropic key | The model | Set it as `ANTHROPIC_API_KEY`. It is copied into each agent as a secret. Without a key of your own, use Maritime's metered proxy (`--maritime-llm`, or `INSTINCT_USE_MARITIME_LLM=1` on the gateway). |
 | Composio key (optional) | Gmail, Calendar, Contacts | Set `COMPOSIO_API_KEY`. `COMPOSIO_TOOLKITS` picks the toolkits; default `gmail,googlecalendar,googlecontacts`. |
-| Stripe Link (optional) | A wallet the agent can pay from, one-time cards per approved amount | Set `LINK_CLIENT_ID`, `LINK_CLIENT_SECRET` and `STRIPE_PUBLISHABLE_KEY`. All three are required for payment tools to appear. |
+| Stripe Link (optional) | A wallet the agent can pay from, one-time cards per approved amount | Set `LINK_CLIENT_ID`, `LINK_CLIENT_SECRET` and `STRIPE_PUBLISHABLE_KEY`. All three are required for payment tools to appear. The client id and secret come from Stripe's application form, reviewed every 3 to 5 days: apply early ([PAYMENTS.md](PAYMENTS.md#registering-an-oauth-client)). |
 | A container registry | Maritime pulls the agent image from it | GitHub Container Registry (`ghcr.io`) through the included workflow. |
 
 A note on the Maritime key. If an agent will also use the hosted Computers MCP instead of the in-VM desktop, the same key must also carry `computers`. A key with only `computers` is refused by the agents API, so a deployment that needs both uses `manage` or `*`.

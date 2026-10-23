@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ContactStore } from "../src/contacts.js";
-import { OWNER_EMAIL_PRINCIPAL_ID, isReservedHandle, normalizeHandle, normalizePhone, parsePhone, phoneCountryOf, resolvePrincipal, type PhoneCountry } from "../src/principal.js";
+import { OWNER_EMAIL_PRINCIPAL_ID, OWNER_EMAIL_TIER, capTier, isReservedHandle, normalizeHandle, normalizePhone, parsePhone, phoneCountryOf, resolvePrincipal, type PhoneCountry } from "../src/principal.js";
+import { TIER_ORDER } from "../src/types.js";
 import { inbound, tempState, testConfig } from "./helpers.js";
 
 describe("normalizePhone", () => {
@@ -172,5 +173,50 @@ describe("resolvePrincipal", () => {
     const p = resolvePrincipal(inbound({ channel: "imessage", from: "+16175550101" }), config, c);
     expect(p.kind).toBe("contact");
     expect(p.tier).toBe("stranger");
+  });
+});
+
+describe("resolvePrincipal caps on unauthenticated channels", () => {
+  const config = testConfig();
+
+  function withStaff(): ContactStore {
+    const store = new ContactStore(tempState());
+    store.upsert({ name: "Research", tier: "staff", phones: ["+14155550123"], emails: ["research@team.example"], agentHandle: "research-bot" });
+    return store;
+  }
+
+  it("never gives an email sender more than partner, so a forged From of a staff contact gets partner", () => {
+    const c = withStaff();
+    const p = resolvePrincipal(inbound({ channel: "email", from: "Research@Team.example" }), config, c);
+    expect(p.kind).toBe("contact");
+    expect(p.contactId).toBe("research");
+    expect(p.tier).toBe(OWNER_EMAIL_TIER);
+    expect(p.tier).toBe("partner");
+  });
+
+  it("caps an email-looking sender on another channel too, and a bare handle on the email channel", () => {
+    const c = withStaff();
+    expect(resolvePrincipal(inbound({ channel: "sms", from: "research@team.example" }), config, c).tier).toBe("partner");
+    const handle = resolvePrincipal(inbound({ channel: "email", from: "research-bot" }), config, c);
+    expect(handle.contactId).toBe("research");
+    expect(handle.tier).toBe("partner");
+  });
+
+  it("gives staff only to the contact's agent over A2A; the same contact by phone is partner", () => {
+    const c = withStaff();
+    const agent = resolvePrincipal(inbound({ channel: "a2a", from: "@research-bot" }), config, c);
+    expect(agent).toMatchObject({ kind: "agent", tier: "staff", agentHandle: "research-bot" });
+    const phone = resolvePrincipal(inbound({ channel: "sms", from: "+14155550123" }), config, c);
+    expect(phone).toMatchObject({ kind: "contact", contactId: "research", tier: "partner" });
+  });
+
+  it("never raises a tier: lower-tier email senders keep their tier", () => {
+    const c = withStaff();
+    c.upsert({ name: "Alex Kim", tier: "friend", emails: ["alex@example.com"] });
+    expect(resolvePrincipal(inbound({ channel: "email", from: "alex@example.com" }), config, c).tier).toBe("friend");
+    for (const tier of TIER_ORDER) {
+      const capped = capTier({ kind: "contact", id: "x", tier, displayName: "x" }, "partner");
+      expect(TIER_ORDER.indexOf(capped.tier), tier).toBe(Math.max(TIER_ORDER.indexOf(tier), TIER_ORDER.indexOf("partner")));
+    }
   });
 });

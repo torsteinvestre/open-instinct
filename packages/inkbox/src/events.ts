@@ -263,6 +263,89 @@ function parseA2ATaskCanceled(payload: Dict, data: Dict, eventType: string): Inb
   };
 }
 
+/** A finished phone call, as `call.ended` describes it. Not an InboundMessage: the model never sees it. */
+export interface CallEndedEvent {
+  /** Stable event id, the dedupe key across redeliveries. */
+  id: string;
+  callId: string;
+  remoteNumber: string;
+  /** Address-book name Inkbox matched for the remote number, when any. */
+  contactName?: string;
+  direction: string;
+  /** initiated, ringing, answered, completed, failed or canceled. */
+  status: string;
+  /** Voice AI's verdict: completed, no_answer, declined or failed. Absent on client-driven calls. */
+  outcome?: string;
+  /** local, remote, max_duration, voicemail or rejected. */
+  hangupReason?: string;
+  durationSeconds?: number;
+  /** The task brief the call was placed with. */
+  reason?: string;
+  /**
+   * The inline transcript. `null` means Inkbox captured none inline and the verbatim one
+   * must be fetched; an array may be abridged (the middle cut) and is used as is.
+   */
+  transcript: Array<{ party: string; text: string }> | null;
+  transcriptAbridged: boolean;
+  actionItems: Array<{ action: string; details?: string }>;
+  receivedAt: string;
+}
+
+/** `call.ended` only. Anything else, or a payload without a call, is undefined. */
+export function parseCallEnded(payload: unknown): CallEndedEvent | undefined {
+  const p = dict(payload);
+  if (!p || str(p.event_type) !== "call.ended") return undefined;
+  const data = dict(p.data);
+  const call = data ? dict(data.call) : undefined;
+  if (!data || !call) return undefined;
+  const callId = str(call.id);
+  if (!callId) return undefined;
+  const transcriptBlock = dict(data.transcript);
+  let transcript: CallEndedEvent["transcript"] = null;
+  if (transcriptBlock) {
+    transcript = [];
+    for (const entry of list(transcriptBlock.entries)) {
+      const e = dict(entry);
+      if (!e || e.marker) continue;
+      const text = str(e.text)?.trim();
+      if (!text) continue;
+      transcript.push({ party: str(e.party) ?? "remote", text });
+    }
+  }
+  const actionItems: CallEndedEvent["actionItems"] = [];
+  for (const raw of list(data.post_call_action_items)) {
+    const item = dict(raw);
+    const action = item ? str(item.action) : undefined;
+    if (!action) continue;
+    const details = item ? str(item.details) : undefined;
+    actionItems.push(details ? { action, details } : { action });
+  }
+  const contactName = list(data.contacts)
+    .map((c) => dict(c))
+    .map((c) => (c ? str(c.name) ?? str(c.display_name) : undefined))
+    .find((n): n is string => Boolean(n));
+  const out: CallEndedEvent = {
+    id: eventId(p, `call:${callId}:ended`),
+    callId,
+    remoteNumber: str(call.remote_phone_number) ?? str(call.remote_number) ?? "",
+    direction: str(call.direction) ?? "outbound",
+    status: str(call.status) ?? "completed",
+    transcript,
+    transcriptAbridged: transcriptBlock?.abridged === true,
+    actionItems,
+    receivedAt: receivedAt(p),
+  };
+  if (contactName) out.contactName = contactName;
+  const outcome = str(data.outcome);
+  if (outcome) out.outcome = outcome;
+  const hangup = str(call.hangup_reason);
+  if (hangup) out.hangupReason = hangup;
+  if (typeof call.duration_seconds === "number") out.durationSeconds = call.duration_seconds;
+  const reason = str(call.reason);
+  if (reason) out.reason = reason;
+  return out;
+}
+
 /** Events that carry something the model should hear. */
 export const INBOUND_EVENT_TYPES = [
   "imessage.received",
@@ -299,7 +382,8 @@ export function parseInkboxEvent(payload: unknown): InboundMessage | undefined {
       // The peer's progress or answer on a task we sent with ask_instinct.
       return parseA2ATask(p, data, eventType, "sent");
     default:
-      // sent, delivered, bounced, failed, read: nothing to prompt with.
+      // sent, delivered, bounced, failed, read: nothing to prompt with. call.ended is
+      // reported to the owner from its transcript (parseCallEnded), not through the model.
       return undefined;
   }
 }

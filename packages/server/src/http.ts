@@ -15,7 +15,8 @@ import http from "node:http";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { decodeEvent, systemTaskOf } from "@open-instinct/core";
 import type { AgentRuntime, HandleResult, InboundMessage, InstinctConfig, OutboundMessage, ScheduleEntry, Scheduler, StateDir } from "@open-instinct/core";
-import { DurableInbox, parseInkboxEvent, verifyInkboxSignature } from "@open-instinct/inkbox";
+import { DurableInbox, parseCallEnded, parseInkboxEvent, verifyInkboxSignature } from "@open-instinct/inkbox";
+import type { CallEndedEvent } from "@open-instinct/inkbox";
 
 /** Replies the console outbox is holding for a chat conversation. */
 export interface ChatBuffer {
@@ -48,6 +49,8 @@ export interface HttpApp {
   chatBuffer?: ChatBuffer;
   /** Set when payments are configured. */
   wallet?: WalletCallback;
+  /** Report a finished phone call to the owner. Unset: call.ended events are acknowledged and dropped. */
+  onCallEnded?(event: CallEndedEvent): Promise<void>;
 }
 
 export interface HttpServerOptions {
@@ -90,6 +93,34 @@ export async function closeInkboxInbox(app: HttpApp): Promise<void> {
     if (inboxes.get(app) === inbox) inboxes.delete(app);
   });
   await inbox.closing;
+}
+
+/** Recently reported call events, so a redelivered call.ended never texts the owner twice. */
+const reportedCalls = new WeakMap<HttpApp, Set<string>>();
+const REPORTED_CALLS_MAX = 500;
+
+/**
+ * A call.ended event is not a message for the model: the owner gets one text built from
+ * the transcript. True when the payload was such an event, whether or not a reporter is set.
+ */
+async function acceptCallEnded(app: HttpApp, payload: unknown, log: (m: string) => void): Promise<boolean> {
+  const event = parseCallEnded(payload);
+  if (!event) return false;
+  if (!app.onCallEnded) return true;
+  let seen = reportedCalls.get(app);
+  if (!seen) {
+    seen = new Set();
+    reportedCalls.set(app, seen);
+  }
+  if (seen.has(event.id)) return true;
+  seen.add(event.id);
+  if (seen.size > REPORTED_CALLS_MAX) seen.delete(seen.values().next().value as string);
+  try {
+    await app.onCallEnded(event);
+  } catch (err) {
+    log(`call ${event.callId}: report failed: ${(err as Error).message}`);
+  }
+  return true;
 }
 
 async function processInbound(app: HttpApp, msg: InboundMessage): Promise<HandleResult> {
@@ -165,9 +196,10 @@ export function presentedToken(headers: http.IncomingHttpHeaders): string | unde
  * door, a Maritime schedule wake, or the owner typing. Envelope replies go out
  * through the outbox, so the HTTP response carries only an acknowledgement.
  */
-export async function handleChat(app: HttpApp, body: ChatRequest, now: Date = new Date()): Promise<ChatResponse> {
+export async function handleChat(app: HttpApp, body: ChatRequest, now: Date = new Date(), log: (m: string) => void = () => {}): Promise<ChatResponse> {
   const event = decodeEvent(body.message);
   if (event !== undefined) {
+    if (await acceptCallEnded(app, event, log)) return { response: "", acked: true };
     const link = linkCallbackOf(event);
     if (link) {
       if (!app.wallet) return { response: "", acked: true, blocked: "payments not configured" };
@@ -314,8 +346,10 @@ export function createHttpServer(app: HttpApp, opts: HttpServerOptions = {}): ht
       if (!verifyInkboxSignature(raw, req.headers, key)) return sendJson(res, 401, { error: "invalid signature" });
       const payload = parseJson(raw);
       if (payload === undefined) return sendJson(res, 400, { error: "invalid JSON" });
-      const inbound = parseInkboxEvent(payload);
-      if (inbound) await acceptInbound(app, inbound);
+      if (!(await acceptCallEnded(app, payload, log))) {
+        const inbound = parseInkboxEvent(payload);
+        if (inbound) await acceptInbound(app, inbound);
+      }
       res.statusCode = 204;
       res.end();
       return;
@@ -348,7 +382,7 @@ export function createHttpServer(app: HttpApp, opts: HttpServerOptions = {}): ht
         return sendJson(res, 400, { error: "expected JSON { message: string, source?, conversation_id? }" });
       }
       try {
-        const out = await handleChat(app, body as ChatRequest, now());
+        const out = await handleChat(app, body as ChatRequest, now(), log);
         return sendJson(res, 200, out);
       } catch (err) {
         log(`chat failed: ${(err as Error).message}`);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_WEBHOOK_EVENTS, InkboxPlanLimitError, InkboxProvisioner } from "../src/provisioner.js";
+import { DEFAULT_WEBHOOK_EVENTS, InkboxConnectError, InkboxPlanLimitError, InkboxProvisioner } from "../src/provisioner.js";
 import { InkboxHttpError } from "../src/http.js";
 import { fakeFetch, rawIdentity, type Recorded } from "./fake-fetch.js";
 
@@ -148,6 +148,22 @@ describe("InkboxProvisioner: keys, webhooks, router, A2A", () => {
     expect(out).toEqual({ subscriptionId: "sub_1", signingKey: "whsec_new" });
     expect(fake.calls[0]?.body).toEqual({ url: "https://gw/hook", event_types: [...DEFAULT_WEBHOOK_EVENTS], agent_identity_id: "ident_1" });
     expect(DEFAULT_WEBHOOK_EVENTS).toContain("a2a.sent_task.updated");
+    expect(DEFAULT_WEBHOOK_EVENTS).toContain("call.ended");
+  });
+
+  it("adds missing events to an older subscription and leaves a complete one alone", async () => {
+    const fake = fakeFetch({
+      "GET /api/v1/webhooks/subscriptions/sub_old": { body: { id: "sub_old", event_types: ["imessage.received", "custom.event"] } },
+      "PATCH /api/v1/webhooks/subscriptions/sub_old": { body: { id: "sub_old" } },
+      "GET /api/v1/webhooks/subscriptions/sub_new": { body: { id: "sub_new", event_types: [...DEFAULT_WEBHOOK_EVENTS] } },
+    });
+    const added = await provisioner(fake).ensureWebhookEvents("sub_old");
+    expect(added).toEqual(DEFAULT_WEBHOOK_EVENTS.filter((e) => e !== "imessage.received"));
+    const patch = fake.calls.find((c) => c.method === "PATCH");
+    expect(patch?.query).toEqual({ scope: "identity" });
+    expect(patch?.body).toEqual({ event_types: ["imessage.received", "custom.event", ...added] });
+    expect(await provisioner(fake).ensureWebhookEvents("sub_new")).toEqual([]);
+    expect(fake.calls.filter((c) => c.method === "PATCH")).toHaveLength(1);
   });
 
   it("omits signingKey when the server returns null", async () => {
@@ -201,5 +217,54 @@ describe("InkboxProvisioner: keys, webhooks, router, A2A", () => {
     expect(fake.calls[0]?.body).toEqual({ peer_agent_handles: ["maria-instinct"], recipient_email: "sam@example.com", expires_in_seconds: 86400 });
     await expect(p.deleteIdentity("gone")).resolves.toBeUndefined();
     await expect(p.deleteIdentity("maria-instinct")).resolves.toBeUndefined();
+  });
+});
+
+describe("InkboxProvisioner.connectRecipient", () => {
+  it("posts the connect body with the admin key and the idempotency key, and maps the 201", async () => {
+    const fake = fakeFetch({
+      "POST /api/v1/imessage/connect": {
+        status: 201,
+        body: {
+          assignment: { id: "asg_1", remote_number: "+14155550100", agent_identity_id: "ident_1", status: "active", created_at: "2026-10-17T10:00:00Z" },
+          conversation_id: "conv_1",
+          message: { id: "msg_1", status: "queued", content: "Hi Ada" },
+          already_connected: false,
+        },
+      },
+    });
+    const out = await provisioner(fake).connectRecipient({ identityId: "ident_1", recipientNumber: "+14155550100", firstMessage: "  Hi Ada, I'm your agent. Reply to get started. ", idempotencyKey: "d19a6d91-1b25-4ab8-a260-6b82f2d6e500" });
+    expect(out).toEqual({ assignmentId: "asg_1", conversationId: "conv_1", messageId: "msg_1", alreadyConnected: false });
+    const call = fake.calls[0]!;
+    expect(call.url).toBe(`${BASE}/api/v1/imessage/connect`);
+    expect(call.headers["x-api-key"]).toBe("ik_admin");
+    expect(call.headers["idempotency-key"]).toBe("d19a6d91-1b25-4ab8-a260-6b82f2d6e500");
+    expect(call.body).toEqual({ agent_identity_id: "ident_1", recipient_number: "+14155550100", first_message: "Hi Ada, I'm your agent. Reply to get started." });
+  });
+
+  it("reports an existing connection and refuses an over-long first message before any request", async () => {
+    const fake = fakeFetch({ "POST /api/v1/imessage/connect": { status: 200, body: { assignment: { id: "asg_1" }, conversation_id: "conv_1", message: null, already_connected: true } } });
+    const out = await provisioner(fake).connectRecipient({ identityId: "ident_1", recipientNumber: "+14155550100", firstMessage: "Hi", idempotencyKey: "k" });
+    expect(out).toEqual({ assignmentId: "asg_1", conversationId: "conv_1", alreadyConnected: true });
+    await expect(provisioner(fake).connectRecipient({ identityId: "ident_1", recipientNumber: "+14155550100", firstMessage: "x".repeat(160), idempotencyKey: "k" })).rejects.toThrow(/under 160/);
+    await expect(provisioner(fake).connectRecipient({ identityId: "ident_1", recipientNumber: "+14155550100", firstMessage: "   ", idempotencyKey: "k" })).rejects.toThrow(/empty/);
+    expect(fake.calls).toHaveLength(1);
+  });
+
+  it("turns 409 and 402 answers into InkboxConnectError with Inkbox's code", async () => {
+    const fake = fakeFetch({
+      "POST /api/v1/imessage/connect": (req) => ((req.body as { recipient_number: string }).recipient_number === "+10000000001" ? { status: 409, body: { error: "imessage_pool_unavailable" } } : { status: 402, body: { detail: { code: "entitlement_exceeded", message: "upgrade" } } }),
+      "POST /api/v1/imessage/disconnect": { status: 200, body: { assignment_id: "asg_1", disconnected: true } },
+    });
+    const p = provisioner(fake);
+    const pool = await p.connectRecipient({ identityId: "i", recipientNumber: "+10000000001", firstMessage: "hi", idempotencyKey: "k1" }).catch((e: unknown) => e);
+    expect(pool).toBeInstanceOf(InkboxConnectError);
+    expect((pool as InkboxConnectError).status).toBe(409);
+    expect((pool as InkboxConnectError).code).toBe("imessage_pool_unavailable");
+    const plan = await p.connectRecipient({ identityId: "i", recipientNumber: "+10000000002", firstMessage: "hi", idempotencyKey: "k2" }).catch((e: unknown) => e);
+    expect((plan as InkboxConnectError).status).toBe(402);
+    expect((plan as InkboxConnectError).code).toBe("entitlement_exceeded");
+    expect(await p.disconnectRecipient({ identityId: "i", recipientNumber: "+10000000001", idempotencyKey: "k3" })).toEqual({ assignmentId: "asg_1", disconnected: true });
+    expect(fake.calls[2]?.headers["idempotency-key"]).toBe("k3");
   });
 });

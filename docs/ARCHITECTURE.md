@@ -219,7 +219,7 @@ Maritime's documentation work unchanged.
 
 ## Trust and permissions
 
-Six tiers: `owner`, `partner`, `family`, `friend`, `contact`, `stranger`. Each tier has default
+Seven tiers: `owner`, `staff` (your own agents working as a team), `partner`, `family`, `friend`, `contact`, `stranger`. Each tier has default
 capabilities; the owner adds scoped, time-boxed grants ("Sam can book us dinner this week").
 Anything not granted is denied. Purchases and calendar writes by non-owners default to
 "ask the owner", which sends the owner a one-line approval text.
@@ -296,6 +296,7 @@ Server:
 | `INSTINCT_MODEL` | `provider/model`, default `anthropic/claude-fable-5-1`; `openai-compatible/<id>` uses `OPENAI_BASE_URL` |
 | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, ... | model access, looked up per Pi provider |
 | `INSTINCT_OWNER_NAME`, `INSTINCT_OWNER_PHONE`, `INSTINCT_OWNER_EMAIL`, `INSTINCT_OWNER_TIMEZONE`, `INSTINCT_AGENT_NAME` | who the owner is and what the agent is called; seeded into `config.json` on first boot |
+| `INSTINCT_CLAIM_OWNER_ON_FIRST_CONTACT`, `INSTINCT_OWNER_CLAIM_CODE`, `INSTINCT_OWNER_CLAIM_EXPIRES_AT` | `1` with no owner phone: the first person who texts the agent 1:1 on iMessage or SMS a message containing the one-time claim code becomes the owner, once (`config.owner.claimOnFirstContact`, `claimCode`, `claimExpiresAt`). No code (or one under 8 letters/digits, or past the optional ISO expiry) means nobody can claim, and boot logs a warning. The front door shows the code only to the person who signed up. Case, spaces and dashes are ignored; a wrong code leaves the sender a stranger, with 10 tries per number. A claim clears the code and the flag from `config.json`, and the code is stripped from the message before the model sees it. Group threads, unresolved scopes, duplicates, email and A2A never claim |
 | `INSTINCT_PERSONA` | seeds `<data>/PERSONA.md` on first boot only; after that the file is the owner's (`instinct persona`) |
 | `INSTINCT_INSTRUCTIONS` | seeds `<data>/AGENTS.md`; a changed value replaces the file on the next boot unless the owner edited it (`AGENTS.md.seed` remembers the last seed) |
 | `INKBOX_API_KEY`, `INKBOX_AGENT_HANDLE`, `INKBOX_IDENTITY_ID` | identity-scoped Inkbox credentials; turn on the Inkbox outbox, messaging tools and A2A |
@@ -305,8 +306,9 @@ Server:
 | `INSTINCT_CHAT_TOKEN` | bearer token for `/chat`, `/status`, `/schedules` |
 | `INSTINCT_BIND` | bind address; default `127.0.0.1`, or `0.0.0.0` when `PORT` or a `MARITIME_*` variable is set |
 | `INSTINCT_PUBLIC_URL` | this agent's public URL, used to build the Link callback |
-| `INSTINCT_REPLY_BUDGET_MS` | how long `/chat` waits before acknowledging (default 20000) |
-| `INSTINCT_SKILLS_DIR` | SKILL.md folder (default `<repo>/skills`) |
+| `INSTINCT_ACK_SLOW_REPLIES` | `1` texts the owner one "on it" in their 1:1 iMessage/SMS thread when a turn is still running after `INSTINCT_REPLY_BUDGET_MS` (`config.features.ackSlowReplies`); never for a queued text, a group or a non-owner |
+| `INSTINCT_REPLY_BUDGET_MS` | how long `/chat` waits before acknowledging, and the delay before the optional slow-reply text (default 20000) |
+| `INSTINCT_SKILLS_DIR` | SKILL.md folder (default `<repo>/skills`); the owner's `<data>/skills` is read after it, every 30 s. Built-ins win a name clash, and an owner skill is private to the owner unless its frontmatter says `visibility: public` |
 | `INSTINCT_COMPUTER` | `auto` (desktopd if present, else hosted if `MARITIME_API_KEY`, else none), `desktopd`, `maritime`, `none` |
 | `MARITIME_API_KEY`, `MARITIME_COMPUTERS_MCP_URL` | hosted computer fallback |
 | `MARITIME_DESKTOP`, `MARITIME_AGENT_ID`, `MARITIME_BACKEND_URL`, `MARITIME_INTERNAL_TOKEN`, `PORT` | injected by Maritime inside a hosted agent |

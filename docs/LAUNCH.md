@@ -52,7 +52,7 @@ We built the open-source version and published it today: Open Instinct.
 
 What it is: a personal agent you reach on iMessage, SMS or email. It has its own computer (a Linux desktop in a microVM), it remembers, it schedules itself, and it coordinates with the agents of the people you trust.
 
-What we think is the interesting part: trust is explicit. Six tiers, from owner to stranger, decide what each person's agent may ask yours. Your partner's agent can read your calendar. A friend's can only ask when you are free. A request outside the tier gets a polite no, and you get a one-line text saying who asked for what. The table is a file with tests, not a promise.
+What we think is the interesting part: trust is explicit. Seven tiers, from owner to stranger, decide what each person's agent may ask yours. Your partner's agent can read your calendar. A friend's can only ask when you are free. A request outside the tier gets a polite no, and you get a one-line text saying who asked for what. The table is a file with tests, not a promise.
 
 How it is built: Pi for the agent loop, Inkbox for iMessage and identity, Maritime for hosting and the desktop, Composio for Gmail and Calendar, Stripe Link for payments the owner approves one card at a time. Every service sits behind one small package, so you can swap any of them.
 

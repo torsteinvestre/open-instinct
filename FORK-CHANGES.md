@@ -545,7 +545,7 @@ the owner's free/busy and a partner's may read the calendar, each as `docs/PERMI
 which the fork uses because direct mode costs about 100,000 tokens per message (`[sunshine:apps]`), every action
 runs through `COMPOSIO_MULTI_EXECUTE_TOOL`, which upstream tags owner-only because the guard could not see
 inside it. So another person's agent could use none of the owner's apps: in the agent-to-agent test Zia's
-agent had to ask Zia whether she was free instead of checking.
+agent had to ask Zia whether Zia was free instead of checking.
 
 **What the fork adds.**
 - `ToolMeta.capabilitiesFor` (`packages/core/src/types.ts`) and `callCapabilities` (`policy.ts`): a tool whose

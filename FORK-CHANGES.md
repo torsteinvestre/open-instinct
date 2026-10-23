@@ -920,9 +920,12 @@ told Zia "I have no record of you agreeing" and asked again.
   admitting a task, the runtime also reads the agent's earlier tasks in the same context from Inkbox (the same
   `loadA2ATask` upstream uses for the current task) and puts them before upstream's "Earlier messages in this
   task" as "Earlier in this topic with @caller (finished requests, oldest first)". Only tasks Inkbox reports for
-  the same authenticated caller and context count; one that cannot be read is left out. At most the last 5 tasks
-  and 24,000 characters (`A2A_TOPIC_TASKS`, `A2A_TOPIC_CHARS`), keeping the newest. Execution stays isolated:
-  each task still runs and answers on its own.
+  the same authenticated caller and context count. Tasks are read newest first until 24,000 characters are filled
+  (`A2A_TOPIC_CHARS`, the same limit upstream uses for one task's own earlier messages), so a long topic costs a
+  few reads and keeps its newest turns; a read that fails ends the reading (the request goes through with what was
+  read, not after a string of failed reads). Execution stays isolated: each task still runs and answers on its own.
+- Why no count of tasks: the first version also capped the reads at the last 5 tasks, a number of the fork's own.
+  Torstein questioned it (2026-10-23); the character budget alone bounds both the size and the reads, newest first.
 - Caller side: the note that brings a peer's answer back names the context ("Delegated task X (context Y) with
   @peer is completed."), and `ask_instinct`'s `contextId` says to give it for a follow-up (a confirm, a change,
   another question), so the other agent sees the exchange. Whether to continue a topic stays the model's call.
@@ -930,12 +933,21 @@ told Zia "I have no record of you agreeing" and asked again.
 **Tested** (free). `packages/core/test/runtime.test.ts`, "a follow-up in the same topic": the earlier task with the
 same caller is shown, another caller's task in the same context and the same caller's task in another context
 are not, the answer still goes to the current task only; an unreadable earlier task leaves the request as before;
-the caller's note carries the context. With the real model (`scenarios/a2a.mjs`, situation "late", 2026-10-23,
+a topic of 40 earlier tasks shows the newest that fit (with 12 reads, not 40), oldest first and within the budget;
+the caller's note carries the context. With the real model (the first version, with the cap of 5; the same for a
+topic this short) (`scenarios/a2a.mjs`, situation "late", 2026-10-23,
 $0.27, one run): Torstein's agent sent its "confirm" in the same topic, Zia's agent received it with the earlier
 turns and answered "noted... settled. No further action needed" instead of asking Zia again (the failure seen
 2026-10-22). Not covered: a change proposed from the other side (Zia's agent asking to move the meeting) starts a
 topic in its own direction, so the receiving agent relies on its own calendar. One run, simulated people: the live
 test is the real check.
+
+**Weighed afterwards** (2026-10-23, against the fork's principles). For: a real flaw in upstream's standard flow
+(propose, accept, confirm would ask the other owner twice on most bookings), general, fails safe (nothing happens
+when the topic is not continued), keeps upstream's isolation. Against: found in one simulated run, not real use;
+a partial alternative without code was not weighed first (the principle "when both say yes it is final, no extra
+confirm round" removes the commonest follow-up, though not changes or later questions); it adds fork code to
+upstream's core A2A handling, which upstream changes often. Kept; it belongs upstream, and is a candidate to offer.
 
 **To remove.** Revert the commit (`git log --grep "sunshine:a2a-topic"`) or delete the tagged blocks in
 `runtime.ts`, `a2a-state.ts`, `packages/network/src/tools.ts` and the tests.

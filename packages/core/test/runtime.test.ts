@@ -11,7 +11,7 @@ import { MemoryStore } from "../src/memory.js";
 import { PolicyEngine, defaultPolicy } from "../src/policy.js";
 import { coreTools } from "../src/core-tools.js";
 import { A2AStore } from "../src/a2a-state.js";
-import { AgentRuntime, FOLD_HIGH_MESSAGES, FOLD_LOW_CHARS, FOLD_LOW_MESSAGES, InboundUncertainError, PROMPT_CACHE_MS, PRUNED_RESULT, SESSION_KEEP_MESSAGES, cacheLapsed, foldInSteps, hashArgs, pruneToolResults, readSession, restoreMessages, runtimeKey, stableJson, type Outbox, type RuntimeDeps } from "../src/runtime.js";
+import { A2A_TOPIC_CHARS, AgentRuntime, FOLD_HIGH_MESSAGES, FOLD_LOW_CHARS, FOLD_LOW_MESSAGES, InboundUncertainError, PROMPT_CACHE_MS, PRUNED_RESULT, SESSION_KEEP_MESSAGES, cacheLapsed, foldInSteps, hashArgs, pruneToolResults, readSession, restoreMessages, runtimeKey, stableJson, type Outbox, type RuntimeDeps } from "../src/runtime.js";
 import { Scheduler } from "../src/scheduler.js";
 import { HistoryArchive } from "../src/history.js"; // [sunshine:history]
 import { ToolRegistry, defineTool, textResult, type RegisteredTool } from "../src/tools.js";
@@ -1791,6 +1791,29 @@ describe("A2A delivery", () => {
       expect(seen).not.toContain("Earlier in this topic");
       expect(seen).toContain("Confirmed: dinner Thursday 7pm.");
       expect(h.sent.filter((s) => s.msg.channel === "a2a")).toHaveLength(1);
+    });
+
+    it("keeps the newest turns that fit in the budget and stops reading once it is full", async () => {
+      const id = (i: number) => `task_e${String(i).padStart(2, "0")}`;
+      const big: Record<string, Record<string, unknown>> = {};
+      for (let i = 1; i <= 40; i++) big[id(i)] = { id: id(i), context_id: "ctx1", state: "completed", caller: { handle: SAM_HANDLE }, messages: [say("caller", `m${i}`, `ITEM-${String(i).padStart(2, "0")} ${"x".repeat(2_000)}`)] };
+      big.task_new = { id: "task_new", context_id: "ctx1", state: "working", caller: { handle: SAM_HANDLE }, messages: [say("caller", "m_new", "And one more thing.")] };
+      const reads: string[] = [];
+      const h = harness({ deps: { loadA2ATask: async (taskId: string) => { reads.push(taskId); return big[taskId] ?? {}; } } });
+      h.deps.contacts.upsert({ name: "Sam Lee", tier: "partner", agentHandle: SAM_HANDLE });
+      const store = new A2AStore(h.deps.state);
+      for (let i = 1; i <= 40; i++) store.recordTask({ taskId: id(i), contextId: "ctx1", state: "completed" });
+      h.faux.setResponses([textTurn("Noted.")]);
+      await h.runtime.handleInbound(a2aFrom(SAM_HANDLE, "And one more thing.", { id: "evt_new", replyRef: { taskId: "task_new", contextId: "ctx1", messageId: "m_new" } }), { waitForCompletion: true });
+      const seen = seenBy(h, "a2a:ctx1:task:task_new:message:m_new");
+      const topic = seen.slice(seen.indexOf("Earlier in this topic"), seen.indexOf("Current request:"));
+      expect(topic).toContain("ITEM-40");
+      expect(topic).toContain("ITEM-35");
+      expect(topic).not.toContain("ITEM-01");
+      expect(topic.indexOf("ITEM-35")).toBeLessThan(topic.indexOf("ITEM-40")); // shown oldest first
+      expect(topic.length).toBeLessThan(A2A_TOPIC_CHARS + 200);
+      // About 2,100 characters a task: a dozen reads fill 24,000, not 40.
+      expect(reads.filter((r) => r !== "task_new").length).toBeLessThanOrEqual(13);
     });
 
     it("tells the caller's model the context with the answer, so it can follow up in it", async () => {

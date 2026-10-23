@@ -166,8 +166,10 @@ export const PROMPT_CACHE_MS = 5 * 60 * 1000;
 export const MIRROR_REPEAT_MS = 2 * 60 * 1000;
 /** An approved request can be acted on for this long before it lapses. */
 export const APPROVAL_USE_WINDOW_MS = 15 * 60 * 1000;
-/** [sunshine:a2a-topic] How many earlier tasks of a topic, and how many characters of them, a follow-up sees. */
-export const A2A_TOPIC_TASKS = 5;
+/**
+ * [sunshine:a2a-topic] How much of a topic's earlier turns a follow-up sees, newest first: the same 24,000
+ * characters upstream allows for one task's own earlier messages.
+ */
 export const A2A_TOPIC_CHARS = 24_000;
 const SEEN_IDS_MAX = 500;
 const DEFAULT_REPLY_BUDGET_MS = 20_000;
@@ -1046,23 +1048,30 @@ export class AgentRuntime {
    */
   private async earlierInTopic(taskId: string, contextId: string | undefined, callerHandle: string): Promise<string | undefined> {
     if (!contextId || !this.deps.loadA2ATask) return undefined;
-    const ids = this.a2aStore.tasksInContext(contextId).filter((id) => id !== taskId).slice(-A2A_TOPIC_TASKS);
+    const ids = this.a2aStore.tasksInContext(contextId).filter((id) => id !== taskId);
+    // Newest first, until the character budget is full: the newest turns matter most, and a full budget also
+    // ends the lookups, so a long topic costs a few reads, not one per task it ever had.
     const blocks: string[] = [];
-    for (const id of ids) {
+    let used = 0;
+    for (const id of ids.reverse()) {
+      if (used >= A2A_TOPIC_CHARS) break;
+      let task: Record<string, unknown>;
       try {
-        const task = asRecord(await this.deps.loadA2ATask(id));
-        if (String(task.id ?? "") !== id || String(task.context_id ?? task.contextId ?? "") !== contextId || asRecord(task.caller).handle !== callerHandle) continue;
-        const messages = Array.isArray(task.messages) ? task.messages.map(asRecord) : [];
-        if (messages.length === 0) continue;
-        const state = a2aState(task.state ?? asRecord(task.status).state);
-        blocks.push(`Task ${id}${state ? ` (${state})` : ""}:\n${messages.map((m) => `${String(m.role)}: ${JSON.stringify(m.parts ?? [])}`).join("\n")}`);
+        task = asRecord(await this.deps.loadA2ATask(id));
       } catch {
-        // Left out: the current request still goes through without it.
+        break; // Inkbox could not answer: the request goes through with what was read so far, not after more failed reads.
       }
+      if (String(task.id ?? "") !== id || String(task.context_id ?? task.contextId ?? "") !== contextId || asRecord(task.caller).handle !== callerHandle) continue;
+      const messages = Array.isArray(task.messages) ? task.messages.map(asRecord) : [];
+      if (messages.length === 0) continue;
+      const state = a2aState(task.state ?? asRecord(task.status).state);
+      const block = `Task ${id}${state ? ` (${state})` : ""}:\n${messages.map((m) => `${String(m.role)}: ${JSON.stringify(m.parts ?? [])}`).join("\n")}`;
+      blocks.unshift(block); // shown oldest first
+      used += block.length + 2;
     }
     if (blocks.length === 0) return undefined;
     const all = blocks.join("\n\n");
-    // The newest turns matter most, so a long topic loses its oldest part.
+    // The last task read may overshoot the budget: its oldest part goes.
     return all.length <= A2A_TOPIC_CHARS ? all : `…${all.slice(-(A2A_TOPIC_CHARS - 1))}`;
   }
 

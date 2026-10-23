@@ -63,6 +63,13 @@ export class A2AStore {
     return this.state.readJson<Record<string, TaskRecord>>("a2a-tasks.json", {})[taskId];
   }
 
+  /** [sunshine:a2a-topic] The ids of the tasks this agent worked on in one context, oldest first. */
+  tasksInContext(contextId: string): string[] {
+    return Object.values(this.state.readJson<Record<string, TaskRecord>>("a2a-tasks.json", {}))
+      .filter((t) => t.contextId === contextId)
+      .map((t) => t.taskId);
+  }
+
   recordTask(task: TaskRecord): void {
     const all = this.state.readJson<Record<string, TaskRecord>>("a2a-tasks.json", {});
     const previous = all[task.taskId];

@@ -1750,6 +1750,59 @@ describe("A2A delivery", () => {
     expect(h.faux.state.callCount).toBe(0);
   });
 
+  // [sunshine:a2a-topic] Seen in the agent-to-agent test: an accept closed task 1, the caller's "confirm"
+  // arrived as task 2 in the same context, and the worker asked its owner again, with no memory of it.
+  describe("[sunshine:a2a-topic] a follow-up in the same topic", () => {
+    const say = (role: string, id: string | undefined, text: string) => ({ role, ...(id ? { message_id: id } : {}), parts: [{ text }] });
+    const tasks: Record<string, Record<string, unknown>> = {
+      task_1: { id: "task_1", context_id: "ctx1", state: "completed", caller: { handle: SAM_HANDLE }, messages: [say("caller", "m1", "Can Maria do dinner Thursday 7pm?"), say("worker", undefined, "Maria accepts Thursday 7pm.")] },
+      task_other: { id: "task_other", context_id: "ctx1", state: "completed", caller: { handle: "mallory-bot" }, messages: [say("caller", "mx", "MALLORY SECRET")] },
+      task_elsewhere: { id: "task_elsewhere", context_id: "ctx9", state: "completed", caller: { handle: SAM_HANDLE }, messages: [say("caller", "my", "ANOTHER TOPIC")] },
+      task_2: { id: "task_2", context_id: "ctx1", state: "working", caller: { handle: SAM_HANDLE }, messages: [say("caller", "m2", "Confirmed: dinner Thursday 7pm.")] },
+    };
+    const seenBy = (h: Harness, key: string) => userTexts(h.runtime.conversation(key, { kind: "agent", id: `agent:${SAM_HANDLE}`, tier: "partner", displayName: "x" }).agent.state.messages)[0] ?? "";
+
+    it("sees the earlier tasks in that context from the same caller, and nothing else", async () => {
+      const h = harness({ deps: { loadA2ATask: async (id: string) => tasks[id] ?? {} } });
+      h.deps.contacts.upsert({ name: "Sam Lee", tier: "partner", agentHandle: SAM_HANDLE });
+      const store = new A2AStore(h.deps.state);
+      for (const [taskId, contextId] of [["task_1", "ctx1"], ["task_other", "ctx1"], ["task_elsewhere", "ctx9"]] as const) store.recordTask({ taskId, contextId, state: "completed" });
+      h.faux.setResponses([textTurn("Thanks, see you Thursday.")]);
+      await h.runtime.handleInbound(a2aFrom(SAM_HANDLE, "Confirmed", { id: "evt_2", replyRef: { taskId: "task_2", contextId: "ctx1", messageId: "m2" } }), { waitForCompletion: true });
+      const seen = seenBy(h, "a2a:ctx1:task:task_2:message:m2");
+      expect(seen).toContain(`Earlier in this topic with @${SAM_HANDLE}`);
+      expect(seen).toContain("Task task_1 (completed)");
+      expect(seen).toContain("Maria accepts Thursday 7pm.");
+      expect(seen.indexOf("Maria accepts")).toBeLessThan(seen.indexOf("Current request:"));
+      expect(seen).toContain("Confirmed: dinner Thursday 7pm.");
+      expect(seen).not.toContain("MALLORY SECRET");
+      expect(seen).not.toContain("ANOTHER TOPIC");
+      // Still answered on its own task: execution stays isolated.
+      expect(h.sent.filter((s) => s.msg.channel === "a2a").map((s) => s.msg.a2a?.taskId)).toEqual(["task_2"]);
+    });
+
+    it("leaves a first request, and an earlier task that cannot be read, as before", async () => {
+      const h = harness({ deps: { loadA2ATask: async (id: string) => { if (id === "task_1") throw new Error("gone"); return tasks[id] ?? {}; } } });
+      h.deps.contacts.upsert({ name: "Sam Lee", tier: "partner", agentHandle: SAM_HANDLE });
+      new A2AStore(h.deps.state).recordTask({ taskId: "task_1", contextId: "ctx1", state: "completed" });
+      h.faux.setResponses([textTurn("Thanks.")]);
+      await h.runtime.handleInbound(a2aFrom(SAM_HANDLE, "Confirmed", { id: "evt_2", replyRef: { taskId: "task_2", contextId: "ctx1", messageId: "m2" } }), { waitForCompletion: true });
+      const seen = seenBy(h, "a2a:ctx1:task:task_2:message:m2");
+      expect(seen).not.toContain("Earlier in this topic");
+      expect(seen).toContain("Confirmed: dinner Thursday 7pm.");
+      expect(h.sent.filter((s) => s.msg.channel === "a2a")).toHaveLength(1);
+    });
+
+    it("tells the caller's model the context with the answer, so it can follow up in it", async () => {
+      const h = harness();
+      new A2AStore(h.deps.state).begin({ messageId: "out-1", peer: SAM_HANDLE, taskId: "sent-task", contextId: "ctx-dinner", principal: h.runtime.ownerPrincipal(), conversationKey: "imessage:owner", deliveryKey: "imessage:owner" });
+      h.faux.setResponses([textTurn("Sam's agent accepted Thursday.")]);
+      await h.runtime.handleInbound(a2aFrom(SAM_HANDLE, "Sam accepts Thursday 7pm.", { replyRef: { taskId: "sent-task", contextId: "ctx-dinner" }, meta: { direction: "sent", state: "completed" } }), { waitForCompletion: true });
+      const seen = userTexts(h.runtime.conversation("imessage:owner", h.runtime.ownerPrincipal()).agent.state.messages).join("\n");
+      expect(seen).toContain("Delegated task sent-task (context ctx-dinner) with @sam-instinct is completed.");
+    });
+  });
+
   it("leaves pre-admission failures retryable but quarantines a failed send after execution across restarts", async () => {
     let failAdmission = true;
     const h = harness({ deps: { loadA2ATask: async () => {

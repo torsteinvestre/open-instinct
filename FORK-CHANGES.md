@@ -897,6 +897,37 @@ first.
 
 **To remove.** Delete the file.
 
+### `[sunshine:a2a-topic]`: a follow-up in an agent-to-agent topic remembers the earlier turns
+
+**Problem** (seen in the 7-situation test, 2026-10-22). An A2A request is a task; related tasks share a
+context (upstream's docs: "One A2A context per topic... Tasks inside it are turns"). Upstream runs each incoming
+task in a conversation of its own ("Worker execution is isolated by task and caller-message generation, so
+simultaneous tasks cannot overwrite each other's reply targets") and shows the model only that task's messages.
+When the worker answers `complete` the task closes, so a follow-up starts a new task: Zia's agent accepted
+(task 1, closed), Torstein's agent sent "confirm" (task 2, same topic), and Zia's agent, with no memory of task 1,
+told Zia "I have no record of you agreeing" and asked again.
+
+**What the fork adds.**
+- Worker side (`packages/core/src/runtime.ts`, `earlierInTopic`; `A2AStore.tasksInContext` in `a2a-state.ts`):
+  admitting a task, the runtime also reads the agent's earlier tasks in the same context from Inkbox (the same
+  `loadA2ATask` upstream uses for the current task) and puts them before upstream's "Earlier messages in this
+  task" as "Earlier in this topic with @caller (finished requests, oldest first)". Only tasks Inkbox reports for
+  the same authenticated caller and context count; one that cannot be read is left out. At most the last 5 tasks
+  and 24,000 characters (`A2A_TOPIC_TASKS`, `A2A_TOPIC_CHARS`), keeping the newest. Execution stays isolated:
+  each task still runs and answers on its own.
+- Caller side: the note that brings a peer's answer back names the context ("Delegated task X (context Y) with
+  @peer is completed."), and `ask_instinct`'s `contextId` says to give it for a follow-up (a confirm, a change,
+  another question), so the other agent sees the exchange. Whether to continue a topic stays the model's call.
+
+**Tested** (free). `packages/core/test/runtime.test.ts`, "a follow-up in the same topic": the earlier task with the
+same caller is shown, another caller's task in the same context and the same caller's task in another context
+are not, the answer still goes to the current task only; an unreadable earlier task leaves the request as before;
+the caller's note carries the context. Not yet tested with the real model: whether the caller passes the context
+for a follow-up, and how the worker uses the history. The live test between two agents shows both.
+
+**To remove.** Revert the commit (`git log --grep "sunshine:a2a-topic"`) or delete the tagged blocks in
+`runtime.ts`, `a2a-state.ts`, `packages/network/src/tools.ts` and the tests.
+
 ### `[sunshine:language]`: reply language (a test only; nothing changed in the prompt)
 
 **Seen** (2026-10-22, a local test): asked in English about a Norwegian email in an empty thread,
@@ -1080,3 +1111,6 @@ docs cannot carry a comment; they are listed under each change instead.
 ## Known upstream issues not fixed here yet
 
 - `instinct dev --tunnel` logs a harmless "409 already delivers" when restarted.
+- `examples/dinner-a2a.mjs` fails at cb3d97c (seen 2026-10-23, also on pure upstream): the runtime now reads each
+  A2A task from Inkbox before working on it, and the demo transport does not answer that `GET .../a2a/tasks/<id>`,
+  so Sam's side never answers. `packages/server/scenarios/a2a.mjs` has a stand-in that does.

@@ -330,7 +330,7 @@ export function networkTools(deps: NetworkToolDeps): RegisteredTool[] {
       subject: Type.Optional(Type.String({ description: "Short topic, e.g. dinner with Maria and Sam" })),
       text: Type.String({ description: "Plain-language version of the request, written as the owner's Instinct" }),
       payload: Type.Optional(PayloadSchema),
-      contextId: Type.Optional(Type.String({ description: "A2A context to continue; only with a single contact. Omit to start a new topic" })),
+      contextId: Type.Optional(Type.String({ description: "A2A context to continue; only with a single contact. Omit to start a new topic. Give it to follow up on an earlier exchange (a confirm, a change, another question about it): their agent then sees that exchange" })), // [sunshine:a2a-topic] the follow-up sentence
       taskId: Type.Optional(Type.String({ description: "An existing delegated task to answer when the other agent asks for more input. Only with a single contact." })),
     }),
     meta: {

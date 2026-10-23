@@ -166,6 +166,9 @@ export const PROMPT_CACHE_MS = 5 * 60 * 1000;
 export const MIRROR_REPEAT_MS = 2 * 60 * 1000;
 /** An approved request can be acted on for this long before it lapses. */
 export const APPROVAL_USE_WINDOW_MS = 15 * 60 * 1000;
+/** [sunshine:a2a-topic] How many earlier tasks of a topic, and how many characters of them, a follow-up sees. */
+export const A2A_TOPIC_TASKS = 5;
+export const A2A_TOPIC_CHARS = 24_000;
 const SEEN_IDS_MAX = 500;
 const DEFAULT_REPLY_BUDGET_MS = 20_000;
 const TYPING_TIMEOUT_MS = 2_000;
@@ -998,7 +1001,7 @@ export class AgentRuntime {
       }
       const principal = { ...route.principal };
       return {
-        msg: { ...msg, channel: channelOf(route.conversationKey), conversationKey: route.deliveryKey, replyRef: route.replyRef ?? {}, text: `Delegated task ${taskId} with @${route.peer} is ${state || "updated"}.\n${msg.text}`, meta: { ...msg.meta, delegatedResult: true } },
+        msg: { ...msg, channel: channelOf(route.conversationKey), conversationKey: route.deliveryKey, replyRef: route.replyRef ?? {}, text: `Delegated task ${taskId}${route.contextId ? ` (context ${route.contextId})` : ""} with @${route.peer} is ${state || "updated"}.\n${msg.text}`, /* [sunshine:a2a-topic] the context, to follow up in */ meta: { ...msg.meta, delegatedResult: true } },
         principal,
         key: route.conversationKey,
       };
@@ -1019,12 +1022,48 @@ export class AgentRuntime {
       const text = parts.flatMap((p) => typeof p.text === "string" ? [p.text] : []).join("\n\n");
       const data = parts.find((p) => p.data && typeof p.data === "object")?.data as Record<string, unknown> | undefined;
       const prior = history.slice(0, -1).map((m) => `${String(m.role)}: ${JSON.stringify(m.parts ?? [])}`).join("\n");
-      admitted = { ...msg, from: caller.handle, text: prior ? `Earlier messages in this task:\n${clip(prior, 24_000)}\n\nCurrent request:\n${text}` : text, ...(data ? { data } : {}) };
+      // [sunshine:a2a-topic] A follow-up in the same topic (context) also sees the earlier tasks in it.
+      const topic = await this.earlierInTopic(taskId, msg.replyRef.contextId, caller.handle);
+      const earlier = [
+        ...(topic ? [`Earlier in this topic with @${caller.handle} (finished requests, oldest first):\n${topic}`] : []),
+        ...(prior ? [`Earlier messages in this task:\n${clip(prior, 24_000)}`] : []),
+      ];
+      admitted = { ...msg, from: caller.handle, text: earlier.length > 0 ? `${earlier.join("\n\n")}\n\nCurrent request:\n${text}` : text, ...(data ? { data } : {}) };
     }
     if (!this.a2aStore.active(taskId)) return undefined;
     const key = runtimeKey(admitted, resolvePrincipal(admitted, this.deps.config, this.deps.contacts));
     this.a2aStore.recordTask({ taskId, contextId: msg.replyRef.contextId, messageId: msg.replyRef.messageId, state, conversationKey: key });
     return { msg: admitted };
+  }
+
+  /**
+   * [sunshine:a2a-topic] What was said in this agent's earlier tasks in the same A2A context with the same
+   * caller, read from Inkbox like the current task's own messages. Upstream runs each task in a conversation
+   * of its own, so simultaneous tasks never share a reply target, and shows only the current task's messages:
+   * a follow-up in a topic (a "confirm" after an accept) arrived with no memory of the exchange, and the owner
+   * was asked again. Execution stays isolated; only the record of the earlier turns is added. A task Inkbox
+   * reports for another caller or context is left out, as is one that cannot be read.
+   */
+  private async earlierInTopic(taskId: string, contextId: string | undefined, callerHandle: string): Promise<string | undefined> {
+    if (!contextId || !this.deps.loadA2ATask) return undefined;
+    const ids = this.a2aStore.tasksInContext(contextId).filter((id) => id !== taskId).slice(-A2A_TOPIC_TASKS);
+    const blocks: string[] = [];
+    for (const id of ids) {
+      try {
+        const task = asRecord(await this.deps.loadA2ATask(id));
+        if (String(task.id ?? "") !== id || String(task.context_id ?? task.contextId ?? "") !== contextId || asRecord(task.caller).handle !== callerHandle) continue;
+        const messages = Array.isArray(task.messages) ? task.messages.map(asRecord) : [];
+        if (messages.length === 0) continue;
+        const state = a2aState(task.state ?? asRecord(task.status).state);
+        blocks.push(`Task ${id}${state ? ` (${state})` : ""}:\n${messages.map((m) => `${String(m.role)}: ${JSON.stringify(m.parts ?? [])}`).join("\n")}`);
+      } catch {
+        // Left out: the current request still goes through without it.
+      }
+    }
+    if (blocks.length === 0) return undefined;
+    const all = blocks.join("\n\n");
+    // The newest turns matter most, so a long topic loses its oldest part.
+    return all.length <= A2A_TOPIC_CHARS ? all : `…${all.slice(-(A2A_TOPIC_CHARS - 1))}`;
   }
 
   private cancelA2A(msg: InboundMessage): void {

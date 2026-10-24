@@ -1017,6 +1017,21 @@ for one meeting, which a day of meetings would bloat. Next: transcripts into the
 Built as `[sunshine:intake]`; the scenario now hands the transcript to the intake (`app.intake.receive`) as the
 backend will.
 
+**Run 2** (2026-10-24, through the intake, $0.085: summary 3.2 c, the agent's turn about 2.8 c, the question about
+2.5 c; output `~/sunshine-audio/keys/ES2004b.run2.txt`). Against the key: Maya's task (instruction manuals before the
+next meeting) caught, and the agent sent one bundled text asking when the next meeting is so it can set a reminder,
+and whether to draft the research email (asks before anything goes to others); MEMORY.md untouched; one journal line;
+decisions B5 and B7-B10 kept, B2 and B12-B15 caught; nothing invented (the two doubtful lines checked in the
+transcript: Una offered "5-6 designs" at 35:54, Sarah named a customer service number at 30:20). Missed again: the
+target group (B6). Maya asked whether to start with a younger group; Sarah answered "I think we are focusing on a sort
+of mid-range business kind of class type people" (26:14) and moved on. The summary filed "whether to target a younger
+age group first" as open and lost Sarah's answer; the later question searched the archive twice and answered "I
+can't find a clear decision", without Sarah's statement. Two causes, both general: an open point keeps only the
+question, not where it was left; and a search hit in a transcript shows the matching line only, while the answer is
+in the lines after it (here six short fragments later), unlike the chat search, which shows the answer that followed.
+Noise: two of the four "owner tasks" were not tasks (a presentation already given, a vague "refer to the findings");
+the agent left them out of its text.
+
 **To remove.** Delete the file.
 
 ### `[sunshine:language]`: reply language (a test only; nothing changed in the prompt)

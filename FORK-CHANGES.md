@@ -952,6 +952,23 @@ upstream's core A2A handling, which upstream changes often. Kept; it belongs ups
 **To remove.** Revert the commit (`git log --grep "sunshine:a2a-topic"`) or delete the tagged blocks in
 `runtime.ts`, `a2a-state.ts`, `packages/network/src/tools.ts` and the tests.
 
+### `[sunshine:meeting]`: a meeting transcript handed to the agent (a test only)
+
+`packages/server/scenarios/meeting-transcript.mjs` boots the real server for a person ("Maya") and gives it a named
+meeting transcript as a system task (upstream's `runSystemTask`, the way the audio backend would hand one over), then
+asks a question in Maya's own thread; it prints tool calls, texts, reminders, MEMORY.md and the answer. Input: AMI
+meeting ES2004b through `~/sunshine-audio` (Nemotron 3 + Parakeet, voices named with TitaNet prints from ES2004c).
+Answer key written before the run: `~/sunshine-audio/keys/ES2004b.maya.md`.
+
+**Run 1** (2026-10-24, $0.077): six of seven decisions kept in MEMORY.md, nothing invented, no text (NO_REPLY); the
+target group, which Sarah states ("I think we are focusing on a sort of mid-range business kind of class type
+people"), was filed as still open; Maya's task (research instruction manuals) was noted but got no reminder; asked
+"what did we decide about who the remote is for?", the agent searched `history_search`, which holds only the
+owner's chats, found nothing and answered from its note ("We didn't settle it"). The notes got one long paragraph
+for one meeting, which a day of meetings would bloat. Next: transcripts into the searchable archive, a short note.
+
+**To remove.** Delete the file.
+
 ### `[sunshine:language]`: reply language (a test only; nothing changed in the prompt)
 
 **Seen** (2026-10-22, a local test): asked in English about a Norwegian email in an empty thread,

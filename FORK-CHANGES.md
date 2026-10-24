@@ -736,7 +736,8 @@ Plaud and Limitless keep every transcript searchable and write a summary with to
   chat history.
 - `history_search` also searches items (`core-tools.ts`): lines of the text and of the summary with the most words of
   the query, grouped by item, newest first; each item with its heading (when, what, source, with whom) and summary; a
-  long line is clipped so the matching words show, keeping "[12:34] Sarah:". `history_forget` removes matching lines
+  long line is clipped so the matching words show, keeping "[12:34] Sarah:"; a hit in the text comes with the minute
+  of talk after it, where the answer to a question usually is. `history_forget` removes matching lines
   from items too (text and summary), remembered by fingerprint so the same item sent again cannot bring them back. Both
   owner-only, as before.
 - The intake (`packages/server/src/intake.ts`), staged as separate calls: (1) keep the item; (2) one model call
@@ -1031,6 +1032,13 @@ question, not where it was left; and a search hit in a transcript shows the matc
 in the lines after it (here six short fragments later), unlike the chat search, which shows the answer that followed.
 Noise: two of the four "owner tasks" were not tasks (a presentation already given, a vague "refer to the findings");
 the agent left them out of its text.
+
+**After run 2** (Torstein OK'd both): the summary's open points now say where each was left ("the last view stated,
+and by whom"); a hit in a transcript comes with what was said in the minute after it (`FOLLOWING_SECONDS`, indented
+under the hit; untimed lines: the next line), as the chat search shows the answer that followed. Free replay of run
+2's two searches on the real transcript: neither would have shown Sarah's answer even so, because neither hit Maya's
+question ("age groups" does not match "age group"; "target" was never said). Word search misses different wording;
+meaning-based search (the memory engine, NOTES) is the real fix, not word patches.
 
 **To remove.** Delete the file.
 

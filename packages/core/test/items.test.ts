@@ -4,7 +4,7 @@ import { ApprovalStore } from "../src/approvals.js";
 import { AuditLog } from "../src/audit.js";
 import { coreTools } from "../src/core-tools.js";
 import { HistoryArchive } from "../src/history.js";
-import { ITEMS_FILE, ItemArchive, summaryLines, type ItemSummary } from "../src/items.js";
+import { ITEMS_FILE, ItemArchive, lineSeconds, summaryLines, type ItemSummary } from "../src/items.js";
 import { MemoryStore } from "../src/memory.js";
 import { Scheduler } from "../src/scheduler.js";
 import { ToolRegistry } from "../src/tools.js";
@@ -69,6 +69,31 @@ describe("item archive", () => {
     expect(items.search("zebra giraffe").matches).toHaveLength(0);
   });
 
+  // Run 2 (2026-10-24): the answer to Maya's question came six short fragments and 52 seconds later.
+  it("a hit in the text comes with what was said in the minute after it, without repeating other hits", () => {
+    const state = tempState();
+    const items = new ItemArchive(state, { now: () => new Date(T + 60 * MIN) });
+    items.add({ id: "m1", source: "band", startedAt: T, text: [
+      "[25:22] Maya: Do we have to focus on a younger age group initially?",
+      "[25:37] Una: We",
+      "[25:38] Una: focus on the biggest market?",
+      "[26:14] Sarah: I think we are focusing on a sort of mid-range business kind of class type people.",
+      "[26:44] Sarah: Okay, so the remote control functions.",
+      "[27:00] Ian: The market for video is bigger.",
+    ].join("\n") });
+    const younger = items.search("younger").matches[0]!.lines[0]!;
+    expect(younger.following!.map((l) => l.text.slice(0, 7))).toEqual(["[25:37]", "[25:38]", "[26:14]"]);
+    const market = items.search("market").matches[0]!.lines;
+    expect(market.map((l) => [l.text.slice(0, 7), (l.following ?? []).map((f) => f.text.slice(0, 7))])).toEqual([
+      ["[25:38]", ["[26:14]"]], // 26:44 is past the minute
+      ["[27:00]", []],
+    ]);
+    // Lines without times (an email thread, later): the next line only.
+    items.add({ id: "e1", source: "email", startedAt: T + MIN, text: "Ola: what about the budget?\nKari: no budget this year\nOla: ok" });
+    expect(items.search("what about").matches[0]!.lines[0]!.following!.map((l) => l.text)).toEqual(["Kari: no budget this year"]);
+    expect([lineSeconds("[12:34] A: x"), lineSeconds("[1:02:03] A: x"), lineSeconds("no time")]).toEqual([754, 3723, undefined]);
+  });
+
   it("forgets lines on request, after showing what would go, and keeps them out when the item comes again", () => {
     const state = tempState();
     const items = new ItemArchive(state, { now: () => new Date(T + 60 * MIN) });
@@ -115,7 +140,7 @@ describe("item archive", () => {
 
     const target = text(await search.spec.execute({ query: "target buyer" }, ctx));
     expect(target).toBe([
-      "From elsewhere, newest first (a line's [mm:ss] is the time into the conversation):",
+      "From elsewhere, newest first (a line's [mm:ss] is the time into the conversation; indented lines were said right after):",
       "[Sat 24 Oct, 04:14-04:53] Remote control design meeting (heard by the band, with Sarah, Ian, Una)",
       "  Summary: Second design meeting for the TV remote.",
       "  Decided: Target buyer: young, business-class people, mid-range price",
@@ -123,6 +148,8 @@ describe("item archive", () => {
     const manuals = text(await search.spec.execute({ query: "manuals" }, ctx));
     expect(manuals).toMatch(/^Newest first:\n\[Sat 24 Oct, 03:14\] Maria: the manuals worry me\n\nFrom elsewhere/);
     expect(manuals).toContain("  [38:15] Sarah: Instruction manuals.");
+    // The minute after a hit, indented under it.
+    expect(text(await search.spec.execute({ query: "marketing look" }, ctx))).toContain("  [38:10] Maya: What should marketing look at for next time?\n    [38:15] Sarah: Instruction manuals.");
 
     const forget = registry.get("history_forget")!;
     expect(text(await forget.spec.execute({ query: "manuals" }, ctx))).toMatch(/^3 message\(s\) would be removed/);

@@ -56,10 +56,32 @@ export interface ItemLine {
   text: string;
 }
 
+/** A line that matched; for a line of the text, what was said right after it. */
+export interface ItemHit extends ItemLine {
+  following?: ItemLine[];
+}
+
 export interface ItemMatch {
   item: ArchiveItem;
   /** The lines that matched, in the item's order. */
-  lines: ItemLine[];
+  lines: ItemHit[];
+}
+
+/**
+ * What follows a hit: in a conversation the answer comes after the question, often split over several
+ * short turns (run 2, 2026-10-24: Sarah's answer came six fragments and 52 seconds after Maya's
+ * question). Lines within this long after a timed line, or the next line when lines carry no time.
+ */
+export const FOLLOWING_SECONDS = 60;
+/** Each following line is shown clipped to this; the clipped lines of one hit add up to at most FOLLOWING_MAX_CHARS. */
+export const FOLLOWING_LINE_MAX = 250;
+const FOLLOWING_MAX_CHARS = 900;
+
+/** Seconds into the conversation from a "[12:34]" or "[1:02:03]" line start; undefined without one. */
+export function lineSeconds(line: string): number | undefined {
+  const m = /^\[(?:(\d{1,2}):)?(\d{1,3}):(\d{2})\]/.exec(line);
+  if (!m) return undefined;
+  return Number(m[1] ?? 0) * 3600 + Number(m[2]) * 60 + Number(m[3]);
 }
 
 const SUMMARY_LABELS: Array<[keyof ItemSummary, string]> = [
@@ -85,6 +107,24 @@ function filterSummary(s: ItemSummary, keep: (line: string) => boolean): ItemSum
   const out: ItemSummary = { ...s, summary: s.summary.trim() && !keep(s.summary.trim()) ? "" : s.summary };
   const lists = out as unknown as Record<string, string[]>;
   for (const [key, label] of SUMMARY_LABELS) lists[key] = (s[key] as string[]).filter((v) => !v.trim() || keep(`${label}: ${v.trim()}`));
+  return out;
+}
+
+/** The text lines after line `i` within FOLLOWING_SECONDS (or the next one, untimed), up to a size; not other hits. */
+function following(lines: Array<{ line: ItemLine; hits: number }>, i: number, best: number): ItemLine[] {
+  const start = lineSeconds(lines[i]!.line.text);
+  const out: ItemLine[] = [];
+  let size = 0;
+  for (const l of lines.slice(i + 1)) {
+    if (l.line.part !== "text") continue;
+    const at = lineSeconds(l.line.text);
+    if (start === undefined || at === undefined ? out.length >= 1 : at - start > FOLLOWING_SECONDS) break;
+    if (l.hits === best) continue;
+    const shown = Math.min(l.line.text.length, FOLLOWING_LINE_MAX);
+    if (size + shown > FOLLOWING_MAX_CHARS && out.length > 0) break;
+    out.push(l.line);
+    size += shown;
+  }
   return out;
 }
 
@@ -168,9 +208,11 @@ export class ItemArchive {
 
   /**
    * Lines containing every word of the query, grouped by item, newest item first. When no line has
-   * them all, the lines with the most of them, marked `partial`. At most `perItem` lines per item.
+   * them all, the lines with the most of them, marked `partial`. At most `perItem` lines per item; a
+   * line of the text comes with what was said in the minute after it (`following`), leaving out lines
+   * that matched themselves.
    */
-  search(query: string, range: HistoryRange = {}, limit = 3, perItem = 6): { matches: ItemMatch[]; partial: boolean } {
+  search(query: string, range: HistoryRange = {}, limit = 3, perItem = 5): { matches: ItemMatch[]; partial: boolean } {
     const words = queryWords(query);
     if (words.length === 0) return { matches: [], partial: false };
     const scored = this.all()
@@ -179,7 +221,14 @@ export class ItemArchive {
     const best = Math.max(0, ...scored.flatMap((s) => s.lines.map((l) => l.hits)));
     if (best === 0) return { matches: [], partial: false };
     const matches = scored
-      .map(({ item, lines }) => ({ item, lines: lines.filter((l) => l.hits === best).map((l) => l.line).slice(0, perItem) }))
+      .map(({ item, lines }) => {
+        const hits: ItemHit[] = [];
+        for (const [i, l] of lines.entries()) {
+          if (l.hits !== best || hits.length >= perItem) continue;
+          hits.push(l.line.part === "text" ? { ...l.line, following: following(lines, i, best) } : l.line);
+        }
+        return { item, lines: hits };
+      })
       .filter((m) => m.lines.length > 0)
       .sort((a, b) => b.item.startedAt - a.item.startedAt)
       .slice(0, limit);

@@ -76,6 +76,7 @@ describe("intake", () => {
     expect(model.asked).toHaveLength(1);
     expect(model.asked[0]!.system).toContain("Speaker names come from voice recognition");
     expect(model.asked[0]!.system).toContain('even if nobody said "decide"');
+    expect(model.asked[0]!.system).toContain("where it was left: the last view stated, and by whom");
     expect(model.asked[0]!.user).toContain("Maya is the marketing expert");
     expect(model.asked[0]!.user).toContain("heard by the band, Sat 24 Oct, 10:14-10:53 Europe/Oslo, with Sarah, Ian, Una.");
     expect(model.asked[0]!.user).toContain('<untrusted source="a recording of Maya\'s conversation">');

@@ -9,7 +9,7 @@ import type { ApprovalStore } from "./approvals.js";
 import type { AuditLog } from "./audit.js";
 import type { MemoryStore } from "./memory.js";
 import { queryWords, type HistoryArchive, type HistoryEntry, type HistoryRange } from "./history.js"; // [sunshine:history]
-import type { ArchiveItem, ItemArchive } from "./items.js"; // [sunshine:intake]
+import { FOLLOWING_LINE_MAX, type ArchiveItem, type ItemArchive } from "./items.js"; // [sunshine:intake]
 import { checkPublicTarget, type Lookup } from "./net-guard.js";
 import { pdfPageCount, renderMarkdownToPdf } from "./pdf.js";
 import { wrapUntrusted } from "./prompt.js";
@@ -194,10 +194,13 @@ function historyTools({ history, items, config }: CoreToolDeps): RegisteredTool[
           const words = queryWords(query);
           const blocks = matches.map(({ item, lines }) => {
             const gist = item.summary?.summary.trim();
-            const shown = lines.filter((l) => l.text !== gist).map((l) => `  ${aroundMatch(l.text.replace(/\s+/g, " "), words, HISTORY_LINE_MAX)}`);
+            // A hit in the text comes with the minute after it, indented: that is where the answer usually is.
+            const shown = lines
+              .filter((l) => l.text !== gist)
+              .map((l) => [`  ${aroundMatch(l.text.replace(/\s+/g, " "), words, HISTORY_LINE_MAX)}`, ...(l.following ?? []).map((f) => `    ${clip(f.text.replace(/\s+/g, " "), FOLLOWING_LINE_MAX)}`)].join("\n"));
             return [itemHead(item), ...(gist ? [`  Summary: ${clip(gist, HISTORY_LINE_MAX)}`] : []), ...shown].join("\n");
           });
-          const note = "a line's [mm:ss] is the time into the conversation";
+          const note = "a line's [mm:ss] is the time into the conversation; indented lines were said right after";
           const head = partial ? `From elsewhere, no line has all of "${query}"; the closest, newest first (${note}):` : `From elsewhere, newest first (${note}):`;
           parts.push(`${head}\n${blocks.join("\n")}`);
         }

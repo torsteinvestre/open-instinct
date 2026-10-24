@@ -75,7 +75,8 @@ export function intakeSystem(owner: string, source: string): string {
     `- decisions: what was agreed or settled, as the conversation left it. A point counts as settled when the group went with it, even if nobody said "decide".`,
     `- owner_tasks: what ${owner} took on, was asked to do, or offered, with any time or deadline that was said.`,
     `- others_tasks: "Name: what they took on".`,
-    "- open: raised and left unsettled.",
+    // Run 2 (2026-10-24): "whether to target a younger group" was kept without the answer given to it.
+    "- open: raised and left unsettled, each with where it was left: the last view stated, and by whom.",
     "Each line short and complete on its own, in the plain words someone would later search for. Only what the record supports; empty lists are fine.",
   ].join("\n");
 }

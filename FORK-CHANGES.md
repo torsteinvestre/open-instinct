@@ -1040,6 +1040,16 @@ under the hit; untimed lines: the next line), as the chat search shows the answe
 question ("age groups" does not match "age group"; "target" was never said). Word search misses different wording;
 meaning-based search (the memory engine, NOTES) is the real fix, not word patches.
 
+**Run 3** (2026-10-24, $0.088, `~/sunshine-audio/keys/ES2004b.run3.txt`). The summary now keeps where open points
+were left: "Whether to target a younger age group first: Maya suggested it; Sarah said the focus is mid-range
+business-class people. Not settled." Decisions B5 and B7-B11 kept; nothing invented. The agent set the reminder itself
+(Mon 09:00, plain text) and sent one text saying so, with its two questions bundled (when the next meeting is, to time
+it better; whether to email the research details): the act-or-ask levels as designed. (The reference has the next
+meeting "after lunch", but our transcript lost that sentence, so asking was right.) MEMORY.md untouched. The question
+still got "I can't find a clear decision": the agent's one search ("remote target users audience") showed two
+transcript lines matching three of the words, and the summary's open line matched only "target", so it was not shown
+(free replay with run 3's summary confirmed it). The answer was in the archive; the search's ranking hid it.
+
 **To remove.** Delete the file.
 
 ### `[sunshine:language]`: reply language (a test only; nothing changed in the prompt)

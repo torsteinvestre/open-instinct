@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decodeEvent, encodeEvent, isEnvelope, systemTaskOf } from "../src/envelope.js";
+import { decodeEvent, encodeEvent, intakeItemOf, isEnvelope, systemTaskOf } from "../src/envelope.js";
 import { EVENT_ENVELOPE_PREFIX } from "../src/types.js";
 
 describe("envelope", () => {
@@ -47,5 +47,24 @@ describe("systemTaskOf", () => {
     expect(systemTaskOf({ type: "system.task", id: "x", prompt: "   " })).toBeUndefined();
     expect(systemTaskOf({ type: "imessage.received", id: "x", prompt: "go" })).toBeUndefined();
     expect(systemTaskOf("system.task")).toBeUndefined();
+  });
+});
+
+// [sunshine:intake]
+describe("intakeItemOf", () => {
+  const ok = { type: "intake.item", id: "es2004b", source: "band", startedAt: "2026-10-24T08:14:00Z", text: "[00:07] Sarah: Hello." };
+  it("accepts a well-formed item and rejects anything else", () => {
+    expect(intakeItemOf({ ...ok, endedAt: "2026-10-24T08:53:00Z", title: " Design meeting ", people: ["Sarah", " ", 3, "Ian"] })).toEqual({
+      ...ok,
+      endedAt: "2026-10-24T08:53:00Z",
+      title: "Design meeting",
+      people: ["Sarah", "Ian"],
+    });
+    expect(intakeItemOf({ ...ok, source: "BAND", endedAt: "soon" })).toEqual(ok);
+    expect(intakeItemOf({ ...ok, id: "bad id!" })).toBeUndefined();
+    expect(intakeItemOf({ ...ok, source: "a source" })).toBeUndefined();
+    expect(intakeItemOf({ ...ok, startedAt: "yesterday" })).toBeUndefined();
+    expect(intakeItemOf({ ...ok, text: "  " })).toBeUndefined();
+    expect(intakeItemOf({ ...ok, type: "system.task" })).toBeUndefined();
   });
 });

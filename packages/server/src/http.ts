@@ -13,10 +13,11 @@
  */
 import http from "node:http";
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import { decodeEvent, systemTaskOf } from "@open-instinct/core";
+import { decodeEvent, intakeItemOf, systemTaskOf } from "@open-instinct/core"; // [sunshine:intake] intakeItemOf
 import type { AgentRuntime, HandleResult, InboundMessage, InstinctConfig, OutboundMessage, ScheduleEntry, Scheduler, StateDir } from "@open-instinct/core";
 import { DurableInbox, parseCallEnded, parseInkboxEvent, verifyInkboxSignature } from "@open-instinct/inkbox";
 import type { CallEndedEvent } from "@open-instinct/inkbox";
+import type { IntakeItem } from "./intake.js"; // [sunshine:intake]
 
 /** Replies the console outbox is holding for a chat conversation. */
 export interface ChatBuffer {
@@ -51,6 +52,8 @@ export interface HttpApp {
   wallet?: WalletCallback;
   /** Report a finished phone call to the owner. Unset: call.ended events are acknowledged and dropped. */
   onCallEnded?(event: CallEndedEvent): Promise<void>;
+  /** [sunshine:intake] Takes in an `intake.item` event. Unset: such events are refused. */
+  intake?: { receive(item: IntakeItem): Promise<unknown> };
 }
 
 export interface HttpServerOptions {
@@ -212,6 +215,14 @@ export async function handleChat(app: HttpApp, body: ChatRequest, now: Date = ne
       // Like a schedule wake: the task runs past the HTTP budget and reports (or not) through the outbox.
       void app.runtime.runSystemTask(task).catch(() => undefined);
       return { response: "", acked: true, conversationKey: `system:${task.id}` };
+    }
+    // [sunshine:intake] Like a system task: kept, summarized and acted on past the HTTP budget.
+    const item = intakeItemOf(event);
+    if (item) {
+      if (!app.intake) return { response: "", acked: true, blocked: "intake is off" };
+      const { type: _type, startedAt, endedAt, ...rest } = item;
+      void app.intake.receive({ ...rest, startedAt: Date.parse(startedAt), ...(endedAt ? { endedAt: Date.parse(endedAt) } : {}) }).catch(() => undefined);
+      return { response: "", acked: true, conversationKey: `system:intake-${item.id}` };
     }
     const inbound = parseInkboxEvent(event);
     if (!inbound) return { response: "", acked: true };

@@ -1,12 +1,14 @@
 // [sunshine:meeting] Checklist #3: does the agent turn a meeting it "heard" into what its person wants? Boots the
 // real server (prompt, tools, Sonnet 5.5) for a person on a temporary data folder, hands it a named meeting
-// transcript as a system task (the way the audio backend would, through upstream's runSystemTask), then has the
-// person ask a question about the meeting in their own thread. Prints what the agent did: tool calls, texts,
-// reminders, memory, the answer, the cost. Nothing reaches anyone: the outbox only records.
+// transcript the way the audio backend will ([sunshine:intake]: kept in the archive, summarized once, journaled,
+// the summary handed to the agent), then has the person ask a question about the meeting in their own thread.
+// Prints the summary, the journal line, what the agent did (tool calls, texts, reminders, memory), the answer and
+// the cost. Nothing reaches anyone: the outbox only records. Run 1 (2026-10-24) handed the raw transcript to one
+// agent run instead (upstream's runSystemTask); see FORK-CHANGES [sunshine:meeting].
 //
 // Usage (from packages/server, after `pnpm build`; ANTHROPIC_API_KEY set):
 //   TRANSCRIPT=<named transcript.txt> node scenarios/meeting-transcript.mjs
-//   DRY=1 ...   boots, builds the task, prints its size: free
+//   DRY=1 ...   boots, checks the intake is there, prints the transcript's size: free
 // Defaults: the AMI ES2004b meeting from ~/sunshine-audio (Maya = the marketing expert), MAX_USD 0.2 before the question.
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
@@ -46,22 +48,10 @@ const fetchImpl = async (input) => { throw new Error(`offline: ${typeof input ==
 const sent = [];
 const app = await boot(env, { fetchImpl, outbox: { send: async (m) => void sent.push(m), typing: async () => {}, markRead: async () => {} }, logger: () => {} });
 
-const fmt = (d) => d.toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Europe/Oslo" });
 const end = new Date(Date.now() - 10 * 60 * 1000);
 const start = new Date(end.getTime() - 39 * 60 * 1000);
-// What the audio backend would send: the data, the job and when it is done, nothing about how.
-const prompt = [
-  `A transcript arrived from Maya's band: a meeting Maya was in, ${fmt(start)} to ${fmt(end)} (Oslo time).`,
-  "Names come from voice recognition (\"Unknown speaker\" is a voice Maya has not connected with), and the words can contain recognition mistakes.",
-  "",
-  "Handle it the way a great personal assistant would: keep what Maya will want to know later, and follow up on what needs following up. Text her only if something needs her attention; otherwise end with exactly NO_REPLY.",
-  "",
-  "<transcript>",
-  transcript,
-  "</transcript>",
-].join("\n");
-console.log(`transcript: ${transcript.split("\n").length} lines, ${transcript.split(/\s+/).length} words; task ${prompt.length} characters`);
-if (process.env.DRY) { await app.close?.(); rmSync(dir, { recursive: true, force: true }); process.exit(0); }
+console.log(`transcript: ${transcript.split("\n").length} lines, ${transcript.split(/\s+/).length} words, ${transcript.length} characters; intake ${app.intake ? "on" : "MISSING"}`);
+if (process.env.DRY || !app.intake) { await app.close?.(); rmSync(dir, { recursive: true, force: true }); process.exit(app.intake ? 0 : 1); }
 
 function spent() {
   let total = 0;
@@ -77,10 +67,18 @@ function toolCalls(key, principal) {
 
 const owner = app.runtime.ownerPrincipal();
 const t0 = Date.now();
-const final = await app.runtime.runSystemTask({ id: "meeting-es2004b", name: "meeting transcript", prompt });
-console.log(`\n=== the agent's work on the transcript (${((Date.now() - t0) / 1000).toFixed(0)}s, $${spent().toFixed(3)} so far)`);
-for (const c of toolCalls("system:meeting-es2004b", owner)) console.log(`  tool: ${c}`);
-console.log(`  final reply: ${final.slice(0, 600)}`);
+// What the audio backend sends: the transcript with its time and source, nothing about what to do with it.
+const r = await app.intake.receive({ id: "es2004b", source: "band", startedAt: start.getTime(), endedAt: end.getTime(), text: transcript });
+const summaryCost = r.costUsd;
+const total = () => summaryCost + spent();
+console.log(`\n=== intake: ${r.outcome} (${((Date.now() - t0) / 1000).toFixed(0)}s; summary $${summaryCost.toFixed(3)}, $${total().toFixed(3)} so far)`);
+if (r.summary) console.log(JSON.stringify(r.summary, null, 2));
+console.log("\n=== journal");
+const journalDir = join(dir, "memory", "journal");
+for (const f of existsSync(journalDir) ? readdirSync(journalDir) : []) console.log(readFileSync(join(journalDir, f), "utf8"));
+console.log("=== the agent's work on the summary");
+for (const c of toolCalls("system:intake-es2004b", owner)) console.log(`  tool: ${c}`);
+console.log(`  final reply: ${(r.reply ?? "").slice(0, 600)}`);
 console.log("\n=== texts to Maya");
 for (const m of sent) console.log(`  ${m.text}`);
 console.log("\n=== reminders and jobs");
@@ -89,8 +87,8 @@ for (const s of (Array.isArray(schedules) ? schedules : schedules.entries ?? sch
 console.log("\n=== MEMORY.md after");
 console.log(readFileSync(join(dir, "memory", "MEMORY.md"), "utf8"));
 
-if (spent() > MAX_USD) {
-  console.log(`\nNot asking the question: spent $${spent().toFixed(3)}, over MAX_USD ${MAX_USD}.`);
+if (total() > MAX_USD) {
+  console.log(`\nNot asking the question: spent $${total().toFixed(3)}, over MAX_USD ${MAX_USD}.`);
 } else {
   const before = sent.length;
   await app.runtime.handleInbound({ id: "evt_q1", channel: "imessage", from: OWNER, conversationKey: "imessage:maya", text: QUESTION, replyRef: {}, receivedAt: new Date().toISOString() }, { waitForCompletion: true });
@@ -98,7 +96,7 @@ if (spent() > MAX_USD) {
   for (const c of toolCalls("imessage:maya", owner)) console.log(`  tool: ${c}`);
   for (const m of sent.slice(before)) console.log(`  answer: ${m.text}`);
 }
-console.log(`\ntotal: $${spent().toFixed(3)}`);
+console.log(`\ntotal: $${total().toFixed(3)}`);
 await app.close?.();
 rmSync(dir, { recursive: true, force: true });
 process.exit(0);

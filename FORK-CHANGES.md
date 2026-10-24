@@ -721,6 +721,54 @@ for a birthday never mentioned it searched twice and said it could not find it, 
 or delete `history.ts`, its tools and the tagged blocks in `runtime.ts`, `types.ts`, `index.ts`,
 `boot.ts`, `memory-pass.ts`, `watcher-writer.ts` and the tests.
 
+### `[sunshine:intake]`: what reaches the owner from elsewhere is kept, summarized once and acted on
+
+**Why** (2026-10-24). Sunshine should know what its person knows without being told (NOTES "PRINCIPLE: the one AI
+that knows what you know"); the first source is the band. Run 1 of `[sunshine:meeting]` handed the raw transcript to
+one agent run: it filed a decided point as open, set no reminder for the owner's task, wrote a paragraph into the
+always-on notes and could not find the meeting when asked (`history_search` held only the owner's chats). Bee,
+Plaud and Limitless keep every transcript searchable and write a summary with to-dos per conversation.
+
+**What the fork adds.**
+- `ItemArchive` (`packages/core/src/items.ts`): one archive for every source (`band` now; email, team chat, other AI
+  tools later), `history/items.jsonl`, one item per line: id, source, title, start and end, people, the whole text
+  (one line per turn, "[12:34] Sarah: ..."), the summary. The same id again replaces the item. Kept 365 days like the
+  chat history.
+- `history_search` also searches items (`core-tools.ts`): lines of the text and of the summary with the most words of
+  the query, grouped by item, newest first; each item with its heading (when, what, source, with whom) and summary; a
+  long line is clipped so the matching words show, keeping "[12:34] Sarah:". `history_forget` removes matching lines
+  from items too (text and summary), remembered by fingerprint so the same item sent again cannot bring them back. Both
+  owner-only, as before.
+- The intake (`packages/server/src/intake.ts`), staged as separate calls: (1) keep the item; (2) one model call
+  (`INTAKE_MODEL`, default Sonnet 5.5, medium reasoning; "off" keeps items unsummarized) reads the whole item as data,
+  with the owner's notes, and answers JSON: title, summary, decisions ("settled when the group went with it, even if
+  nobody said decide", the run-1 failure), the owner's tasks, others' tasks, open questions; one retry if unreadable;
+  (3) one line in the day's journal (`MemoryStore.appendJournal`), which is how the owner's own conversation learns
+  the item exists (today's and yesterday's journal are in every owner prompt); (4) the summary, marked as data, goes
+  to the agent as a system task (upstream's `runSystemTask`, `system:intake-<id>`) with the act-or-ask criteria: do
+  what is clearly the owner's and easy to undo (a reminder) without asking, ask what is unclear or would matter, all
+  questions in one text, ask first for anything outward, text only when needed, else `NO_REPLY`. The agent never sees
+  the raw transcript; it can search it. Audit `policy` entries `intake` (outcome, cost, counts).
+- How it arrives: an `intake.item` event (`packages/core/src/envelope.ts`, `intakeItemOf`) on `/chat`, like
+  upstream's `system.task`, from Sunshine's own backend once it exists (checklist #5); `BootResult.intake` for tests
+  and scenarios. Speakers are taken from the "[mm:ss] Name:" lines when the sender gives no people (not the owner,
+  not unknown voices).
+- Switch: with `features.history = false` there is no archive and no intake.
+
+**Tested** (free). `packages/core/test/items.test.ts` (kept whole, replaced by id, search over text and summary,
+partial, ranges, forget lists then removes and keeps out on resend, age limit, `history_search` output with chats and
+items, a long line clipped around the match), `envelope.test.ts` (`intakeItemOf`), `packages/server/test/intake.test.ts`
+(stand-in model: the record goes in as data with the notes; summary saved; people from the speakers; one journal
+line; the agent gets the summary and the criteria, not the transcript; unreadable twice, no model, a failing model),
+`http.test.ts` (the event reaches the intake with times in ms, never owner chat; refused when off). All tests (about
+1,418), typecheck, lint and smoke pass; the meeting scenario boots with the intake in DRY mode.
+
+**Open.** How long others' words are kept (365 days like the chats) is for the legal step (#6). The search matches
+words; meaning-based search comes with the memory engine (NOTES). The nightly notes still read only the owner's chats.
+
+**To remove.** Revert the commit (`git log --grep "sunshine:intake"`) or delete `items.ts`, `intake.ts`, their tests
+and the tagged blocks in `core-tools.ts`, `envelope.ts`, `index.ts`, `boot.ts` and `http.ts`.
+
 ### `[sunshine:tool-loader]`: email, desktop, file and people tools load when a request needs them
 
 **Problem** (measured 2026-10-16, a local boot with the live agent's settings, Anthropic's token
@@ -966,6 +1014,8 @@ people"), was filed as still open; Maya's task (research instruction manuals) wa
 "what did we decide about who the remote is for?", the agent searched `history_search`, which holds only the
 owner's chats, found nothing and answered from its note ("We didn't settle it"). The notes got one long paragraph
 for one meeting, which a day of meetings would bloat. Next: transcripts into the searchable archive, a short note.
+Built as `[sunshine:intake]`; the scenario now hands the transcript to the intake (`app.intake.receive`) as the
+backend will.
 
 **To remove.** Delete the file.
 

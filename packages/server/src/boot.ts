@@ -20,6 +20,7 @@ import {
   StateDir,
   ToolRegistry,
   HistoryArchive,
+  ItemArchive, // [sunshine:intake]
   coreTools,
   ensurePersona,
   loadConfig,
@@ -46,6 +47,7 @@ import { networkTools } from "@open-instinct/network";
 import { DEFAULT_DECIDE_MODEL, DEFAULT_SCREEN_MODEL, DEFAULT_WRITE_MODEL, NEWS_PROMPT, WATCH_GATE, createWatcher, modelCall, resolveWatcherModel, stepModelSpec, type ModelCall, type Watcher } from "@open-instinct/watcher";
 import { researchWith, writerContextFor } from "./watcher-writer.js";
 import { DEFAULT_MEMORY_MODEL, MEMORY_GATE, MEMORY_REASONING, createMemoryPass } from "./memory-pass.js"; // [sunshine:memory]
+import { DEFAULT_INTAKE_MODEL, INTAKE_REASONING, createIntake, type Intake } from "./intake.js"; // [sunshine:intake]
 import { ChatAwareOutbox, ConsoleOutbox, type ChatReplyBuffer } from "./console-outbox.js";
 import { fileTools, resolveInsideWorkspace } from "./file-tools.js";
 import { describeDataPart, promptExtraFor } from "./hooks.js";
@@ -90,6 +92,8 @@ export interface BootResult {
   hydrateInbound?: (message: InboundMessage) => Promise<InboundMessage>;
   /** Set with Inkbox: text the owner the outcome of a finished phone call. */
   onCallEnded?: (event: CallEndedEvent) => Promise<void>;
+  /** [sunshine:intake] Takes in what reached the owner from elsewhere (an `intake.item` event). */
+  intake?: Intake;
 }
 
 export const DEFAULT_MARITIME_MCP_URL = "https://mcp.maritime.sh";
@@ -124,6 +128,8 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
   const memory = new MemoryStore(state);
   // [sunshine:history] The owner's conversations, kept for searching; off with features.history = false.
   const history = config.features?.history === false ? undefined : new HistoryArchive(state);
+  // [sunshine:intake] What reached the owner from elsewhere: the same archive, the same switch.
+  const items = history ? new ItemArchive(state) : undefined;
   const a2aStore = new A2AStore(state);
 
   const model = opts.model ?? resolveModel(config.model.primary, env);
@@ -184,6 +190,7 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
       outbox,
       workspaceDir: state.path("workspace"),
       ...(history ? { history } : {}), // [sunshine:history]
+      ...(items ? { items } : {}), // [sunshine:intake]
       onApprovalSettled: (approval, approved) => runtime.afterApproval(approval, approved),
       // Image generation rides on an OpenAI-compatible key: a dedicated IMAGE_API_KEY, else the model key
       // (an OpenAI-compatible proxy that forwards /images/generations works too). The shell never sees either.
@@ -534,6 +541,19 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
   });
   watcher?.ensureStarted(); // [sunshine:watcher] before the scheduler and the Maritime push read the jobs
   memoryPass?.ensureStarted(); // [sunshine:memory] likewise
+
+  // [sunshine:intake] Items are kept and summarized once, then the agent acts on the summary.
+  // INTAKE_MODEL picks the summary's model; "off" (or no key for it) keeps items without summaries.
+  const intake = items
+    ? await safely(log, "intake", () => {
+        const spec = stepModelSpec(env.INTAKE_MODEL, DEFAULT_INTAKE_MODEL);
+        const m = spec ? resolveWatcherModel(spec, env) : undefined;
+        const apiKey = m ? apiKeyFor(m.provider, env) : undefined;
+        const call = m && apiKey ? modelCall(m, { reasoning: INTAKE_REASONING, apiKey }) : undefined;
+        log(`intake: ${call ? `summaries by ${spec}` : "items kept without summaries"}`);
+        return createIntake({ items, memory, config, audit, ...(call ? { call } : {}), runTask: (task) => runtime.runSystemTask(task) });
+      })
+    : undefined;
   // [sunshine:delivery-mirror] Every text goes out through the channel; the runtime copies the ones
   // that reached the owner from elsewhere (reminders, news, relays) into the owner's thread.
   if (channel) channel.afterSend = (msg, ctx) => runtime.mirrorToOwner(msg, ctx);
@@ -578,6 +598,7 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
     ...(wallet ? { wallet } : {}),
     ...(hydrator ? { hydrateInbound: (message: InboundMessage) => hydrator.hydrate(message) } : {}),
     ...(channel ? { onCallEnded: callReporter(channel, (text, key) => runtime.relayToOwner(text, key), log) } : {}),
+    ...(intake ? { intake } : {}), // [sunshine:intake]
     async close() {
       stopScheduler();
       sync?.stop();

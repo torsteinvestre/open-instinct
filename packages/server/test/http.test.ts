@@ -307,6 +307,24 @@ describe("http server", () => {
     expect(app.inbound).toHaveLength(0);
   });
 
+  // [sunshine:intake]
+  it("intake item envelope: goes to the intake with times in ms, never to owner chat; refused when intake is off", async () => {
+    const received: unknown[] = [];
+    app.intake = { receive: async (item) => void received.push(item) };
+    const event = { type: "intake.item", id: "es2004b", source: "band", startedAt: "2026-10-24T08:14:00Z", endedAt: "2026-10-24T08:53:00Z", people: ["Sarah"], text: "[00:07] Sarah: Hello." };
+    const res = await post("/chat", { message: `@@instinct-event@@${JSON.stringify(event)}` });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ response: "", acked: true, conversationKey: "system:intake-es2004b" });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(received).toEqual([{ id: "es2004b", source: "band", people: ["Sarah"], text: "[00:07] Sarah: Hello.", startedAt: Date.parse("2026-10-24T08:14:00Z"), endedAt: Date.parse("2026-10-24T08:53:00Z") }]);
+    expect(app.inbound).toHaveLength(0);
+
+    delete app.intake;
+    const off = await post("/chat", { message: `@@instinct-event@@${JSON.stringify(event)}` });
+    expect(await off.json()).toMatchObject({ acked: true, blocked: "intake is off" });
+    expect(app.inbound).toHaveLength(0);
+  });
+
   it("scheduled wake: runs the matching entry once on scheduled:<id> and never as owner chat", async () => {
     const res = await post("/chat", { message: "Send the morning brief", source: "scheduled" });
     expect(res.status).toBe(200);

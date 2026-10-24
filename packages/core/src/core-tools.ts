@@ -8,7 +8,8 @@ import { Type } from "typebox";
 import type { ApprovalStore } from "./approvals.js";
 import type { AuditLog } from "./audit.js";
 import type { MemoryStore } from "./memory.js";
-import type { HistoryArchive, HistoryEntry, HistoryRange } from "./history.js"; // [sunshine:history]
+import { queryWords, type HistoryArchive, type HistoryEntry, type HistoryRange } from "./history.js"; // [sunshine:history]
+import type { ArchiveItem, ItemArchive } from "./items.js"; // [sunshine:intake]
 import { checkPublicTarget, type Lookup } from "./net-guard.js";
 import { pdfPageCount, renderMarkdownToPdf } from "./pdf.js";
 import { wrapUntrusted } from "./prompt.js";
@@ -37,6 +38,8 @@ export interface CoreToolDeps {
   images?: { apiKey: string; baseUrl?: string; model?: string };
   /** [sunshine:history] The owner's kept conversations; with it, history_search and history_forget. */
   history?: HistoryArchive;
+  /** [sunshine:intake] What reached the owner from elsewhere (a meeting the band heard); searched and forgotten with the same tools. */
+  items?: ItemArchive;
 }
 
 export const DEFAULT_IMAGE_BASE_URL = "https://api.openai.com/v1";
@@ -135,16 +138,39 @@ function dayBound(day: string | undefined, tz: string, end = false): number | un
   return utc - (local.getTime() - asUtc.getTime());
 }
 
-function historyTools({ history, config }: CoreToolDeps): RegisteredTool[] {
-  if (!history) return [];
+/** [sunshine:intake] How a source reads in a result: "heard by the band", else "from <source>". */
+const SOURCE_NAMES: Record<string, string> = { band: "heard by the band" };
+
+/** [sunshine:intake] A long line clipped so the first matching word shows, keeping "[12:34] Sarah:" in front. */
+function aroundMatch(text: string, words: string[], max: number): string {
+  if (text.length <= max) return text;
+  const lower = text.toLowerCase();
+  const hits = words.map((w) => lower.indexOf(w)).filter((i) => i >= 0);
+  const at = hits.length > 0 ? Math.min(...hits) : 0;
+  if (at < max - 150) return clip(text, max);
+  const speaker = /^\[[^\]\n]{1,12}\]\s*[^:\n]{1,40}:/.exec(text)?.[0] ?? "";
+  return clip(`${speaker} …${text.slice(at - 120)}`, max);
+}
+
+function historyTools({ history, items, config }: CoreToolDeps): RegisteredTool[] {
+  if (!history && !items) return []; // [sunshine:intake] items alone are enough
   const tz = () => config.owner.timezone || "UTC";
   const name = (e: HistoryEntry) => (e.who === "owner" ? config.owner.name : e.who === "agent" ? config.agent.name : "(note)");
   const line = (e: HistoryEntry) => `[${localTime(new Date(e.ts).toISOString(), tz()).replace(/ \S+$/, "")}] ${name(e)}: ${clip(e.text.replace(/\s+/g, " "), HISTORY_LINE_MAX)}`;
   const range = (since?: string, until?: string): HistoryRange => ({ since: dayBound(since, tz()), until: dayBound(until, tz(), true) });
+  // [sunshine:intake] An item's heading: when, what, where from, with whom.
+  const clock = (ms: number) => new Intl.DateTimeFormat("en-GB", { timeZone: tz(), hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(ms));
+  const itemHead = (it: ArchiveItem) => {
+    const start = localTime(new Date(it.startedAt).toISOString(), tz()).replace(/ \S+$/, "");
+    const what = it.title ?? it.summary?.title ?? "A conversation";
+    const people = it.people?.length ? `, with ${it.people.join(", ")}` : "";
+    return `[${start}${it.endedAt ? `-${clock(it.endedAt)}` : ""}] ${what} (${SOURCE_NAMES[it.source] ?? `from ${it.source}`}${people})`;
+  };
   const search = defineTool({
     name: "history_search",
     label: "Search earlier conversations",
-    description: "Search all earlier conversations with the owner by words, also older than you can see. Results are dated; things may have changed since.",
+    // [sunshine:intake] also what reached the owner from elsewhere
+    description: "Search earlier conversations by words: all your chats with the owner, also older than you can see, and conversations of theirs that reached you from elsewhere (a meeting the band heard), with who said what and when. Results are dated; things may have changed since.",
     parameters: Type.Object({
       query: Type.String({ description: "Words, e.g. \"fund apartment\"" }),
       since: Type.Optional(Type.String({ description: "YYYY-MM-DD" })),
@@ -152,15 +178,36 @@ function historyTools({ history, config }: CoreToolDeps): RegisteredTool[] {
     }),
     meta: { capabilities: ["memory.write"], group: "memory", describe: (a) => `search earlier conversations: ${argText(a, "query")}` },
     execute: async ({ query, since, until }) => {
-      const { matches, partial } = history.search(query, range(since, until));
-      if (matches.length === 0) {
-        const first = history.all()[0];
+      const parts: string[] = [];
+      if (history) {
+        const { matches, partial } = history.search(query, range(since, until));
+        if (matches.length > 0) {
+          const lines = matches.map((m) => (m.next ? `${line(m.entry)}\n  ${line(m.next)}` : line(m.entry)));
+          const head = partial ? `No message has all of "${query}"; the closest, newest first:` : "Newest first:";
+          parts.push(`${head}\n${lines.join("\n")}`);
+        }
+      }
+      // [sunshine:intake] Each item with its summary (for context) and the lines that matched.
+      if (items) {
+        const { matches, partial } = items.search(query, range(since, until));
+        if (matches.length > 0) {
+          const words = queryWords(query);
+          const blocks = matches.map(({ item, lines }) => {
+            const gist = item.summary?.summary.trim();
+            const shown = lines.filter((l) => l.text !== gist).map((l) => `  ${aroundMatch(l.text.replace(/\s+/g, " "), words, HISTORY_LINE_MAX)}`);
+            return [itemHead(item), ...(gist ? [`  Summary: ${clip(gist, HISTORY_LINE_MAX)}`] : []), ...shown].join("\n");
+          });
+          const note = "a line's [mm:ss] is the time into the conversation";
+          const head = partial ? `From elsewhere, no line has all of "${query}"; the closest, newest first (${note}):` : `From elsewhere, newest first (${note}):`;
+          parts.push(`${head}\n${blocks.join("\n")}`);
+        }
+      }
+      if (parts.length === 0) {
+        const first = history?.all()[0];
         const from = first ? ` (kept from ${localTime(new Date(first.ts).toISOString(), tz()).replace(/ \S+$/, "")})` : "";
         return textResult(`Nothing found for "${query}" in your earlier conversations${from}.`);
       }
-      const lines = matches.map((m) => (m.next ? `${line(m.entry)}\n  ${line(m.next)}` : line(m.entry)));
-      const head = partial ? `No message has all of "${query}"; the closest, newest first:` : "Newest first:";
-      return textResult(`${head}\n${lines.join("\n")}`);
+      return textResult(parts.join("\n\n"));
     },
   });
 
@@ -171,11 +218,14 @@ function historyTools({ history, config }: CoreToolDeps): RegisteredTool[] {
     parameters: Type.Object({ query: Type.String(), confirm: Type.Optional(Type.Boolean()) }),
     meta: { capabilities: ["memory.write"], group: "memory", describe: (a) => `forget earlier messages: ${argText(a, "query")}` },
     execute: async ({ query, confirm }) => {
-      const gone = history.forget(query, {}, confirm === true);
-      if (gone.length === 0) return textResult(`No earlier message has all of "${query}".`);
-      const sample = gone.slice(-5).map(line).join("\n");
-      if (confirm !== true) return textResult(`${gone.length} message(s) would be removed, for example:\n${sample}\nCall again with confirm true to remove them.`);
-      return textResult(`Removed ${gone.length} message(s); they will not be kept again. Messages still in the current conversation stay until it is trimmed.`);
+      const gone = history?.forget(query, {}, confirm === true) ?? [];
+      // [sunshine:intake] Lines of what reached them from elsewhere go the same way.
+      const goneItems = items?.forget(query, {}, confirm === true) ?? [];
+      const total = gone.length + goneItems.length;
+      if (total === 0) return textResult(`No earlier message has all of "${query}".`);
+      const sample = [...gone.slice(-5).map(line), ...goneItems.slice(-5).map(({ item, line: l }) => `${itemHead(item)}: ${clip(l.text, HISTORY_LINE_MAX)}`)].join("\n");
+      if (confirm !== true) return textResult(`${total} message(s) would be removed, for example:\n${sample}\nCall again with confirm true to remove them.`);
+      return textResult(`Removed ${total} message(s); they will not be kept again. Messages still in the current conversation stay until it is trimmed.`);
     },
   });
 

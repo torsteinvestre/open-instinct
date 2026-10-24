@@ -11,6 +11,7 @@ export * from "./principal.js";
 export * from "./envelope.js";
 export * from "./memory.js";
 export * from "./history.js"; // [sunshine:history]
+export * from "./items.js"; // [sunshine:intake]
 export * from "./model.js";
 export * from "./tools.js";
 export * from "./tool-loader.js"; // [sunshine:tool-loader]

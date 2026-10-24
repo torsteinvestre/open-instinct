@@ -37,6 +37,46 @@ export function systemTaskOf(event: unknown): SystemTaskEvent | undefined {
   return task;
 }
 
+/**
+ * [sunshine:intake] Something that reached the owner outside their chats, sent by Sunshine's own
+ * backend: a conversation the band heard (transcribed, with speakers named), later other sources.
+ * The agent keeps it, summarizes it once and acts on it (server/src/intake.ts).
+ */
+export const INTAKE_ITEM_EVENT = "intake.item";
+
+export interface IntakeItemEvent {
+  type: typeof INTAKE_ITEM_EVENT;
+  /** Stable id; the same id again replaces the item. */
+  id: string;
+  /** "band", later "email", "slack", "claude-code", ... */
+  source: string;
+  title?: string;
+  /** ISO times. */
+  startedAt: string;
+  endedAt?: string;
+  people?: string[];
+  /** One line per turn, e.g. "[12:34] Sarah: ...". */
+  text: string;
+}
+
+export function intakeItemOf(event: unknown): IntakeItemEvent | undefined {
+  if (!event || typeof event !== "object") return undefined;
+  const e = event as Record<string, unknown>;
+  if (e.type !== INTAKE_ITEM_EVENT) return undefined;
+  if (typeof e.id !== "string" || !/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(e.id)) return undefined;
+  if (typeof e.source !== "string" || !/^[a-z0-9][a-z0-9_-]{0,31}$/i.test(e.source)) return undefined;
+  if (typeof e.startedAt !== "string" || Number.isNaN(Date.parse(e.startedAt))) return undefined;
+  if (typeof e.text !== "string" || !e.text.trim()) return undefined;
+  const item: IntakeItemEvent = { type: INTAKE_ITEM_EVENT, id: e.id, source: e.source.toLowerCase(), startedAt: e.startedAt, text: e.text };
+  if (typeof e.title === "string" && e.title.trim()) item.title = e.title.trim().slice(0, 200);
+  if (typeof e.endedAt === "string" && !Number.isNaN(Date.parse(e.endedAt))) item.endedAt = e.endedAt;
+  if (Array.isArray(e.people)) {
+    const people = e.people.filter((p): p is string => typeof p === "string" && p.trim().length > 0).map((p) => p.trim().slice(0, 80));
+    if (people.length > 0) item.people = people.slice(0, 50);
+  }
+  return item;
+}
+
 /** Returns the event, or undefined when the message is ordinary text or malformed. */
 export function decodeEvent(message: string): unknown | undefined {
   if (typeof message !== "string") return undefined;

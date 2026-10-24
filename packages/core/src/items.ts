@@ -86,7 +86,7 @@ export function lineSeconds(line: string): number | undefined {
 
 const SUMMARY_LABELS: Array<[keyof ItemSummary, string]> = [
   ["decisions", "Decided"],
-  ["ownerTasks", "Their tasks"],
+  ["ownerTasks", "Owner's tasks"],
   ["othersTasks", "Others' tasks"],
   ["open", "Open"],
 ];
@@ -208,9 +208,9 @@ export class ItemArchive {
 
   /**
    * Lines containing every word of the query, grouped by item, newest item first. When no line has
-   * them all, the lines with the most of them, marked `partial`. At most `perItem` lines per item; a
-   * line of the text comes with what was said in the minute after it (`following`), leaving out lines
-   * that matched themselves.
+   * them all, the lines with the most of them, marked `partial`. Every matching summary line, and at
+   * most `perItem` lines of the text, each with what was said in the minute after it (`following`),
+   * leaving out lines that matched themselves.
    */
   search(query: string, range: HistoryRange = {}, limit = 3, perItem = 5): { matches: ItemMatch[]; partial: boolean } {
     const words = queryWords(query);
@@ -223,9 +223,11 @@ export class ItemArchive {
     const matches = scored
       .map(({ item, lines }) => {
         const hits: ItemHit[] = [];
+        let textHits = 0;
         for (const [i, l] of lines.entries()) {
-          if (l.hits !== best || hits.length >= perItem) continue;
-          hits.push(l.line.part === "text" ? { ...l.line, following: following(lines, i, best) } : l.line);
+          if (l.hits !== best) continue;
+          if (l.line.part === "summary") hits.push(l.line);
+          else if (textHits++ < perItem) hits.push({ ...l.line, following: following(lines, i, best) });
         }
         return { item, lines: hits };
       })

@@ -38,7 +38,7 @@ describe("item archive", () => {
     expect(summaryLines(SUMMARY)).toEqual([
       "Second design meeting for the TV remote.",
       "Decided: Target buyer: young, business-class people, mid-range price",
-      "Their tasks: Research what consumers think of instruction manuals before the next meeting",
+      "Owner's tasks: Research what consumers think of instruction manuals before the next meeting",
       "Others' tasks: Una: work the company logo into the design",
       "Open: Repetitive strain injury",
     ]);
@@ -59,7 +59,7 @@ describe("item archive", () => {
     const manuals = items.search("MANUALS");
     expect(manuals.matches.map((m) => m.item.id)).toEqual(["m2", "m1"]);
     expect(manuals.matches[1]!.lines.map((l) => l.text)).toEqual([
-      "Their tasks: Research what consumers think of instruction manuals before the next meeting",
+      "Owner's tasks: Research what consumers think of instruction manuals before the next meeting",
       "[38:15] Sarah: Instruction manuals.",
     ]);
     const partial = items.search("business budget");
@@ -144,7 +144,14 @@ describe("item archive", () => {
       "[Sat 24 Oct, 04:14-04:53] Remote control design meeting (heard by the band, with Sarah, Ian, Una)",
       "  Summary: Second design meeting for the TV remote.",
       "  Decided: Target buyer: young, business-class people, mid-range price",
+      "  Owner's tasks: Research what consumers think of instruction manuals before the next meeting",
+      "  Others' tasks: Una: work the company logo into the design",
+      "  Open: Repetitive strain injury",
     ].join("\n"));
+    // Run 3 (2026-10-24): a summary line matching fewer words than a transcript line is still shown.
+    const fewer = text(await search.spec.execute({ query: "Sarah business remote" }, ctx));
+    expect(fewer).toContain("  [25:42] Sarah: I think we are focusing");
+    expect(fewer).toContain("  Decided: Target buyer: young, business-class people, mid-range price");
     const manuals = text(await search.spec.execute({ query: "manuals" }, ctx));
     expect(manuals).toMatch(/^Newest first:\n\[Sat 24 Oct, 03:14\] Maria: the manuals worry me\n\nFrom elsewhere/);
     expect(manuals).toContain("  [38:15] Sarah: Instruction manuals.");

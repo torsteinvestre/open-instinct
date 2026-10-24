@@ -9,7 +9,7 @@ import type { ApprovalStore } from "./approvals.js";
 import type { AuditLog } from "./audit.js";
 import type { MemoryStore } from "./memory.js";
 import { queryWords, type HistoryArchive, type HistoryEntry, type HistoryRange } from "./history.js"; // [sunshine:history]
-import { FOLLOWING_LINE_MAX, type ArchiveItem, type ItemArchive } from "./items.js"; // [sunshine:intake]
+import { FOLLOWING_LINE_MAX, summaryLines, type ArchiveItem, type ItemArchive } from "./items.js"; // [sunshine:intake]
 import { checkPublicTarget, type Lookup } from "./net-guard.js";
 import { pdfPageCount, renderMarkdownToPdf } from "./pdf.js";
 import { wrapUntrusted } from "./prompt.js";
@@ -138,6 +138,9 @@ function dayBound(day: string | undefined, tz: string, end = false): number | un
   return utc - (local.getTime() - asUtc.getTime());
 }
 
+/** [sunshine:intake] Most of an item's summary shown with a search hit (a summary is usually 1,000-2,000 characters). */
+const SUMMARY_SHOWN_MAX = 3000;
+
 /** [sunshine:intake] How a source reads in a result: "heard by the band", else "from <source>". */
 const SOURCE_NAMES: Record<string, string> = { band: "heard by the band" };
 
@@ -187,18 +190,27 @@ function historyTools({ history, items, config }: CoreToolDeps): RegisteredTool[
           parts.push(`${head}\n${lines.join("\n")}`);
         }
       }
-      // [sunshine:intake] Each item with its summary (for context) and the lines that matched.
+      // [sunshine:intake] Each item with its whole summary, then the lines of its text that matched. The
+      // summary is shown whole because word matching ranks lines, not meaning: in run 3 (2026-10-24) the
+      // answer sat in the summary's open points, matched one word of the query, and was hidden behind two
+      // transcript lines that matched three. Bee, Plaud and Limitless also show the summary first.
       if (items) {
         const { matches, partial } = items.search(query, range(since, until));
         if (matches.length > 0) {
           const words = queryWords(query);
           const blocks = matches.map(({ item, lines }) => {
-            const gist = item.summary?.summary.trim();
+            const summary: string[] = [];
+            let size = 0;
+            for (const [i, l] of (item.summary ? summaryLines(item.summary) : []).entries()) {
+              if (size + l.length > SUMMARY_SHOWN_MAX && summary.length > 0) break;
+              summary.push(`  ${i === 0 && item.summary!.summary.trim() ? "Summary: " : ""}${clip(l, HISTORY_LINE_MAX)}`);
+              size += l.length;
+            }
             // A hit in the text comes with the minute after it, indented: that is where the answer usually is.
             const shown = lines
-              .filter((l) => l.text !== gist)
+              .filter((l) => l.part === "text")
               .map((l) => [`  ${aroundMatch(l.text.replace(/\s+/g, " "), words, HISTORY_LINE_MAX)}`, ...(l.following ?? []).map((f) => `    ${clip(f.text.replace(/\s+/g, " "), FOLLOWING_LINE_MAX)}`)].join("\n"));
-            return [itemHead(item), ...(gist ? [`  Summary: ${clip(gist, HISTORY_LINE_MAX)}`] : []), ...shown].join("\n");
+            return [itemHead(item), ...summary, ...shown].join("\n");
           });
           const note = "a line's [mm:ss] is the time into the conversation; indented lines were said right after";
           const head = partial ? `From elsewhere, no line has all of "${query}"; the closest, newest first (${note}):` : `From elsewhere, newest first (${note}):`;

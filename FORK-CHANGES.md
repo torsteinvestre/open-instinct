@@ -735,9 +735,11 @@ Plaud and Limitless keep every transcript searchable and write a summary with to
   (one line per turn, "[12:34] Sarah: ..."), the summary. The same id again replaces the item. Kept 365 days like the
   chat history.
 - `history_search` also searches items (`core-tools.ts`): lines of the text and of the summary with the most words of
-  the query, grouped by item, newest first; each item with its heading (when, what, source, with whom) and summary; a
-  long line is clipped so the matching words show, keeping "[12:34] Sarah:"; a hit in the text comes with the minute
-  of talk after it, where the answer to a question usually is. `history_forget` removes matching lines
+  the query, grouped by item, newest first; each item with its heading (when, what, source, with whom) and its whole
+  summary (up to 3,000 characters: word matching ranks lines, not meaning, so the summary is never left out; Bee,
+  Plaud and Limitless show the summary first too), then up to five matching lines of the text; a long line is clipped
+  so the matching words show, keeping "[12:34] Sarah:"; a hit in the text comes with the minute of talk after it,
+  where the answer to a question usually is. `history_forget` removes matching lines
   from items too (text and summary), remembered by fingerprint so the same item sent again cannot bring them back. Both
   owner-only, as before.
 - The intake (`packages/server/src/intake.ts`), staged as separate calls: (1) keep the item; (2) one model call
@@ -1049,6 +1051,15 @@ meeting "after lunch", but our transcript lost that sentence, so asking was righ
 still got "I can't find a clear decision": the agent's one search ("remote target users audience") showed two
 transcript lines matching three of the words, and the summary's open line matched only "target", so it was not shown
 (free replay with run 3's summary confirmed it). The answer was in the archive; the search's ranking hid it.
+
+**After run 3** (zoomed out with Torstein, 2026-10-24). Answering about a past conversation is three steps: find the
+conversation, read what it says, answer with who and when. Bee, Plaud and Limitless give every conversation a summary
+and show it first; Plaud's "Ask" on one recording reads that recording's transcript and summary and answers with
+timestamps. Done: a conversation found by a search now shows its whole summary, then its matching lines. Free replay:
+both of run 2's and run 3's searches now show "Sarah said the focus is mid-range business-class people". No paid rerun
+(agreed: move on after run 3). Not built, on purpose: a tool to read one conversation whole (Plaud's single-file Ask),
+until a real question shows the summary is not enough; meaning-based search for finding the conversation (memory
+engine). Meeting tests total $0.25.
 
 **To remove.** Delete the file.
 

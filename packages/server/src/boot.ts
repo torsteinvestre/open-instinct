@@ -21,6 +21,7 @@ import {
   ToolRegistry,
   HistoryArchive,
   ItemArchive, // [sunshine:intake]
+  MeaningSearch, // [sunshine:meaning-search]
   coreTools,
   ensurePersona,
   loadConfig,
@@ -33,6 +34,7 @@ import {
 } from "@open-instinct/core";
 import type { InboundMessage, InstinctConfig, Outbox, Principal, RegisteredTool } from "@open-instinct/core";
 import type { LoadableGroup } from "@open-instinct/core"; // [sunshine:tool-loader]
+import type { Embedder } from "@open-instinct/core"; // [sunshine:meaning-search]
 import { CALL_ORIGINATIONS, InkboxA2A, InkboxChannel, InkboxInboundHydrator, InkboxProvisioner, handleCallEnded, messagingTools, sendFileTool, voiceInstructions } from "@open-instinct/inkbox";
 import type { CallEndedEvent, CallOrigination } from "@open-instinct/inkbox";
 import { computerGuidance, detectComputer } from "@open-instinct/computer";
@@ -48,6 +50,7 @@ import { DEFAULT_DECIDE_MODEL, DEFAULT_SCREEN_MODEL, DEFAULT_WRITE_MODEL, NEWS_P
 import { researchWith, writerContextFor } from "./watcher-writer.js";
 import { DEFAULT_MEMORY_MODEL, MEMORY_GATE, MEMORY_REASONING, createMemoryPass } from "./memory-pass.js"; // [sunshine:memory]
 import { DEFAULT_INTAKE_MODEL, INTAKE_REASONING, createIntake, type Intake } from "./intake.js"; // [sunshine:intake]
+import { createLocalEmbedder } from "./embedder.js"; // [sunshine:meaning-search]
 import { ChatAwareOutbox, ConsoleOutbox, type ChatReplyBuffer } from "./console-outbox.js";
 import { fileTools, resolveInsideWorkspace } from "./file-tools.js";
 import { describeDataPart, promptExtraFor } from "./hooks.js";
@@ -69,7 +72,12 @@ export interface BootOptions {
   fetchImpl?: typeof fetch;
   /** Override for tests: the payments module to wire instead of importing @open-instinct/payments. */
   payments?: PaymentsModule;
+  /** [sunshine:meaning-search] Tests and scenarios: the search model to use (turns meaning search on). */
+  embedder?: Embedder;
 }
+
+/** [sunshine:meaning-search] After boot, wait this long before storing what is not stored yet (the agent settles first). */
+const MEANING_BACKFILL_DELAY_MS = 2 * 60 * 1000;
 
 export interface BootResult {
   runtime: AgentRuntime;
@@ -126,10 +134,23 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
   const scheduler = new Scheduler(state);
   const contacts = new ContactStore(state, { phoneCountry: phoneCountryOf(config), warn: log }); // [sunshine:phone] phoneCountry
   const memory = new MemoryStore(state);
+  // [sunshine:meaning-search] Set below; the archives tell it when they change.
+  let meaning: MeaningSearch | undefined;
+  const changed = () => meaning?.schedule();
   // [sunshine:history] The owner's conversations, kept for searching; off with features.history = false.
-  const history = config.features?.history === false ? undefined : new HistoryArchive(state);
+  const history = config.features?.history === false ? undefined : new HistoryArchive(state, { onChange: changed });
   // [sunshine:intake] What reached the owner from elsewhere: the same archive, the same switch.
-  const items = history ? new ItemArchive(state) : undefined;
+  const items = history ? new ItemArchive(state, { onChange: changed }) : undefined;
+  // [sunshine:meaning-search] Search by meaning over both: on with INSTINCT_MEANING_SEARCH=1 (the model is
+  // fetched into /data/models on first use, about 0.9 GB), or with a search model passed in.
+  const localEmbedder = history && !opts.embedder && env.INSTINCT_MEANING_SEARCH === "1" ? createLocalEmbedder({ cacheDir: state.path("models"), log }) : undefined;
+  const embedder = opts.embedder ?? localEmbedder;
+  if (embedder && history) {
+    meaning = new MeaningSearch({ state, embedder, config, history, ...(items ? { items } : {}), audit });
+    const { pieces, stored } = meaning.status();
+    log(`meaning search: on (${stored} of ${pieces} pieces stored)`);
+    if (stored < pieces) meaning.schedule(MEANING_BACKFILL_DELAY_MS);
+  }
   const a2aStore = new A2AStore(state);
 
   const model = opts.model ?? resolveModel(config.model.primary, env);
@@ -191,6 +212,7 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
       workspaceDir: state.path("workspace"),
       ...(history ? { history } : {}), // [sunshine:history]
       ...(items ? { items } : {}), // [sunshine:intake]
+      ...(meaning ? { meaning } : {}), // [sunshine:meaning-search]
       onApprovalSettled: (approval, approved) => runtime.afterApproval(approval, approved),
       // Image generation rides on an OpenAI-compatible key: a dedicated IMAGE_API_KEY, else the model key
       // (an OpenAI-compatible proxy that forwards /images/generations works too). The shell never sees either.
@@ -605,6 +627,8 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
       await safely(log, "computer close", () => computer?.close());
       await safely(log, "apps close", () => apps?.close());
       await safely(log, "atomicmail close", () => mailbox?.close());
+      // [sunshine:meaning-search] Release the search model, if loaded.
+      await safely(log, "search model close", () => localEmbedder?.close());
     },
   };
 }

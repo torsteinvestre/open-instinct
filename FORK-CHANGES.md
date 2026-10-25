@@ -767,10 +767,76 @@ line; the agent gets the summary and the criteria, not the transcript; unreadabl
 1,418), typecheck, lint and smoke pass; the meeting scenario boots with the intake in DRY mode.
 
 **Open.** How long others' words are kept (365 days like the chats) is for the legal step (#6). The search matches
-words; meaning-based search comes with the memory engine (NOTES). The nightly notes still read only the owner's chats.
+words; search by meaning is `[sunshine:meaning-search]` (2026-10-25). The nightly notes still read only the owner's chats.
 
 **To remove.** Revert the commit (`git log --grep "sunshine:intake"`) or delete `items.ts`, `intake.ts`, their tests
 and the tagged blocks in `core-tools.ts`, `envelope.ts`, `index.ts`, `boot.ts` and `http.ts`.
+
+### `[sunshine:meaning-search]`: earlier conversations are found by meaning, not only by the same words
+
+**Why** (2026-10-25). Word search finds what was said in the same words; asked in other words it misses ("ring
+people" for phone calls; run 2 of `[sunshine:meeting]`: "target group" vs "age groups"). On 25 real questions about
+the owner's own work (sunshine-ops NOTES "Memory trial", free): word search 7, a search model 14-16. Search models
+compared the same way: Qwen3-Embedding-0.6B (Apache 2.0, multilingual) as good as bigger ones. Then run the way the
+agent would run it (NOTES "IN-AGENT CHECK"): 4-bit 15 / 17 (as asked / either of two searches) against the full
+model's 16 / 18, peak 2.0 GB of memory; 8-bit 9 / 14 (its compression also rounds in-between results); half
+precision 16 / 18 but 2.65 GB of the agent's about 3 GB free. So: the 4-bit model inside each agent, no server for
+the test version; a shared EU service later (sunshine-ops DESIGN-meaning-search.md). Upstream has no meaning search;
+OpenClaw's memory_search and Hindsight both merge meaning and word rankings, and fall back to words when the model fails.
+
+**What the fork adds.**
+- `MeaningSearch` (`packages/core/src/meaning.ts`): the chat history and the items cut into pieces of about 1,800
+  characters (the tested size): consecutive messages of one thread, a new piece after an hour's pause; an item's
+  summary (with its title) as one piece and its text in stretches; a long line cut with its speaker kept in front.
+  Each piece's vector is stored in `history/meaning.json` under a hash of its text, so a changed piece (a thread grows,
+  a line is forgotten) gets a new one and vectors no piece uses are removed: nothing forgotten stays behind. Vectors
+  from another model or version are made again. A search ranks the pieces in the date range by closeness of meaning
+  and by words (BM25, 50 candidates each) and merges them as OpenClaw does: 0.7 x closeness + 0.3 x the word score
+  scaled to the best closeness (chosen on the scenario below over rank fusion, Hindsight's way).
+- Storing runs in the background (`schedule`, 30 s after the last change; the archives call it through a new
+  `onChange` option; 2 min after boot for what is not stored yet), newest pieces first, one at a time, saved every 25;
+  a failure is audited (`error` with `meaningIndex`), what was stored is kept; audit `policy` `meaningIndex` (added,
+  removed, ms).
+- `history_search` (`core-tools.ts`): with meaning search, the best pieces in rank order until past about 8,000
+  characters (as tested): a stretch of a chat as it was ("[2026-10-24 12:00] Torstein: ..."), a stretch of an item
+  under its heading, with the item's whole summary the first time it shows (grouping an item's pieces together pushed
+  better ones down: 13 vs 15 in the first scenario run). If the model fails or takes over 20 s (still loading), word search answers exactly as
+  before and an `error` with `meaningSearch` is audited. The description says it searches by meaning and words and
+  adds one criterion: if what comes back does not answer it, search again in other words (the gap the test left).
+  `history_forget` also removes the forgotten text's vectors at once.
+- The model (`packages/server/src/embedder.ts`): `onnx-community/Qwen3-Embedding-0.6B-ONNX`, 4-bit (`q4`), pinned
+  revision `c25a394d`, through Transformers.js 4.3.1 (Apache 2.0) on the CPU with 2 threads; the files (about 0.9 GB)
+  are fetched into `/data/models` on first use. Loaded only when needed and only with 2.3 GB free memory (else word
+  search answers; tried again after 5 minutes), released after 10 minutes idle, one text at a time (storing and a
+  search never run at once: that would double the peak). Queries get the model's own search instruction.
+- Switch: on with `INSTINCT_MEANING_SEARCH=1` (off by default, so tests, local runs and agents without it never fetch
+  the model); `BootOptions.embedder` for tests and scenarios. Needs `features.history` on.
+- `deploy/Dockerfile.agent`: the ONNX runtime's Mac and Windows builds are removed from the image. (pnpm 10 skips
+  onnxruntime-node's install script, which would download graphics-card support; the CPU runtime ships in the package.)
+
+**Tested** (free). `packages/core/test/meaning.test.ts` with a stand-in model where words of the same meaning share a
+dimension: pieces (threads, pauses, size, long messages, items), storing once and again after a change with the old
+vector removed, another model starts again, a storing failure keeps what was stored, `history_forget` removes vectors
+at once, another wording found by meaning where words alone find nothing, an exact number found by words, date
+ranges, `history_search` output, fallback to word search when the model fails (audited).
+`packages/server/test/embedder.test.ts`: loaded only when used, the query instruction, one text at a time, released
+when idle, not loaded without free memory, a failed load not retried at once, off at boot unless switched on.
+`scenarios/meaning-search.mjs` (free): the owner's 20 Claude Code work sessions (285k words) as items, 1,227 pieces
+stored with the real 4-bit model (8 threads on the laptop: 0.73 s per piece, 15 minutes), the 25 questions asked as
+written and as keywords, graded by the earlier tests' grader (~/sunshine-memory/grade_scenario.py). Found (as asked /
+keywords / either): `history_search` today (words) 3 / 7 / 7; ranked by meaning and words merged 16 / 14 / 17; by
+meaning only 16 / 14 / 17; rank fusion 15 / 14 / 16; words only (BM25 over pieces) 11 / 8 / 11; the new
+`history_search`'s whole answer 16 / 14 / 17 (median 9,227 characters, about 2,300 tokens; 118 ms median per search,
+about 2 s for the first, which loads the model). All tests (about 1,437), typecheck and smoke pass.
+
+**Open.** Speed and memory on the agent's own machine (2 vCPU AMD EPYC) are measured at deploy. Norwegian is
+untested (the model is multilingual). The 25 questions are the owner's work with Claude, not meetings; the band test
+(about 5 Nov) checks real conversations.
+
+**To remove.** Unset `INSTINCT_MEANING_SEARCH` (everything works as before), or revert the commit
+(`git log --grep "sunshine:meaning-search"`) or delete `meaning.ts`, `embedder.ts`, their tests and the scenario,
+the tagged blocks in `core-tools.ts`, `history.ts`, `items.ts`, `index.ts`, `boot.ts`, `Dockerfile.agent`, and the
+`@huggingface/transformers` dependency of `packages/server`.
 
 ### `[sunshine:tool-loader]`: email, desktop, file and people tools load when a request needs them
 

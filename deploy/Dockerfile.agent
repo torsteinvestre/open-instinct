@@ -45,6 +45,9 @@ COPY packages ./packages
 COPY skills ./skills
 RUN pnpm -r --filter './packages/*' run build \
   && (pnpm prune --prod || echo "prune skipped; keeping dev deps")
+# [sunshine:meaning-search] The ONNX runtime (the search model's) ships Mac and Windows builds too; the agent runs Linux.
+RUN rm -rf node_modules/.pnpm/onnxruntime-node@*/node_modules/onnxruntime-node/bin/napi-v*/darwin \
+           node_modules/.pnpm/onnxruntime-node@*/node_modules/onnxruntime-node/bin/napi-v*/win32
 
 FROM base AS runtime
 ENV NODE_ENV=production \

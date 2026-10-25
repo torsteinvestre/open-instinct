@@ -104,7 +104,8 @@ export class HistoryArchive {
 
   constructor(
     private readonly state: StateDir,
-    private readonly opts: { keepDays?: number; now?: () => Date } = {},
+    /** [sunshine:meaning-search] onChange: called after entries were added or forgotten. */
+    private readonly opts: { keepDays?: number; now?: () => Date; onChange?: () => void } = {},
   ) {}
 
   private now(): number {
@@ -178,6 +179,7 @@ export class HistoryArchive {
       known.add(id);
       added++;
     }
+    if (added > 0) this.opts.onChange?.(); // [sunshine:meaning-search]
     return added;
   }
 
@@ -233,6 +235,7 @@ export class HistoryArchive {
     this.state.writeJson(FORGOTTEN_FILE, [...forgotten]);
     const goneSet = new Set(gone);
     this.rewrite(all.filter((e) => !goneSet.has(e)));
+    this.opts.onChange?.(); // [sunshine:meaning-search]
     return gone;
   }
 }

@@ -10,6 +10,7 @@ import type { AuditLog } from "./audit.js";
 import type { MemoryStore } from "./memory.js";
 import { queryWords, type HistoryArchive, type HistoryEntry, type HistoryRange } from "./history.js"; // [sunshine:history]
 import { FOLLOWING_LINE_MAX, summaryLines, type ArchiveItem, type ItemArchive } from "./items.js"; // [sunshine:intake]
+import type { MeaningSearch, Piece } from "./meaning.js"; // [sunshine:meaning-search]
 import { checkPublicTarget, type Lookup } from "./net-guard.js";
 import { pdfPageCount, renderMarkdownToPdf } from "./pdf.js";
 import { wrapUntrusted } from "./prompt.js";
@@ -40,6 +41,8 @@ export interface CoreToolDeps {
   history?: HistoryArchive;
   /** [sunshine:intake] What reached the owner from elsewhere (a meeting the band heard); searched and forgotten with the same tools. */
   items?: ItemArchive;
+  /** [sunshine:meaning-search] With it, history_search ranks by meaning and words; word search answers when it fails. */
+  meaning?: MeaningSearch;
 }
 
 export const DEFAULT_IMAGE_BASE_URL = "https://api.openai.com/v1";
@@ -144,6 +147,20 @@ const SUMMARY_SHOWN_MAX = 3000;
 /** [sunshine:intake] How a source reads in a result: "heard by the band", else "from <source>". */
 const SOURCE_NAMES: Record<string, string> = { band: "heard by the band" };
 
+/** [sunshine:meaning-search] The best pieces are shown up to about this many characters (as tested: the first 8,000). */
+const MEANING_RESULT_CHARS = 8000;
+/** [sunshine:meaning-search] How long a search waits for the search model (it may still be loading) before word search answers. */
+const MEANING_WAIT_MS = 20_000;
+
+/** [sunshine:meaning-search] `promise`, or a rejection after `ms`. */
+function within<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`no answer within ${ms} ms`)), ms);
+  });
+  return Promise.race([promise, late]).finally(() => clearTimeout(timer));
+}
+
 /** [sunshine:intake] A long line clipped so the first matching word shows, keeping "[12:34] Sarah:" in front. */
 function aroundMatch(text: string, words: string[], max: number): string {
   if (text.length <= max) return text;
@@ -155,7 +172,7 @@ function aroundMatch(text: string, words: string[], max: number): string {
   return clip(`${speaker} …${text.slice(at - 120)}`, max);
 }
 
-function historyTools({ history, items, config }: CoreToolDeps): RegisteredTool[] {
+function historyTools({ history, items, config, meaning, audit }: CoreToolDeps): RegisteredTool[] {
   if (!history && !items) return []; // [sunshine:intake] items alone are enough
   const tz = () => config.owner.timezone || "UTC";
   const name = (e: HistoryEntry) => (e.who === "owner" ? config.owner.name : e.who === "agent" ? config.agent.name : "(note)");
@@ -169,18 +186,65 @@ function historyTools({ history, items, config }: CoreToolDeps): RegisteredTool[
     const people = it.people?.length ? `, with ${it.people.join(", ")}` : "";
     return `[${start}${it.endedAt ? `-${clock(it.endedAt)}` : ""}] ${what} (${SOURCE_NAMES[it.source] ?? `from ${it.source}`}${people})`;
   };
+  // [sunshine:intake] An item's summary as shown with a hit: most of it, line by line.
+  const summaryShown = (it: ArchiveItem): string[] => {
+    const out: string[] = [];
+    let size = 0;
+    for (const [i, l] of (it.summary ? summaryLines(it.summary) : []).entries()) {
+      if (size + l.length > SUMMARY_SHOWN_MAX && out.length > 0) break;
+      out.push(`  ${i === 0 && it.summary!.summary.trim() ? "Summary: " : ""}${clip(l, HISTORY_LINE_MAX)}`);
+      size += l.length;
+    }
+    return out;
+  };
+  // [sunshine:meaning-search] The best pieces in rank order, up to MEANING_RESULT_CHARS: a stretch of a chat
+  // as it was; a stretch of an item under its heading, with its whole summary the first time the item shows
+  // (as Bee and Plaud show a conversation's summary first). Pieces stay in rank order: grouping an item's
+  // pieces together pushed better ones past the cut (13 vs 15 of 25 in the scenario, 2026-10-25).
+  const showPieces = (found: Piece[]): string => {
+    const blocks: string[] = [];
+    const summarized = new Set<string>();
+    let size = 0;
+    for (const p of found) {
+      if (size >= MEANING_RESULT_CHARS && blocks.length > 0) break;
+      let block: string[];
+      if (p.kind === "chat") block = p.lines;
+      else {
+        const first = !summarized.has(p.item.id);
+        summarized.add(p.item.id);
+        if (p.part === "summary" && !first) continue;
+        block = [itemHead(p.item), ...(first ? summaryShown(p.item) : []), ...(p.part === "text" ? p.lines.map((l) => `  ${l}`) : [])];
+      }
+      const text = block.join("\n");
+      blocks.push(text);
+      size += text.length;
+    }
+    const note = "chat lines show the owner's local time; in a conversation from elsewhere, [mm:ss] is the time into it";
+    return `Most relevant first, by meaning and words (${note}):\n\n${blocks.join("\n\n")}`;
+  };
   const search = defineTool({
     name: "history_search",
     label: "Search earlier conversations",
-    // [sunshine:intake] also what reached the owner from elsewhere
-    description: "Search earlier conversations by words: all your chats with the owner, also older than you can see, and conversations of theirs that reached you from elsewhere (a meeting the band heard), with who said what and when. Results are dated; things may have changed since.",
+    // [sunshine:intake] also what reached the owner from elsewhere; [sunshine:meaning-search] by meaning, and search again in other words
+    description: meaning
+      ? "Search earlier conversations by meaning and words: all your chats with the owner, also older than you can see, and conversations of theirs that reached you from elsewhere (a meeting the band heard), with who said what and when. Results are dated; things may have changed since. If what comes back does not answer it, search again in other words."
+      : "Search earlier conversations by words: all your chats with the owner, also older than you can see, and conversations of theirs that reached you from elsewhere (a meeting the band heard), with who said what and when. Results are dated; things may have changed since.",
     parameters: Type.Object({
-      query: Type.String({ description: "Words, e.g. \"fund apartment\"" }),
+      query: Type.String({ description: meaning ? "What you are looking for: a question or a few words, e.g. \"what did we decide about the fund\"" : "Words, e.g. \"fund apartment\"" }),
       since: Type.Optional(Type.String({ description: "YYYY-MM-DD" })),
       until: Type.Optional(Type.String({ description: "YYYY-MM-DD" })),
     }),
     meta: { capabilities: ["memory.write"], group: "memory", describe: (a) => `search earlier conversations: ${argText(a, "query")}` },
     execute: async ({ query, since, until }) => {
+      // [sunshine:meaning-search] By meaning and words when the search model answers in time; else word search below.
+      if (meaning) {
+        try {
+          const found = await within(meaning.search(query, range(since, until)), MEANING_WAIT_MS);
+          if (found.length > 0) return textResult(showPieces(found));
+        } catch (error) {
+          audit.append({ kind: "error", detail: { meaningSearch: "word search answered instead", message: error instanceof Error ? error.message : String(error) } });
+        }
+      }
       const parts: string[] = [];
       if (history) {
         const { matches, partial } = history.search(query, range(since, until));
@@ -199,13 +263,7 @@ function historyTools({ history, items, config }: CoreToolDeps): RegisteredTool[
         if (matches.length > 0) {
           const words = queryWords(query);
           const blocks = matches.map(({ item, lines }) => {
-            const summary: string[] = [];
-            let size = 0;
-            for (const [i, l] of (item.summary ? summaryLines(item.summary) : []).entries()) {
-              if (size + l.length > SUMMARY_SHOWN_MAX && summary.length > 0) break;
-              summary.push(`  ${i === 0 && item.summary!.summary.trim() ? "Summary: " : ""}${clip(l, HISTORY_LINE_MAX)}`);
-              size += l.length;
-            }
+            const summary = summaryShown(item);
             // A hit in the text comes with the minute after it, indented: that is where the answer usually is.
             const shown = lines
               .filter((l) => l.part === "text")
@@ -240,6 +298,8 @@ function historyTools({ history, items, config }: CoreToolDeps): RegisteredTool[
       if (total === 0) return textResult(`No earlier message has all of "${query}".`);
       const sample = [...gone.slice(-5).map(line), ...goneItems.slice(-5).map(({ item, line: l }) => `${itemHead(item)}: ${clip(l.text, HISTORY_LINE_MAX)}`)].join("\n");
       if (confirm !== true) return textResult(`${total} message(s) would be removed, for example:\n${sample}\nCall again with confirm true to remove them.`);
+      // [sunshine:meaning-search] Their meaning numbers go at once too, not only at the next background run.
+      meaning?.prune();
       return textResult(`Removed ${total} message(s); they will not be kept again. Messages still in the current conversation stay until it is trimmed.`);
     },
   });

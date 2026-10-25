@@ -133,7 +133,8 @@ export class ItemArchive {
 
   constructor(
     private readonly state: StateDir,
-    private readonly opts: { keepDays?: number; now?: () => Date } = {},
+    /** [sunshine:meaning-search] onChange: called after an item or its summary was stored, or lines forgotten. */
+    private readonly opts: { keepDays?: number; now?: () => Date; onChange?: () => void } = {},
   ) {}
 
   private now(): number {
@@ -186,6 +187,7 @@ export class ItemArchive {
     const others = existing.filter((it) => it.id !== item.id);
     if (others.length === existing.length) this.state.appendLine(ITEMS_FILE, JSON.stringify(kept));
     else this.rewrite([...others, kept]);
+    this.opts.onChange?.(); // [sunshine:meaning-search]
     return kept;
   }
 
@@ -194,6 +196,7 @@ export class ItemArchive {
     const forgotten = this.forgottenSet();
     const clean = filterSummary(summary, (line) => !forgotten.has(lineId(id, "summary", line)));
     this.rewrite(this.all().map((it) => (it.id === id ? { ...it, summary: clean, ...(clean.title && !it.title ? { title: clean.title } : {}) } : it)));
+    this.opts.onChange?.(); // [sunshine:meaning-search]
   }
 
   private linesOf(it: ArchiveItem): ItemLine[] {
@@ -260,6 +263,7 @@ export class ItemArchive {
         return { ...it, text, summary: filterSummary(it.summary, (line) => !forgotten.has(lineId(it.id, "summary", line))) };
       }),
     );
+    this.opts.onChange?.(); // [sunshine:meaning-search]
     return gone;
   }
 }

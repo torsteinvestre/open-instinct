@@ -31,6 +31,7 @@
     "@earendil-works/pi-agent-core": "^1.0.1",
     "@earendil-works/pi-ai": "^1.0.1",
     "@earendil-works/pi-coding-agent": "^1.0.1",
+    "@huggingface/transformers": "4.3.1",
     "@inkbox/sdk": "^0.7.13",
     "@open-instinct/ample": "workspace:*",
     "@open-instinct/apps": "workspace:*",

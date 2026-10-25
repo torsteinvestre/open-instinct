@@ -806,9 +806,15 @@ OpenClaw's memory_search and Hindsight both merge meaning and word rankings, and
   `history_forget` also removes the forgotten text's vectors at once.
 - The model (`packages/server/src/embedder.ts`): `onnx-community/Qwen3-Embedding-0.6B-ONNX`, 4-bit (`q4`), pinned
   revision `c25a394d`, through Transformers.js 4.3.1 (Apache 2.0) on the CPU with 2 threads; the files (about 0.9 GB)
-  are fetched into `/data/models` on first use. Loaded only when needed and only with 2.3 GB free memory (else word
-  search answers; tried again after 5 minutes), released after 10 minutes idle, one text at a time (storing and a
-  search never run at once: that would double the peak). Queries get the model's own search instruction.
+  are fetched into `/data/models` on first use. It runs in its own process (`embed-worker.ts`), started only when
+  needed and only with 2.3 GB free memory (else word search answers; tried again after 5 minutes), stopped after 10
+  minutes idle, one text at a time (storing and a search never run at once: that would double the peak). Its own
+  process because, measured on the live agent (2026-10-25, first deploy, model inside the agent's process): RSS 160 MB
+  before, 1,788 MB loaded, 923 MB after the release; about 0.75 GB stayed held, leaving the free memory (2,369 MB)
+  right at the 2.3 GB line. A process that exits gives everything back, and if memory runs out Linux stops the
+  biggest process, then the model's, not the agent (it also offers itself first: `oom_score_adj` 500). Laptop check:
+  parent 47-49 MB throughout, the process gone after the release; first query 2.4 s (start + load), then about 0.1 s.
+  Queries get the model's own search instruction.
 - Switch: on with `INSTINCT_MEANING_SEARCH=1` (off by default, so tests, local runs and agents without it never fetch
   the model); `BootOptions.embedder` for tests and scenarios. Needs `features.history` on.
 - `deploy/Dockerfile.agent`: the ONNX runtime's Mac and Windows builds are removed from the image. (pnpm 10 skips
@@ -820,7 +826,8 @@ vector removed, another model starts again, a storing failure keeps what was sto
 at once, another wording found by meaning where words alone find nothing, an exact number found by words, date
 ranges, `history_search` output, fallback to word search when the model fails (audited).
 `packages/server/test/embedder.test.ts`: loaded only when used, the query instruction, one text at a time, released
-when idle, not loaded without free memory, a failed load not retried at once, off at boot unless switched on.
+when idle, not loaded without free memory, a failed load not retried at once, a process that ended unexpectedly not
+restarted at once, off at boot unless switched on.
 `scenarios/meaning-search.mjs` (free): the owner's 20 Claude Code work sessions (285k words) as items, 1,227 pieces
 stored with the real 4-bit model (8 threads on the laptop: 0.73 s per piece, 15 minutes), the 25 questions asked as
 written and as keywords, graded by the earlier tests' grader (~/sunshine-memory/grade_scenario.py). Found (as asked /
@@ -834,7 +841,7 @@ untested (the model is multilingual). The 25 questions are the owner's work with
 (about 5 Nov) checks real conversations.
 
 **To remove.** Unset `INSTINCT_MEANING_SEARCH` (everything works as before), or revert the commit
-(`git log --grep "sunshine:meaning-search"`) or delete `meaning.ts`, `embedder.ts`, their tests and the scenario,
+(`git log --grep "sunshine:meaning-search"`) or delete `meaning.ts`, `embedder.ts`, `embed-worker.ts`, their tests and the scenario,
 the tagged blocks in `core-tools.ts`, `history.ts`, `items.ts`, `index.ts`, `boot.ts`, `Dockerfile.agent`, and the
 `@huggingface/transformers` dependency of `packages/server`.
 

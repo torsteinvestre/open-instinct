@@ -78,6 +78,24 @@ describe("local search model", () => {
     expect(s.stats().loads).toBe(0);
   });
 
+  it("when the model's process ends unexpectedly (out of memory), waits before starting another", async () => {
+    let loads = 0;
+    let alive = true;
+    const load = async (): Promise<Extractor> => {
+      loads++;
+      const run = (async () => ({ data: new Float32Array([1]) })) as Extractor;
+      run.dispose = async () => {};
+      run.alive = () => alive;
+      return run;
+    };
+    const e = createLocalEmbedder({ cacheDir: "/nowhere", load, availableBytes: () => 3 * GB });
+    await e.embed(["a"], "document");
+    alive = false; // the process was stopped from outside
+    await expect(e.embed(["b"], "document")).rejects.toThrow(/failed recently/);
+    expect(loads).toBe(1);
+    await e.close();
+  });
+
   it("a failed load (no network) is not retried at once", async () => {
     let tries = 0;
     const e = createLocalEmbedder({ cacheDir: "/nowhere", load: () => (tries++, Promise.reject(new Error("fetch failed"))), availableBytes: () => 3 * GB });

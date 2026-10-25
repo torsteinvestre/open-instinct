@@ -92,5 +92,19 @@ for (const q of questions) {
 times.sort((a, b) => a - b);
 console.log(`history_search with meaning: median ${times[times.length >> 1]} ms, slowest ${times.at(-1)} ms`);
 writeFileSync(OUT, JSON.stringify(results));
+// RANKS=<file>: the top 50 pieces of each search, each whole, to see where a missed answer sits (grade_ranks.py).
+if (process.env.RANKS) {
+  const ranks = {};
+  for (const q of questions) {
+    ranks[q.id] = {};
+    for (const kind of ["q", "kw"]) {
+      const query = kind === "q" ? q.q : q.keywords;
+      ranks[q.id][kind] = {};
+      for (const mode of ["both", "meaning", "words"]) ranks[q.id][kind][mode] = (await meaning.search(query, {}, mode)).slice(0, 50).map((p) => p.lines.join("\n"));
+    }
+  }
+  writeFileSync(process.env.RANKS, JSON.stringify(ranks));
+  console.log(`ranks written to ${process.env.RANKS}`);
+}
 console.log(`results written to ${OUT}`);
 await embedder.close();

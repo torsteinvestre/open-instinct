@@ -91,7 +91,7 @@ describe("intake", () => {
 
     // One journal line, so the owner's own conversation knows it happened today.
     const journal = memory.readJournal(new Date(T));
-    expect(journal).toContain("Remote control design meeting (heard by the band, until 10:53, with Sarah, Ian, Una): Second design meeting");
+    expect(journal).toContain("Remote control design meeting (heard by the band, 10:14-10:53 Europe/Oslo, with Sarah, Ian, Una): Second design meeting");
     expect(journal).toContain("(kept in full)");
     expect(journal.split("\n").filter((l) => l.startsWith("- "))).toHaveLength(1);
 
@@ -118,7 +118,7 @@ describe("intake", () => {
     expect(model.asked).toHaveLength(2);
     expect(model.asked[1]!.user).toMatch(/Answer with the JSON between <summary> and <\/summary>/);
     expect(items.get("es2004b")!.summary).toBeUndefined();
-    expect(memory.readJournal(new Date(T))).toContain("A conversation (heard by the band, until 10:53, with Sarah, Ian, Una) (kept in full)");
+    expect(memory.readJournal(new Date(T))).toContain("A conversation (heard by the band, 10:14-10:53 Europe/Oslo, with Sarah, Ian, Una) (kept in full)");
     expect(tasks).toHaveLength(0);
     expect(audits()[0]).toMatchObject({ intake: "summary unreadable" });
   });

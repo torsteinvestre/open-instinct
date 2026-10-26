@@ -137,8 +137,10 @@ export function createIntake(deps: IntakeDeps): Intake {
 
   const journal = (it: ArchiveItem, gist: string | undefined): void => {
     const what = it.title ?? it.summary?.title ?? "A conversation";
-    const until = it.endedAt ? `, until ${clock(it.endedAt)}` : "";
-    const text = `${what} (${from(it)}${until}${withWhom(it)})${gist ? `: ${clip(gist, JOURNAL_GIST_MAX)}` : ""} (kept in full)`;
+    // [sunshine:recordings] Start and end in the owner's time, the zone named: the journal's own stamp in front of the
+    // line is the machine's clock (UTC on Maritime), and "until 14:15" beside a "12:52" stamp read as a 1.5-hour meeting.
+    const span = `${clock(it.startedAt)}${it.endedAt ? `-${clock(it.endedAt)}` : ""} ${tz()}`;
+    const text = `${what} (${from(it)}, ${span}${withWhom(it)})${gist ? `: ${clip(gist, JOURNAL_GIST_MAX)}` : ""} (kept in full)`;
     deps.memory.appendJournal(text.replace(/\s+/g, " "), new Date(it.startedAt));
   };
 

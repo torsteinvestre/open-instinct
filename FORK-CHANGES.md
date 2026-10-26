@@ -880,6 +880,18 @@ outside the workspace refused, a two-voice print refused, "Speaker 1" not taken 
 (sample deleted); the AMI ES2004b meeting as an iPhone-style .m4a (17.6 MB, 39 min) kept 18 s after recording_add
 answered (96 ms): 235 lines, 57 named Maya, the others "Speaker 1, 2...", the file deleted, history_search finds it.
 
+**First real recording** (2026-10-26, Torstein's 23-min call with a friend about the project, iPhone on the table,
+transcribed by the service on the laptop, handed to his live agent with `scenarios/send-recording.mjs`, about 10 c):
+transcript right on every line by his reading (only a few backchannel "yeah"s missed); Sunshine titled it "Project
+status sync with Morten" (the friend's name taken from what he said; his voice stays "Speaker 1"), wrote 3 decisions,
+5 owner tasks and 6 open points each with where it was left, set no reminders (no times given) and sent one bundled
+question through ask_owner: put Thursday's company meeting at 14:00 and invite the team (named from its notes), how
+long, whose emails, and offered a RAG explainer; then NO_REPLY. Torstein: the "same server" decision was read right
+(the principle decided, the choice his task and open). Seen: one owner "task" was his explanation of the test
+itself (a meta case; watch in real use). Fixed: the journal line said "12:52 ... until 14:15" (the journal's stamp is
+the machine's UTC clock, the end was in Oslo time); it now gives both ends in the owner's time with the zone
+("13:52-14:15 Europe/Oslo").
+
 **Open.** Other people's names: only the owner's voice is recognised; connected people's prints (connect = consent)
 come with agent-to-agent. Voice messages to Sunshine (one voice, the owner's) go the same way as a meeting for now.
 The service needs a host (EU, pay per use) before live use.

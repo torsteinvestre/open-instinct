@@ -24,10 +24,19 @@ import type { Intake } from "./intake.js";
 const OWNER_PRINT_FILE = "voice/owner.json";
 /** The service refuses larger files (about 8 hours of phone-quality audio). */
 export const MAX_RECORDING_BYTES = 500 * 1024 * 1024;
-/** A job includes fetching, decoding and possibly starting a GPU from cold (a minute or two). */
+/** A job includes fetching and decoding the audio; a 1-hour recording takes about 6 minutes on the CPU service. */
 const JOB_TIMEOUT_MS = 20 * 60 * 1000;
-/** A failed call is tried again after these pauses (the GPU may be starting, the network may blink). */
+/** A failed call (an error answer, the network) is tried again after these pauses. */
 const RETRY_AFTER_MS = [30_000, 120_000];
+/**
+ * A service scaled to zero answers 503 at once while it starts (OVHcloud AI Deploy, measured 2026-10-26: "The
+ * resources needed to serve your request are being initialized", about 3 minutes from standby): asked again every
+ * WAKE_POLL_MS until WAKE_WAIT_MS has passed.
+ */
+const WAKE_POLL_MS = 30_000;
+const WAKE_WAIT_MS = 10 * 60 * 1000;
+
+class StartingError extends Error {}
 
 export interface TranscribeResult {
   status: "ok" | "no speech" | "unsupported language" | "error" | string;
@@ -53,6 +62,8 @@ export interface RecordingsDeps {
   now?: () => number;
   /** Tests: no pauses between tries. */
   retryAfterMs?: number[];
+  /** Tests: shorter waiting for a service that is starting. */
+  wake?: { pollMs: number; waitMs: number };
   /** Tests: each background job, to await it. */
   track?: (job: Promise<void>) => void;
 }
@@ -76,22 +87,31 @@ export function recordingsTools(deps: RecordingsDeps): RegisteredTool[] {
       body: JSON.stringify(job),
       signal: AbortSignal.timeout(JOB_TIMEOUT_MS),
     });
+    if (res.status === 503) throw new StartingError("transcription service starting (503)");
     if (!res.ok) throw new Error(`transcription service ${res.status}`);
     return (await res.json()) as TranscribeResult;
   };
 
+  /** One job: waits out a service that is starting, and tries other failures again after RETRY_AFTER_MS. */
   const withRetries = async (job: Record<string, unknown>): Promise<TranscribeResult> => {
     const pauses = deps.retryAfterMs ?? RETRY_AFTER_MS;
-    let last: unknown;
-    for (let i = 0; i <= pauses.length; i++) {
+    const wake = deps.wake ?? { pollMs: WAKE_POLL_MS, waitMs: WAKE_WAIT_MS };
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    // The real clock: how long it has waited (deps.now dates what is kept).
+    const started = Date.now();
+    let failures = 0;
+    for (;;) {
       try {
         return await callService(job);
       } catch (error) {
-        last = error;
-        if (i < pauses.length) await new Promise((r) => setTimeout(r, pauses[i]));
+        if (error instanceof StartingError && Date.now() - started < wake.waitMs) {
+          await sleep(wake.pollMs);
+          continue;
+        }
+        if (error instanceof StartingError || failures >= pauses.length) throw error;
+        await sleep(pauses[failures++]!);
       }
     }
-    throw last;
   };
 
   /** A file the owner sent, inside the workspace, not too large. */
@@ -197,23 +217,36 @@ export function recordingsTools(deps: RecordingsDeps): RegisteredTool[] {
       if (!path) return textResult("Give the path of their recording, or forget: true.");
       const file = fileOf(path);
       if (typeof file === "string") return textResult(file);
-      try {
-        const r = (await withRetries({ job: "enrol", audioBase64: readFileSync(file.path).toString("base64") })) as TranscribeResult & { vector?: string; model?: string };
-        deps.audit.append({ kind: "policy", principal: "owner", detail: { voicePrint: r.status, seconds: r.seconds } });
-        if (r.status === "ok" && r.vector) {
-          deps.state.writeJson(OWNER_PRINT_FILE, { vector: r.vector, ...(r.model ? { model: r.model } : {}), at: new Date(now()).toISOString() } satisfies OwnerPrint);
-          return textResult("Saved: their voice will be recognised in recordings from now on.");
-        }
-        if (r.status === "more than one voice") return textResult("More than one person talks in it; it needs to be just them.");
-        if (r.status === "too little speech") return textResult("Too little speech in it: 20-60 seconds of just them talking works.");
-        return textResult(`It did not work (${r.error ?? r.status}); they can try again.`);
-      } catch (error) {
-        return textResult(`The transcription service did not answer (${error instanceof Error ? error.message : String(error)}); they can try again later.`);
-      } finally {
-        remove(file.path);
-      }
+      // In the background too: a service scaled to zero takes minutes to start, which the owner should not wait out.
+      const job = learnVoice(file.path);
+      deps.track?.(job);
+      return textResult("Learning their voice now; you hear how it went in a minute or a few.");
     },
   });
+
+  /** The owner's voice print from their recording; the outcome reaches the agent as a note; the recording is deleted. */
+  const learnVoice = async (path: string): Promise<void> => {
+    let outcome: string;
+    try {
+      const r = (await withRetries({ job: "enrol", audioBase64: readFileSync(path).toString("base64") })) as TranscribeResult & { vector?: string; model?: string };
+      deps.audit.append({ kind: "policy", principal: "owner", detail: { voicePrint: r.status, seconds: r.seconds } });
+      if (r.status === "ok" && r.vector) {
+        deps.state.writeJson(OWNER_PRINT_FILE, { vector: r.vector, ...(r.model ? { model: r.model } : {}), at: new Date(now()).toISOString() } satisfies OwnerPrint);
+        outcome = `${owner}'s voice is learned: their lines in recordings will carry their name from now on.`;
+      } else if (r.status === "more than one voice") {
+        outcome = `Learning ${owner}'s voice did not work: more than one person talks in the recording; it needs to be just them.`;
+      } else if (r.status === "too little speech") {
+        outcome = `Learning ${owner}'s voice did not work: too little speech in it; 20-60 seconds of just them talking works.`;
+      } else {
+        outcome = `Learning ${owner}'s voice did not work (${r.error ?? r.status}); they can send another recording.`;
+      }
+    } catch (error) {
+      outcome = `Learning ${owner}'s voice did not work: the transcription service did not answer (${error instanceof Error ? error.message : String(error)}); they can send it again later.`;
+    } finally {
+      remove(path);
+    }
+    await deps.runTask({ id: `voice-${now()}`, name: "voice", prompt: `${outcome} Tell ${owner} in one short text if it matters to them; otherwise end with exactly NO_REPLY.` }).catch(() => undefined);
+  };
 
   return [recordingAdd, voiceMine];
 }

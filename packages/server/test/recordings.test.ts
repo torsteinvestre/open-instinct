@@ -42,6 +42,7 @@ function setup(answers: Array<TranscribeResult & { vector?: string } | number>) 
     fetchImpl,
     now: () => T,
     retryAfterMs: [0, 0],
+    wake: { pollMs: 5, waitMs: 200 },
     track: (job) => jobs.push(job),
   });
   const tool = (name: string) => tools.find((t) => t.spec.name === name)!;
@@ -84,7 +85,9 @@ describe("recordings", () => {
   it("sends the owner's voice print with each recording once it is learned", async () => {
     const s = setup([{ status: "ok", seconds: 40, vector: "VVVV" } as TranscribeResult & { vector: string }, OK]);
     const sample = s.file("me.m4a");
-    expect(s.text(await s.tool("voice_mine").spec.execute({ path: sample }, s.ctx))).toMatch(/^Saved/);
+    expect(s.text(await s.tool("voice_mine").spec.execute({ path: sample }, s.ctx))).toMatch(/^Learning their voice now/);
+    await Promise.all(s.jobs);
+    expect(s.notes[0]).toContain("Torstein's voice is learned");
     expect(existsSync(sample)).toBe(false);
     s.file("meeting.m4a");
     const reply = s.text(await s.tool("recording_add").spec.execute({ path: "inbound/meeting.m4a" }, s.ctx));
@@ -108,21 +111,21 @@ describe("recordings", () => {
     expect(existsSync(a) || existsSync(b)).toBe(false);
   });
 
-  it("tries a busy service again, and when it never answers says so and still deletes the audio", async () => {
-    const s = setup([503, OK]);
+  it("tries a failing service again, and when it keeps failing says so and still deletes the audio", async () => {
+    const s = setup([502, OK]);
     s.file("a.m4a");
     await s.tool("recording_add").spec.execute({ path: "inbound/a.m4a" }, s.ctx);
     await Promise.all(s.jobs);
     expect(s.received).toHaveLength(1);
 
-    const t = setup([503, 503, 503]);
+    const t = setup([502, 502, 502]);
     const p = t.file("b.m4a");
     await t.tool("recording_add").spec.execute({ path: p }, t.ctx);
     await Promise.all(t.jobs);
     expect(t.received).toEqual([]);
     expect(t.notes[0]).toContain("could not be transcribed");
     expect(existsSync(p)).toBe(false);
-    expect(t.audit.read({ kinds: ["error"] }).some((e) => JSON.stringify(e.detail).includes("transcription service 503"))).toBe(true);
+    expect(t.audit.read({ kinds: ["error"] }).some((e) => JSON.stringify(e.detail).includes("transcription service 502"))).toBe(true);
   });
 
   it("refuses files outside the workspace and refuses a print with two voices", async () => {
@@ -130,8 +133,29 @@ describe("recordings", () => {
     expect(s.text(await s.tool("recording_add").spec.execute({ path: "/etc/passwd" }, s.ctx))).toBe("That file is not in your workspace.");
     expect(s.text(await s.tool("recording_add").spec.execute({ path: "inbound/nothing.m4a" }, s.ctx))).toBe("That file is not there any more.");
     s.file("two.m4a");
-    expect(s.text(await s.tool("voice_mine").spec.execute({ path: "inbound/two.m4a" }, s.ctx))).toMatch(/^More than one person/);
+    await s.tool("voice_mine").spec.execute({ path: "inbound/two.m4a" }, s.ctx);
+    await Promise.all(s.jobs);
+    expect(s.notes[0]).toContain("more than one person talks");
     expect(s.state.exists("voice/owner.json")).toBe(false);
+  });
+
+  it("waits out a service that is starting from zero (503) instead of giving up", async () => {
+    const s = setup([503, 503, 503, 503, 503, OK]);
+    s.file("cold.m4a");
+    await s.tool("recording_add").spec.execute({ path: "inbound/cold.m4a" }, s.ctx);
+    await Promise.all(s.jobs);
+    expect(s.received).toHaveLength(1);
+    expect(s.sent).toHaveLength(6);
+  });
+
+  it("gives up on a service that stays 'starting' past the wait, says so and deletes the audio", async () => {
+    const s = setup(Array.from({ length: 500 }, () => 503));
+    const p = s.file("never.m4a");
+    await s.tool("recording_add").spec.execute({ path: p }, s.ctx);
+    await Promise.all(s.jobs);
+    expect(s.received).toEqual([]);
+    expect(s.notes[0]).toContain("starting (503)");
+    expect(existsSync(p)).toBe(false);
   });
 
   it("does not take a numbered voice for a person", () => {

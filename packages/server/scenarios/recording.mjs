@@ -43,7 +43,10 @@ mkdirSync(inbound, { recursive: true });
 const sample = join(inbound, basename(need("SAMPLE")));
 copyFileSync(need("SAMPLE"), sample);
 let t = Date.now();
-console.log("voice_mine:", text(await registry.get("voice_mine").spec.execute({ path: sample }, ctx)), `(${Date.now() - t} ms)`, "| sample deleted:", !existsSync(sample));
+console.log("voice_mine:", text(await registry.get("voice_mine").spec.execute({ path: sample }, ctx)), `(${Date.now() - t} ms)`);
+// It learns in the background: wait for the print (the outcome also goes to the agent as a note).
+for (let i = 0; i < 300 && !app.state.exists("voice/owner.json"); i++) await new Promise((r) => setTimeout(r, 1000));
+console.log(`voice learned after ${((Date.now() - t) / 1000).toFixed(0)} s:`, app.state.exists("voice/owner.json"), "| sample deleted:", !existsSync(sample));
 
 const meeting = join(inbound, basename(need("MEETING")));
 copyFileSync(need("MEETING"), meeting);

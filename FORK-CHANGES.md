@@ -865,7 +865,11 @@ the audio is deleted after transcription (as Bee does).
   Audit `policy` `recording` (status, seconds, language, voices, ms) and `error` `recording`.
 - `voice_mine` {path? | forget}: a short recording of just the owner (20-60 s) becomes their voice print in
   `/data/voice/owner.json` (refused if too little speech or a second voice); their lines in recordings are then theirs.
-  The sample is deleted; `forget: true` deletes the print.
+  In the background too, the outcome reaching the agent as a note. The sample is deleted; `forget: true` deletes the
+  print.
+- A service scaled to zero (OVHcloud AI Deploy, measured 2026-10-26) answers 503 at once while it starts, for about 3
+  minutes: a 503 is waited out (asked again every 30 s for up to 10 minutes); other failures are tried again after 30 s
+  and 2 min. Without this the first recording after a quiet spell failed.
 - The intake (`intake.ts`) words the source "recorded on their phone" with the same caveat as the band, plus that
   unknown voices show as "Speaker N"; `speakersOf` no longer takes "Speaker 2" for a person. `core-tools.ts` names the
   source in search results.

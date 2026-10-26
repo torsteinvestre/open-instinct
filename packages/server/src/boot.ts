@@ -51,6 +51,7 @@ import { researchWith, writerContextFor } from "./watcher-writer.js";
 import { DEFAULT_MEMORY_MODEL, MEMORY_GATE, MEMORY_REASONING, createMemoryPass } from "./memory-pass.js"; // [sunshine:memory]
 import { DEFAULT_INTAKE_MODEL, INTAKE_REASONING, createIntake, type Intake } from "./intake.js"; // [sunshine:intake]
 import { createLocalEmbedder } from "./embedder.js"; // [sunshine:meaning-search]
+import { recordingsTools } from "./recordings.js"; // [sunshine:recordings]
 import { ChatAwareOutbox, ConsoleOutbox, type ChatReplyBuffer } from "./console-outbox.js";
 import { fileTools, resolveInsideWorkspace } from "./file-tools.js";
 import { describeDataPart, promptExtraFor } from "./hooks.js";
@@ -229,6 +230,24 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
       ...(env.BRAVE_SEARCH_API_KEY ? { searchApiKey: env.BRAVE_SEARCH_API_KEY } : {}),
     }),
   );
+
+  // [sunshine:recordings] Recordings the owner sends: transcribed by the service, kept through the intake, the audio
+  // deleted. With TRANSCRIBE_URL and TRANSCRIBE_KEY; the intake and runtime are made further down.
+  if (items && env.TRANSCRIBE_URL?.trim() && env.TRANSCRIBE_KEY?.trim()) {
+    registry.registerMany(
+      recordingsTools({
+        state,
+        config,
+        audit,
+        intake: { receive: (item) => (intake ? intake.receive(item) : Promise.reject(new Error("the intake is not available"))) },
+        runTask: (task) => runtime.runSystemTask(task),
+        service: { url: env.TRANSCRIBE_URL.trim(), key: env.TRANSCRIBE_KEY.trim() },
+        workspace: state.path("workspace"),
+        ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
+      }),
+    );
+    log("recordings: on");
+  }
 
   if (env.CONTEXT_DEV_API_KEY) {
     registry.registerMany(

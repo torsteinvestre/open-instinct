@@ -27,6 +27,8 @@ const JOURNAL_GIST_MAX = 240;
 /** How each source reads in the journal and the hand-off, and what may be wrong in what it sends. */
 const SOURCES: Record<string, { words: string; caveat?: string }> = {
   band: { words: "heard by the band", caveat: "Speaker names come from voice recognition and the words from speech recognition; both can be wrong." },
+  // [sunshine:recordings] A recording the owner made on their phone and sent.
+  recording: { words: "recorded on their phone", caveat: "Speaker names come from voice recognition and the words from speech recognition; both can be wrong. Voices without a known print show as \"Speaker 1\", \"Speaker 2\"." },
 };
 
 export interface IntakeItem {
@@ -110,7 +112,8 @@ export function speakersOf(text: string, owner: string): string[] {
   const seen = new Set<string>();
   for (const m of text.matchAll(/^\[[\d:]{4,8}\]\s*([^:\n]{1,40}):/gm)) {
     const name = m[1]!.trim();
-    if (name && name !== owner && !/^unknown\b/i.test(name)) seen.add(name);
+    // [sunshine:recordings] "Speaker 2" is a voice without a name, not a person.
+    if (name && name !== owner && !/^unknown\b/i.test(name) && !/^speaker \d+$/i.test(name)) seen.add(name);
   }
   return [...seen];
 }

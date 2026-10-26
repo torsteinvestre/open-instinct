@@ -845,6 +845,48 @@ untested (the model is multilingual). The 25 questions are the owner's work with
 the tagged blocks in `core-tools.ts`, `history.ts`, `items.ts`, `index.ts`, `boot.ts`, `Dockerfile.agent`, and the
 `@huggingface/transformers` dependency of `packages/server`.
 
+### `[sunshine:recordings]`: a recording the owner sends becomes a conversation Sunshine knows
+
+**Why** (2026-10-26). V1 does not wait for hardware: the phone is the recorder (the app developer's idea, Torstein
+agreed), the band plugs in later. Files sent on iMessage already land in the agent's workspace (upstream's inbound
+hydration), and the app's chat can send them the same way, so the agent is the one door for recordings: no upload
+system in a backend, recordings and voice prints stay with each person's own agent, and testers can use it before the
+app exists. The transcription itself runs on a GPU service outside the agent (~/sunshine-audio `service/`: who spoke
+when, what was said, voices named from prints; it keeps nothing and holds no keys to agents). Decided with Torstein:
+the audio is deleted after transcription (as Bee does).
+
+**What the fork adds** (`packages/server/src/recordings.ts`, owner-only tools in the always-loaded memory group):
+- `recording_add` {path, title?, startedAt?}: for an audio file the owner sent. Returns at once ("Transcribing it
+  now..."); in the background the file goes to the service (base64, with the owner's voice print if learned; tried
+  again after 30 s and 2 min if the service is busy or starting), the transcript ("[mm:ss] Name: ..." lines; unknown
+  voices "Speaker N") into the intake as an item with source `recording` (kept, summarized once, journaled, handed to
+  the agent with the act-or-ask criteria), and the audio file is deleted whatever happens. No speech, an unsupported
+  language (Norwegian, for now) or a failure: nothing kept, a short note to the agent to tell the owner if it matters.
+  Audit `policy` `recording` (status, seconds, language, voices, ms) and `error` `recording`.
+- `voice_mine` {path? | forget}: a short recording of just the owner (20-60 s) becomes their voice print in
+  `/data/voice/owner.json` (refused if too little speech or a second voice); their lines in recordings are then theirs.
+  The sample is deleted; `forget: true` deletes the print.
+- The intake (`intake.ts`) words the source "recorded on their phone" with the same caveat as the band, plus that
+  unknown voices show as "Speaker N"; `speakersOf` no longer takes "Speaker 2" for a person. `core-tools.ts` names the
+  source in search results.
+- Settings: `TRANSCRIBE_URL` and `TRANSCRIBE_KEY` (secret); without both there are no tools. Needs the intake
+  (`features.history` on).
+
+**Tested** (free). `packages/server/test/recordings.test.ts` with a stand-in service: handed to the intake with times
+and people, audio deleted, the owner's print sent once learned and forgotten on request, no speech and Norwegian told
+and nothing kept, a busy service tried again, a service that never answers told and the audio still deleted, files
+outside the workspace refused, a two-voice print refused, "Speaker 1" not taken for a person.
+`scenarios/recording.mjs` (real server, real service on the laptop GPU, no model calls): Maya's voice learned in 4.2 s
+(sample deleted); the AMI ES2004b meeting as an iPhone-style .m4a (17.6 MB, 39 min) kept 18 s after recording_add
+answered (96 ms): 235 lines, 57 named Maya, the others "Speaker 1, 2...", the file deleted, history_search finds it.
+
+**Open.** Other people's names: only the owner's voice is recognised; connected people's prints (connect = consent)
+come with agent-to-agent. Voice messages to Sunshine (one voice, the owner's) go the same way as a meeting for now.
+The service needs a host (EU, pay per use) before live use.
+
+**To remove.** Unset `TRANSCRIBE_URL`/`TRANSCRIBE_KEY`, or revert the commit (`git log --grep "sunshine:recordings"`)
+or delete `recordings.ts`, its test and scenario, and the tagged lines in `boot.ts`, `intake.ts` and `core-tools.ts`.
+
 ### `[sunshine:tool-loader]`: email, desktop, file and people tools load when a request needs them
 
 **Problem** (measured 2026-10-16, a local boot with the live agent's settings, Anthropic's token

@@ -145,7 +145,7 @@ function dayBound(day: string | undefined, tz: string, end = false): number | un
 const SUMMARY_SHOWN_MAX = 3000;
 
 /** [sunshine:intake] How a source reads in a result: "heard by the band", else "from <source>". */
-const SOURCE_NAMES: Record<string, string> = { band: "heard by the band" };
+const SOURCE_NAMES: Record<string, string> = { band: "heard by the band", recording: "recorded on their phone" }; // [sunshine:recordings] recording
 
 /** [sunshine:meaning-search] The best pieces are shown up to about this many characters (as tested: the first 8,000). */
 const MEANING_RESULT_CHARS = 8000;

@@ -11,8 +11,8 @@
 // Usage (from packages/server, after `pnpm build`):
 //   BOOT=<dist/boot.js of the version> LABEL=before|after RUNS=3 CASES=nov3,group,... MAX_USD=2 OUT=<file.json> node scenarios/in-the-flow.mjs
 //   DRY=1   checks the checks on known answers (the live reply of 2026-10-27 and written ones); no model call
-import { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Type } from "@earendil-works/pi-ai";
@@ -186,8 +186,12 @@ function spent(dir) {
   return total;
 }
 
+// Each run's data folder is kept (in $HOME: WSL empties /tmp when it goes idle), so a run can be read afterwards.
+const RUNS_DIR = process.env.RUNS_DIR ?? join(homedir(), "sunshine-memory/in-the-flow-runs");
+mkdirSync(RUNS_DIR, { recursive: true });
+
 async function once(name) {
-  const dir = mkdtempSync(join(tmpdir(), `in-the-flow-${LABEL}-${name}-`));
+  const dir = mkdtempSync(join(RUNS_DIR, `${LABEL}-${name}-`));
   const state = new StateDir(dir);
   state.ensure();
   const config = defaultConfig();
@@ -218,7 +222,8 @@ async function once(name) {
     cost: result.costUsd + spent(dir),
   };
   await app.close();
-  return { case: name, ...r, ...CASES[name].check(r) };
+  writeFileSync(join(dir, "texts.json"), JSON.stringify(r.texts, null, 1));
+  return { case: name, dir, ...r, ...CASES[name].check(r) };
 }
 
 const results = [];

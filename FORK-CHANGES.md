@@ -721,6 +721,57 @@ for a birthday never mentioned it searched twice and said it could not find it, 
 or delete `history.ts`, its tools and the tagged blocks in `runtime.ts`, `types.ts`, `index.ts`,
 `boot.ts`, `memory-pass.ts`, `watcher-writer.ts` and the tests.
 
+### `[sunshine:in-the-flow]`: what is already known comes with everything new; look before asking
+
+**Why** (2026-10-27). Torstein's first voice note was answered with "What's the event on 3 Nov, and what time?" while
+the answer was in his email: nothing brought what Sunshine knows to the new item, and email was reachable only if the
+model thought to look (it loaded the apps, searched for calendar tools, never for email). Torstein: memory is always
+part of the flow, not something the agent has to remember to search; the agent is not lazy, but not eager either
+where it is not clearly his. Town feeds the relevant part of its memory into every session. Design and decisions:
+`~/sunshine-ops/DESIGN-memory-in-the-flow.md` (step 1).
+
+**What the fork adds**
+- `packages/server/src/recall.ts`: before the agent decides, code gathers what is already known about the item's
+  subjects (its title, the owner's tasks, what is unclear, what was left open): the closest pieces of the owner's
+  chats and kept items by meaning and words (`MeaningSearch.searchScored`, new in core, with each piece's closeness),
+  the item itself left out, one entry per item, best first, at most six, kept short. Pieces less close than
+  `RECALL_MIN_NEAR` (0.45) are dropped: measured with `scenarios/recall-calibrate.mjs` on the memory trial's archive,
+  the closest piece for 25 real questions was 0.41-0.73, for 20 everyday things it holds nothing about 0.25-0.49; at
+  0.45, 24 of 25 keep their match and 1 of 20 gets a weak one. Word search answers when the search model takes over
+  30 s.
+- `intake.ts`: the summary also lists `to_settle` (what a task needs that the record leaves out: which event, what
+  time, who), kept on the item as `toSettle` (not part of the searched summary lines); the hand-off shows it as "Still
+  unclear", brings "What you already know that may bear on it" (or says nothing kept bears on it; says nothing when
+  nothing was looked up), and says the order: what you know, then email, calendar and earlier conversations (check the
+  calendar before adding), then ask only what is left, in one text. Where doing ends is the owner's setting:
+  "prepare and offer" (default: small undoable things done and told in one line, bigger work prepared and offered
+  once), "ask first", "just do it"; heard tasks acted on only when clearly the owner's (band and recordings); other
+  people, money and speaking for the owner always ask first. The `proactivity` tool (owner only) sets the level in
+  words, in `/data/proactivity.json`.
+- `runtime.ts` (core): `runSystemTask({ load })` starts a task with tool groups loaded (a hand-off with `apps`: email
+  and calendar), after the run's cold-cache unload (which would drop them again), with what loading says in the prompt
+  ("ready now"). `boot.ts` passes `apps` when Composio (or a scenario's stand-in apps tools, `extraTools`) is there.
+
+**Tested** (free): `test/recall.test.ts` (closest first, weak ones and the item itself left out, one per item, word
+search when the model is slow), `test/intake.test.ts` (recall asked about the right subjects, "Still unclear", the
+known block or its absence, the three levels, heard-not-typed only for recordings, `load`), core `runtime.test.ts`
+(the group's tools in the first model call, the prompt saying so). All tests and smoke pass.
+Paid, `scenarios/in-the-flow.mjs` (Torstein OK'd up to $1; real summary step and agent, Sonnet 5.5; a stand-in inbox
+and calendar; a small kept memory; graders checked on 10 known answers incl. the live reply): new version 10/10
+(3 Nov 2/2: added from the email, nothing asked; group project 2/2: "from your 19 Oct kickoff, it's you, Ian and Scott,
+topic traversable wormholes ... What day next week is it due? I can draft a slide outline meanwhile"; someone else's
+task 2/2 left alone; a passing thought 2/2 nothing done; nowhere to find it 2/2 asked, with a reminder set); the live
+version 1/2 (3 Nov passed: the stand-in email tool is one obvious tool, unlike Composio's several steps, so this case
+does not tell the two apart; group project failed: a bare reminder, no topic). About $0.02 a run; $0.24 in all.
+Seen in both: a promotional email ("Elkjøp has 20% off chargers") linked to "buy a new charger" (Torstein to judge:
+help or clutter).
+
+**Open.** The same for the owner's own messages (only on strong matches; next). The live check: a voice note about
+something only in his real email, through Composio.
+
+**To remove.** Revert the commits (`git log --grep "sunshine:in-the-flow"`), or delete `recall.ts`, its test and the
+two scenarios, and the tagged lines in `intake.ts`, `boot.ts`, core `items.ts`, `meaning.ts` and `runtime.ts`.
+
 ### `[sunshine:intake]`: what reaches the owner from elsewhere is kept, summarized once and acted on
 
 **Why** (2026-10-24). Sunshine should know what its person knows without being told (NOTES "PRINCIPLE: the one AI

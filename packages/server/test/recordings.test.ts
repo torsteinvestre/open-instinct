@@ -70,7 +70,8 @@ describe("recordings", () => {
     const s = setup([OK]);
     const path = s.file("New Recording.m4a");
     const reply = s.text(await s.tool("recording_add").spec.execute({ path: "inbound/New Recording.m4a", title: "planning" }, s.ctx));
-    expect(reply).toMatch(/^Transcribing it now/);
+    expect(reply).toMatch(/^Started: it is being transcribed/);
+    expect(reply).not.toMatch(/speaker n|MB/i); // no internal labels or sizes for the agent to pass on
     expect(reply).toContain("voice_mine"); // their voice is not known yet
     await Promise.all(s.jobs);
     expect(s.received).toEqual([
@@ -85,7 +86,7 @@ describe("recordings", () => {
   it("sends the owner's voice print with each recording once it is learned", async () => {
     const s = setup([{ status: "ok", seconds: 40, vector: "VVVV" } as TranscribeResult & { vector: string }, OK]);
     const sample = s.file("me.m4a");
-    expect(s.text(await s.tool("voice_mine").spec.execute({ path: sample }, s.ctx))).toMatch(/^Learning their voice now/);
+    expect(s.text(await s.tool("voice_mine").spec.execute({ path: sample }, s.ctx))).toMatch(/^Started: their voice is being learned.*you tell them then/);
     await Promise.all(s.jobs);
     expect(s.notes[0]).toContain("Torstein's voice is learned");
     expect(existsSync(sample)).toBe(false);
@@ -154,7 +155,8 @@ describe("recordings", () => {
     await s.tool("recording_add").spec.execute({ path: p }, s.ctx);
     await Promise.all(s.jobs);
     expect(s.received).toEqual([]);
-    expect(s.notes[0]).toContain("starting (503)");
+    expect(s.notes[0]).toContain("did not start in time");
+    expect(s.notes[0]).not.toContain("503"); // the technical reason stays in the audit
     expect(existsSync(p)).toBe(false);
   });
 

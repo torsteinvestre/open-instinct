@@ -168,7 +168,9 @@ export function recordingsTools(deps: RecordingsDeps): RegisteredTool[] {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       deps.audit.append({ kind: "error", principal: "owner", detail: { recording: id, message: message.slice(0, 300) } });
-      await note(id, `The recording ${owner} sent could not be transcribed (${message.slice(0, 120)}), so nothing was kept; they still have it on their phone and can send it again.`);
+      // The technical reason stays in the audit; the note says what it means.
+      const why = error instanceof StartingError ? "the transcription service did not start in time" : "the transcription failed";
+      await note(id, `The recording ${owner} sent could not be transcribed (${why}), so nothing was kept; they still have it on their phone and can send it again.`);
     } finally {
       remove(path);
     }
@@ -179,7 +181,7 @@ export function recordingsTools(deps: RecordingsDeps): RegisteredTool[] {
     label: "Keep a recording",
     description:
       `When ${owner} sends an audio file (a recorded meeting or conversation, a voice memo): have it transcribed with who said what and kept with their conversations. ` +
-      "It runs in the background, usually a minute or two; you then get its summary to act on, as with any conversation from elsewhere. The audio itself is deleted afterwards.",
+      "It runs in the background, usually a few minutes; you then get its summary to act on, as with any conversation from elsewhere. The audio itself is deleted afterwards.",
     parameters: Type.Object({
       path: Type.String({ description: "The attachment's path, as shown in the message" }),
       title: Type.Optional(Type.String({ description: "What it is, if they said (e.g. \"weekly planning\")" })),
@@ -192,8 +194,10 @@ export function recordingsTools(deps: RecordingsDeps): RegisteredTool[] {
       const start = startedAt && !Number.isNaN(Date.parse(startedAt)) ? Date.parse(startedAt) : undefined;
       const job = transcribeAndKeep(file.path, file.bytes, start, title?.trim() || undefined);
       deps.track?.(job);
-      const voice = ownerPrint() ? "" : ` Their own voice is not known yet, so their lines show as "Speaker N": a short recording of just them talking (20-60 seconds) lets you recognise it (voice_mine).`;
-      return textResult(`Transcribing it now (${(file.bytes / 1e6).toFixed(1)} MB); the summary reaches you when it is done.${voice}`);
+      // [2026-10-27] Facts for the agent in what they mean for the owner, no internal labels or sizes: live, "Speaker N"
+      // and a hedged "I'll tell you if it doesn't work" were passed straight on to the owner.
+      const voice = ownerPrint() ? "" : ` You cannot yet tell ${owner}'s voice from the other voices in recordings; a short recording of just them talking (20-60 seconds) would let you (voice_mine).`;
+      return textResult(`Started: it is being transcribed in the background (usually a few minutes); its summary comes to you then, to act on as with any conversation from elsewhere.${voice}`);
     },
   });
 
@@ -201,7 +205,7 @@ export function recordingsTools(deps: RecordingsDeps): RegisteredTool[] {
     name: "voice_mine",
     label: "Recognise their voice",
     description:
-      `When ${owner} sends a short recording of just themselves talking so you recognise their voice in recordings (their lines are then theirs, not "Speaker N"), or asks you to forget their voice. ` +
+      `When ${owner} sends a short recording of just themselves talking so you can tell their voice apart from the other voices in recordings, or asks you to forget their voice. ` +
       "The voice print stays on this agent; the recording is deleted.",
     parameters: Type.Object({
       path: Type.Optional(Type.String({ description: "The attachment's path, as shown in the message" })),
@@ -220,7 +224,7 @@ export function recordingsTools(deps: RecordingsDeps): RegisteredTool[] {
       // In the background too: a service scaled to zero takes minutes to start, which the owner should not wait out.
       const job = learnVoice(file.path);
       deps.track?.(job);
-      return textResult("Learning their voice now; you hear how it went in a minute or a few.");
+      return textResult("Started: their voice is being learned in the background (usually 1-5 minutes); the outcome comes to you as a note, and you tell them then.");
     },
   });
 
@@ -232,7 +236,7 @@ export function recordingsTools(deps: RecordingsDeps): RegisteredTool[] {
       deps.audit.append({ kind: "policy", principal: "owner", detail: { voicePrint: r.status, seconds: r.seconds } });
       if (r.status === "ok" && r.vector) {
         deps.state.writeJson(OWNER_PRINT_FILE, { vector: r.vector, ...(r.model ? { model: r.model } : {}), at: new Date(now()).toISOString() } satisfies OwnerPrint);
-        outcome = `${owner}'s voice is learned: their lines in recordings will carry their name from now on.`;
+        outcome = `${owner}'s voice is learned: in recordings you can now tell them apart from the other voices, so what they say and take on is theirs.`;
       } else if (r.status === "more than one voice") {
         outcome = `Learning ${owner}'s voice did not work: more than one person talks in the recording; it needs to be just them.`;
       } else if (r.status === "too little speech") {
@@ -241,7 +245,8 @@ export function recordingsTools(deps: RecordingsDeps): RegisteredTool[] {
         outcome = `Learning ${owner}'s voice did not work (${r.error ?? r.status}); they can send another recording.`;
       }
     } catch (error) {
-      outcome = `Learning ${owner}'s voice did not work: the transcription service did not answer (${error instanceof Error ? error.message : String(error)}); they can send it again later.`;
+      deps.audit.append({ kind: "error", principal: "owner", detail: { voicePrint: "failed", message: (error instanceof Error ? error.message : String(error)).slice(0, 300) } });
+      outcome = `Learning ${owner}'s voice did not work: the transcription service did not answer; they can send it again later.`;
     } finally {
       remove(path);
     }

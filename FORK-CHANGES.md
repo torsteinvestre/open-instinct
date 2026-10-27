@@ -896,6 +896,17 @@ itself (a meta case; watch in real use). Fixed: the journal line said "12:52 ...
 the machine's UTC clock, the end was in Oslo time); it now gives both ends in the owner's time with the zone
 ("13:52-14:15 Europe/Oslo").
 
+**Wording** (2026-10-27). Live, learning Torstein's voice gave "I'll tell you if it doesn't work" and "your lines in
+recordings will show as you, not "Speaker N"": both echoed this change's own tool texts (a result that did not say the
+outcome would come back; the internal label in the description, the result and the note). The tool texts now state
+facts for the agent in what they mean for the owner, with no internal labels, sizes or error codes (those stay in the
+audit), and say that the outcome comes back as a note for the agent to tell; no replies are scripted.
+`scenarios/voice-wording.mjs` (real Sonnet 5.5, stand-in service; checks for a conditional promise, an internal label
+and machine talk, checked first on 7 known answers incl. the two real replies): before, a recording sent with the
+voice unknown got "Otherwise they show up as "Speaker 1""; after, "I can pick out your voice in future recordings",
+"I'm learning your voice now. I'll tell you when it's done", "I can now tell you apart from other voices in recordings
+you send me": 0 flags on all 3 ($0.078 for both runs; one run per case).
+
 **Open.** Other people's names: only the owner's voice is recognised; connected people's prints (connect = consent)
 come with agent-to-agent. Voice messages to Sunshine (one voice, the owner's) go the same way as a meeting for now.
 The service needs a host (EU, pay per use) before live use.

@@ -1,0 +1,243 @@
+// [sunshine:in-the-flow] Paid: step 1's before/after test (~/sunshine-ops/DESIGN-memory-in-the-flow.md). A recording
+// reaches the agent through the intake (the real summary step, the real agent, Sonnet 5.5) with a stand-in inbox and
+// calendar (the "apps" group) and a small kept memory; nothing reaches anyone (the outbox only records). Each run starts
+// from a fresh data folder. Cases:
+//   nov3       "add the event on 3 November" - the answer is only in an email      -> added from the email, not asked
+//   group      "a presentation with my group about our topic" - only in memory     -> topic and group used, prepared or offered, not asked
+//   others     someone else says they will book a venue                            -> not taken on as the owner's
+//   half       "maybe I should learn Spanish some day"                             -> nothing done
+//   nowhere    "send Kari the thing we talked about" - nowhere to find             -> asked
+//
+// Usage (from packages/server, after `pnpm build`):
+//   BOOT=<dist/boot.js of the version> LABEL=before|after RUNS=3 CASES=nov3,group,... MAX_USD=2 OUT=<file.json> node scenarios/in-the-flow.mjs
+//   DRY=1   checks the checks on known answers (the live reply of 2026-10-27 and written ones); no model call
+import { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { Type } from "@earendil-works/pi-ai";
+import { AuditLog, ItemArchive, MeaningSearch, StateDir, defaultConfig, defineTool, textResult } from "@open-instinct/core";
+
+const NOW = Date.parse("2026-10-28T12:00:00Z"); // Wed 28 Oct, 13:00 in Oslo
+const DAY = 24 * 60 * 60 * 1000;
+
+// ---- the cases: what was recorded, and what counts as handled well ----------------------------------------------
+const asksAbout = (t, re) => /\?/.test(t) && re.test(t);
+const CASES = {
+  nov3: {
+    text: [
+      "[00:02] Torstein: Okay, voice note for myself. Gym was good today, legs again.",
+      "[00:20] Torstein: Oh and put the event on the third of November in my calendar, I don't remember the time, it's in some email I think.",
+      "[00:41] Torstein: And I need to buy a new charger at some point.",
+    ].join("\n"),
+    check: (r) => {
+      const added = r.adds.some((a) => /2026-11-03/.test(a.start) && /startup|meetup|founder/i.test(a.title));
+      const asked = r.texts.some((t) => asksAbout(t, /\b(what|which)\b[^?]*\b(event|it)\b|\bwhat time\b/i));
+      return { pass: added && !asked, notes: [added ? "added from the email" : "not added", asked ? "asked what/when" : "did not ask"] };
+    },
+  },
+  group: {
+    text: [
+      "[00:03] Torstein: Note to self. We got assigned a PowerPoint about our topic, me and my group, it's due next week.",
+      "[00:15] Torstein: I should get started on that soon.",
+    ].join("\n"),
+    check: (r) => {
+      const all = r.texts.join("\n");
+      const resolved = /wormhole/i.test(all) || r.tools.some((t) => /write|pdf|doc|slide/i.test(t));
+      const askedKnown = r.texts.some((t) => asksAbout(t, /\b(what('s| is)? (the|your) topic|which topic|who('s| is) in (the|your) group|which group)\b/i));
+      const prepared = /\b(outline|draft|want me to|shall i|should i|i can|i'll start)\b/i.test(all) || r.tools.some((t) => /write|pdf|doc/i.test(t));
+      return { pass: resolved && !askedKnown && prepared, notes: [resolved ? "topic from memory" : "topic not used", askedKnown ? "asked what it knew" : "did not ask the known", prepared ? "prepared or offered" : "nothing prepared or offered"] };
+    },
+  },
+  others: {
+    text: [
+      "[00:05] Torstein: So the launch party, are we doing Friday?",
+      "[00:09] Speaker 1: Yes, Friday works. I'll book the venue tomorrow.",
+      "[00:14] Torstein: Great, thanks.",
+    ].join("\n"),
+    check: (r) => {
+      const tookIt = r.adds.some((a) => /book|venue/i.test(a.title)) || r.schedules.some((s) => /book (the )?venue/i.test(s) && !/check|follow|remind .*(they|speaker|morten)/i.test(s)) || r.texts.some((t) => /\byou(?:'ll| will| need to| should)?\s+book\b/i.test(t));
+      return { pass: !tookIt, notes: [tookIt ? "took the booking on as Torstein's" : "left the booking with the other person"] };
+    },
+  },
+  half: {
+    text: ["[00:04] Torstein: Hmm, maybe at some point I should learn Spanish. Not sure. Anyway."].join("\n"),
+    check: (r) => {
+      const acted = r.adds.length > 0 || r.schedules.length > 0 || r.tools.some((t) => /write|pdf|doc/i.test(t));
+      return { pass: !acted, notes: [acted ? "acted on a passing thought" : "did nothing"] };
+    },
+  },
+  nowhere: {
+    text: ["[00:03] Torstein: I need to send Kari the thing we talked about before Friday."].join("\n"),
+    check: (r) => {
+      const asked = r.texts.some((t) => asksAbout(t, /kari|thing|what/i));
+      const invented = r.texts.some((t) => /\b(i('ve| have)? sent|sent kari|done)\b/i.test(t));
+      return { pass: asked && !invented, notes: [asked ? "asked what it is" : "did not ask", invented ? "claimed it was done" : ""].filter(Boolean) };
+    },
+  },
+};
+
+if (process.env.DRY) {
+  const run = (o) => ({ texts: [], adds: [], schedules: [], tools: [], ...o });
+  const known = [
+    // Live, 2026-10-27 (the old hand-off): asked instead of looking.
+    ["nov3", run({ texts: ["J. Cole (Thu 12 Nov, 19:00) is already in your calendar. What's the event on 3 Nov, and what time? I'll add it once you tell me."] }), false],
+    ["nov3", run({ adds: [{ title: "Startup Norway founder meetup", start: "2026-11-03T18:00:00+01:00" }], texts: ["Added the Startup Norway founder meetup on Mon 3 Nov at 18:00 (from your email)."] }), true],
+    ["group", run({ texts: ["What's the topic of the presentation, and who's in your group?"] }), false],
+    ["group", run({ texts: ["Started an outline for the wormholes deck with Ian and Scott. Want me to build the slides?"] }), true],
+    ["others", run({ adds: [{ title: "Book the venue", start: "2026-10-29T09:00:00+01:00" }] }), false],
+    ["others", run({ texts: [] }), true],
+    ["half", run({ schedules: ["Learn Spanish"] }), false],
+    ["half", run({}), true],
+    ["nowhere", run({ texts: ["Done, I sent Kari the slides."] }), false],
+    ["nowhere", run({ texts: ["What's the thing you need to send Kari before Friday?"] }), true],
+  ];
+  let ok = 0;
+  for (const [c, r, want] of known) {
+    const got = CASES[c].check(r);
+    const right = got.pass === want;
+    ok += right;
+    console.log(`${right ? "ok   " : "WRONG"} ${c} ${got.pass ? "pass" : "fail"} (${got.notes.join("; ")})`);
+  }
+  console.log(`${ok}/${known.length} known answers checked right`);
+  process.exit(ok === known.length ? 0 : 1);
+}
+
+// ---- the stand-in inbox and calendar --------------------------------------------------------------------------------
+const INBOX = [
+  { from: "Startup Norway <events@startupnorway.no>", date: "Mon 20 Oct", subject: "You're registered: Founder Meetup, Mon 3 Nov 18:00", body: "Thanks for registering for the Startup Norway Founder Meetup on Monday 3 November, 18:00-21:00, Oslo Science Park, Gaustadalleen 21." },
+  { from: "Ticketmaster", date: "Fri 10 Oct", subject: "Your tickets: J. Cole, Unity Arena, Thu 12 Nov 19:00", body: "Two tickets for J. Cole: The Fall-Off Tour." },
+  { from: "SATS", date: "Tue 27 Oct", subject: "Your gym week", body: "You trained 3 times this week." },
+  { from: "Elkjop", date: "Sat 25 Oct", subject: "Weekend deals", body: "Chargers and cables 20% off." },
+];
+const EVENTS = [{ title: "J. Cole: The Fall-Off Tour", start: "2026-11-12T19:00:00+01:00", end: "2026-11-12T22:00:00+01:00" }];
+function appsTools(record) {
+  return [
+    defineTool({
+      name: "email_search",
+      label: "Search email",
+      description: "Search the owner's email (Gmail). Returns matching messages: from, date, subject, text.",
+      parameters: Type.Object({ query: Type.String() }),
+      meta: { capabilities: ["email.read"], group: "apps", describe: (a) => `email search: ${a.query}` },
+      execute: async ({ query }) => {
+        record.tools.push("email_search");
+        return textResult(INBOX.map((m) => `From: ${m.from}\nDate: ${m.date}\nSubject: ${m.subject}\n${m.body}`).join("\n\n") + `\n\n(${INBOX.length} messages for "${query}")`);
+      },
+    }),
+    defineTool({
+      name: "calendar_list",
+      label: "List calendar events",
+      description: "The owner's Google Calendar events between two dates.",
+      parameters: Type.Object({ from: Type.String({ description: "ISO date" }), to: Type.String({ description: "ISO date" }) }),
+      meta: { capabilities: ["calendar.read"], group: "apps", describe: () => "calendar list" },
+      execute: async () => {
+        record.tools.push("calendar_list");
+        return textResult(JSON.stringify([...EVENTS, ...record.adds]));
+      },
+    }),
+    defineTool({
+      name: "calendar_add",
+      label: "Add a calendar event",
+      description: "Add an event to the owner's own Google Calendar.",
+      parameters: Type.Object({ title: Type.String(), start: Type.String({ description: "ISO date-time with offset" }), end: Type.Optional(Type.String()), location: Type.Optional(Type.String()) }),
+      meta: { capabilities: ["calendar.write"], group: "apps", describe: (a) => `calendar add: ${a.title}` },
+      execute: async (args) => {
+        record.tools.push("calendar_add");
+        record.adds.push({ title: args.title, start: args.start });
+        return textResult(`Added "${args.title}" at ${args.start}.`);
+      },
+    }),
+  ];
+}
+
+// ---- the kept memory every run starts with --------------------------------------------------------------------------
+function seed(state, config) {
+  const items = new ItemArchive(state, { now: () => new Date(NOW - 9 * DAY) });
+  const kickoff = items.add({
+    id: "rec-group-kickoff", source: "recording", title: "Group project kickoff", startedAt: NOW - 9 * DAY, endedAt: NOW - 9 * DAY + 20 * 60_000, people: ["Ian", "Scott"],
+    text: ["[00:10] Ian: So our group is the three of us.", "[01:30] Scott: And the topic we were given is traversable wormholes.", "[02:05] Torstein: Fine, I'll do the slides, you two do the research."].join("\n"),
+  });
+  items.setSummary(kickoff.id, {
+    title: "Group project kickoff", summary: "Torstein, Ian and Scott started their group project; the assigned topic is traversable wormholes.",
+    decisions: ["Topic: traversable wormholes"], ownerTasks: ["Make the presentation slides on traversable wormholes"], othersTasks: ["Ian: research", "Scott: research"], open: [],
+  });
+  const gym = items.add({ id: "rec-gym", source: "recording", title: "Gym plan with Jonas", startedAt: NOW - 5 * DAY, people: ["Jonas"], text: "[00:05] Jonas: Legs on Tuesdays and Fridays then." });
+  items.setSummary(gym.id, { title: "Gym plan with Jonas", summary: "Torstein and Jonas set a gym plan: legs on Tuesdays and Fridays.", decisions: ["Legs on Tuesdays and Fridays"], ownerTasks: [], othersTasks: [], open: [] });
+  return items;
+}
+
+// ---- one run ----------------------------------------------------------------------------------------------------------
+const need = (n) => process.env[n]?.trim() || (() => { throw new Error(`${n} must be set`); })();
+const { boot } = await import(resolve(need("BOOT")));
+const { createLocalEmbedder } = await import(resolve(need("BOOT"), "../embedder.js"));
+const apiKey = need("ANTHROPIC_API_KEY");
+const LABEL = need("LABEL");
+const RUNS = Number(process.env.RUNS ?? 3);
+const MAX_USD = Number(process.env.MAX_USD ?? 2);
+const WANT = (process.env.CASES ?? Object.keys(CASES).join(",")).split(",").map((c) => c.trim());
+const SKILLS = fileURLToPath(new URL("../../../skills", import.meta.url));
+const embedder = createLocalEmbedder({ cacheDir: process.env.MODELS ?? join(homedir(), "sunshine-memory/node-embed/models"), threads: Number(process.env.THREADS ?? 8), log: () => {} });
+
+function spent(dir) {
+  let total = 0;
+  const sessions = join(dir, "sessions");
+  if (!existsSync(sessions)) return 0;
+  for (const f of readdirSync(sessions)) for (const m of readFileSync(join(sessions, f), "utf8").matchAll(/"cost":\{[^{}]*?"total":([0-9.eE-]+)/g)) total += Number(m[1]);
+  return total;
+}
+
+async function once(name) {
+  const dir = mkdtempSync(join(tmpdir(), `in-the-flow-${LABEL}-${name}-`));
+  const state = new StateDir(dir);
+  state.ensure();
+  const config = defaultConfig();
+  config.owner = { ...config.owner, name: "Torstein", timezone: "Europe/Oslo" };
+  const items = seed(state, config);
+  // The kept memory is stored for meaning search before the agent starts (as on a live agent after its backfill).
+  await new MeaningSearch({ state, embedder, config, items, audit: new AuditLog(state) }).sync();
+  const record = { tools: [], adds: [] };
+  const sent = [];
+  const env = {
+    PATH: process.env.PATH, HOME: process.env.HOME, INSTINCT_DATA_DIR: dir, INSTINCT_SKILLS_DIR: SKILLS,
+    INSTINCT_MODEL: "anthropic/claude-sonnet-5-5", ANTHROPIC_API_KEY: apiKey,
+    INSTINCT_OWNER_NAME: "Torstein", INSTINCT_OWNER_PHONE: "+4790000000", INSTINCT_OWNER_TIMEZONE: "Europe/Oslo", INSTINCT_AGENT_NAME: "Sunshine",
+    INKBOX_API_KEY: "dummy", INKBOX_AGENT_HANDLE: "sunshine-torstein-test", INKBOX_IDENTITY_ID: "00000000-0000-0000-0000-000000000000",
+    MEMORY_PASS_MODEL: "off",
+  };
+  const app = await boot(env, { embedder, extraTools: appsTools(record), outbox: { send: async (m) => void sent.push(m), typing: async () => {}, markRead: async () => {} }, logger: () => {} });
+  const result = await app.intake.receive({ id: `rec-${name}`, source: "recording", startedAt: NOW - 10 * 60_000, endedAt: NOW - 9 * 60_000, text: CASES[name].text });
+  const audit = new AuditLog(state).read({});
+  const calls = audit.filter((e) => e.kind === "tool_call").map((e) => e.detail);
+  const r = {
+    texts: sent.map((m) => m.text ?? "").filter(Boolean),
+    adds: record.adds,
+    schedules: calls.filter((c) => c.tool === "schedule_create").map((c) => String(c.summary ?? "")),
+    tools: [...new Set([...record.tools, ...calls.map((c) => c.tool)])],
+    reply: result.reply,
+    summary: result.summary,
+    cost: result.costUsd + spent(dir),
+  };
+  await app.close();
+  return { case: name, ...r, ...CASES[name].check(r) };
+}
+
+const results = [];
+let total = 0;
+for (const name of WANT) {
+  for (let i = 0; i < RUNS; i++) {
+    if (total >= MAX_USD) {
+      console.log(`stopped: $${total.toFixed(3)} spent (cap $${MAX_USD})`);
+      break;
+    }
+    const r = await once(name);
+    total += r.cost;
+    results.push(r);
+    console.log(`${LABEL} ${name} #${i + 1}: ${r.pass ? "PASS" : "FAIL"} (${r.notes.join("; ")}) $${r.cost.toFixed(3)} | tools ${r.tools.join(",") || "-"}`);
+    for (const t of r.texts) console.log(`    text: ${t.replace(/\s+/g, " ").slice(0, 300)}`);
+  }
+}
+console.log(`\n${LABEL}: ${results.filter((r) => r.pass).length}/${results.length} passed, $${total.toFixed(3)}`);
+for (const name of WANT) console.log(`  ${name}: ${results.filter((r) => r.case === name && r.pass).length}/${results.filter((r) => r.case === name).length}`);
+if (process.env.OUT) writeFileSync(process.env.OUT, JSON.stringify({ label: LABEL, total, results }, null, 1));
+await embedder.close?.();
+process.exit(0);

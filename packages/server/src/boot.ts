@@ -77,6 +77,8 @@ export interface BootOptions {
   payments?: PaymentsModule;
   /** [sunshine:meaning-search] Tests and scenarios: the search model to use (turns meaning search on). */
   embedder?: Embedder;
+  /** [sunshine:in-the-flow] Scenarios: stand-in tools (an inbox and a calendar in the "apps" group) added to the agent's. */
+  extraTools?: RegisteredTool[];
 }
 
 /** [sunshine:meaning-search] After boot, wait this long before storing what is not stored yet (the agent settles first). */
@@ -295,6 +297,7 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
   }) : undefined;
 
   registry.registerMany(fileTools(state.path("workspace"), { env }));
+  if (opts.extraTools?.length) registry.registerMany(opts.extraTools); // [sunshine:in-the-flow] scenarios
 
   // Web app deploys through Ample: with the deployer's credential, or with an
   // account this agent signs up for itself on the first deploy (AMPLE_SIGNUP=1),
@@ -618,7 +621,7 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
           // setting decides where doing ends, and email and calendar are loaded for looking things up before asking.
           ...(meaning ? { recall: createRecall({ meaning, config, audit }) } : {}),
           proactivity: () => readProactivity(state),
-          ...(apps ? { load: ["apps"] } : {}),
+          ...(apps || opts.extraTools?.some((t) => t.spec.meta.group === "apps") ? { load: ["apps"] } : {}),
         });
       })
     : undefined;

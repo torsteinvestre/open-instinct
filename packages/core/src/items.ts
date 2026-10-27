@@ -31,6 +31,11 @@ export interface ItemSummary {
   othersTasks: string[];
   /** Raised and left unsettled. */
   open: string[];
+  /**
+   * [sunshine:in-the-flow] What a task needs that the record leaves out or unsure (which event, what time, who exactly):
+   * for the agent to look up before asking. Not part of summaryLines, so it is not searched or shown as the summary.
+   */
+  toSettle?: string[];
 }
 
 export interface ArchiveItem {
@@ -107,6 +112,7 @@ function filterSummary(s: ItemSummary, keep: (line: string) => boolean): ItemSum
   const out: ItemSummary = { ...s, summary: s.summary.trim() && !keep(s.summary.trim()) ? "" : s.summary };
   const lists = out as unknown as Record<string, string[]>;
   for (const [key, label] of SUMMARY_LABELS) lists[key] = (s[key] as string[]).filter((v) => !v.trim() || keep(`${label}: ${v.trim()}`));
+  if (s.toSettle) out.toSettle = s.toSettle.filter((v) => !v.trim() || keep(`To settle: ${v.trim()}`)); // [sunshine:in-the-flow]
   return out;
 }
 

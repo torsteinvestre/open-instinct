@@ -50,7 +50,8 @@ import { networkTools } from "@open-instinct/network";
 import { DEFAULT_DECIDE_MODEL, DEFAULT_SCREEN_MODEL, DEFAULT_WRITE_MODEL, NEWS_PROMPT, WATCH_GATE, createWatcher, modelCall, resolveWatcherModel, stepModelSpec, type ModelCall, type Watcher } from "@open-instinct/watcher";
 import { researchWith, writerContextFor } from "./watcher-writer.js";
 import { DEFAULT_MEMORY_MODEL, MEMORY_GATE, MEMORY_REASONING, createMemoryPass } from "./memory-pass.js"; // [sunshine:memory]
-import { DEFAULT_INTAKE_MODEL, INTAKE_REASONING, createIntake, type Intake } from "./intake.js"; // [sunshine:intake]
+import { DEFAULT_INTAKE_MODEL, INTAKE_REASONING, createIntake, proactivityTool, readProactivity, type Intake } from "./intake.js"; // [sunshine:intake] [sunshine:in-the-flow] proactivity
+import { createRecall } from "./recall.js"; // [sunshine:in-the-flow]
 import { createLocalEmbedder } from "./embedder.js"; // [sunshine:meaning-search]
 import { MAX_SENT_RECORDING_BYTES, RECORDINGS_GATE, createRecordings, type Recordings } from "./recordings.js"; // [sunshine:recordings]
 import { ChatAwareOutbox, ConsoleOutbox, type ChatReplyBuffer } from "./console-outbox.js";
@@ -231,6 +232,9 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
       ...(env.BRAVE_SEARCH_API_KEY ? { searchApiKey: env.BRAVE_SEARCH_API_KEY } : {}),
     }),
   );
+
+  // [sunshine:in-the-flow] The owner tells Sunshine how much to do on its own with what reaches it from elsewhere.
+  if (items) registry.register(proactivityTool(state, config));
 
   // [sunshine:recordings] Recordings the owner sends: transcribed by the service, kept through the intake, the audio
   // deleted. With TRANSCRIBE_URL and TRANSCRIBE_KEY; the intake and runtime are made further down.
@@ -603,7 +607,19 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
         const apiKey = m ? apiKeyFor(m.provider, env) : undefined;
         const call = m && apiKey ? modelCall(m, { reasoning: INTAKE_REASONING, apiKey }) : undefined;
         log(`intake: ${call ? `summaries by ${spec}` : "items kept without summaries"}`);
-        return createIntake({ items, memory, config, audit, ...(call ? { call } : {}), runTask: (task) => runtime.runSystemTask(task) });
+        return createIntake({
+          items,
+          memory,
+          config,
+          audit,
+          ...(call ? { call } : {}),
+          runTask: (task) => runtime.runSystemTask(task),
+          // [sunshine:in-the-flow] What is already known comes with each hand-off (with meaning search), the owner's
+          // setting decides where doing ends, and email and calendar are loaded for looking things up before asking.
+          ...(meaning ? { recall: createRecall({ meaning, config, audit }) } : {}),
+          proactivity: () => readProactivity(state),
+          ...(apps ? { load: ["apps"] } : {}),
+        });
       })
     : undefined;
   // [sunshine:delivery-mirror] Every text goes out through the channel; the runtime copies the ones

@@ -2668,6 +2668,18 @@ describe("[sunshine:tool-loader] tools loaded when needed", () => {
     expect(audited(h, "toolsLoaded")).toEqual([["apps"]]);
   });
 
+  it("[sunshine:in-the-flow] starts a system task with the groups it will need, and says so in its prompt", async () => {
+    const { h, requests } = loaderHarness();
+    h.faux.setResponses([toolTurn("email_read", {}), textTurn("NO_REPLY")]);
+    await h.runtime.runSystemTask({ id: "intake-x", prompt: "Look it up before asking.", load: ["apps"] });
+    // The first model call already has the group's tools: no load_tools step, no hunting for them.
+    expect(h.calls.map((c) => c.tool)).toEqual(["email_read"]);
+    expect(announcements(requests[0]!)).toEqual([{ added: ["calendar_add", "email_read", "buy"], removed: [] }]);
+    const asked = JSON.stringify(requests[0]!.messages.filter((m) => m.role === "user"));
+    expect(asked).toContain("Look it up before asking.\\n\\nLoaded apps, ready now: calendar_add, email_read, buy.\\n\\n## Apps\\nUse the app tools.");
+    expect(audited(h, "toolsLoaded")).toEqual([["apps"]]);
+  });
+
   it("keeps a loaded group while the cache is warm and drops it once it has gone cold", async () => {
     let now = new Date();
     const { h, requests } = loaderHarness({ now: () => now });

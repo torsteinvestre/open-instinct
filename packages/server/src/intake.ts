@@ -12,9 +12,15 @@
  *
  * The journal line is how the owner's own conversation learns the item exists: today's and
  * yesterday's journal are in every owner prompt (MemoryStore.digest); older items are found by search.
+ *
+ * [sunshine:in-the-flow] The hand-off brings what is already known (recall.ts) and the email and calendar tools along,
+ * lists what is still unclear for the agent to look up, and says where doing ends and asking starts, by the owner's
+ * proactivity setting. His first voice note (2026-10-27) was answered with a question whose answer was in his email.
  */
-import { wrapUntrusted, type ArchiveItem, type AuditLog, type InstinctConfig, type ItemArchive, type ItemSummary, type MemoryStore } from "@open-instinct/core";
+import { Type } from "@earendil-works/pi-ai";
+import { defineTool, textResult, wrapUntrusted, type ArchiveItem, type AuditLog, type InstinctConfig, type ItemArchive, type ItemSummary, type MemoryStore, type RegisteredTool, type StateDir } from "@open-instinct/core";
 import type { ModelCall } from "@open-instinct/watcher";
+import type { Recall } from "./recall.js";
 
 /** The model for the summary (env INTAKE_MODEL; "off" keeps items without summarizing them). */
 export const DEFAULT_INTAKE_MODEL = "anthropic/claude-sonnet-5-5";
@@ -59,7 +65,48 @@ export interface IntakeDeps {
   /** Undefined: items are kept and journaled, not summarized or handed over (INTAKE_MODEL=off). */
   call?: ModelCall;
   /** The agent's turn on the summary: runtime.runSystemTask. */
-  runTask: (task: { id: string; name?: string; prompt: string }) => Promise<string>;
+  runTask: (task: { id: string; name?: string; prompt: string; load?: string[] }) => Promise<string>;
+  /** [sunshine:in-the-flow] What is already known about the item's subjects (needs meaning search). */
+  recall?: Recall;
+  /** [sunshine:in-the-flow] The owner's proactivity setting. */
+  proactivity?: () => Proactivity;
+  /** [sunshine:in-the-flow] Tool groups the hand-off starts with ("apps": email and calendar). */
+  load?: string[];
+}
+
+/**
+ * [sunshine:in-the-flow] How much the owner wants done for them on Sunshine's own initiative with what reaches it from
+ * elsewhere (decided with Torstein 2026-10-27; clutter, not only safety, sets the line, and real use tunes it). Going to
+ * other people, costing money and speaking for the owner always ask first, whatever the setting.
+ */
+export const PROACTIVITY_LEVELS = ["ask first", "prepare and offer", "just do it"] as const;
+export type Proactivity = (typeof PROACTIVITY_LEVELS)[number];
+export const DEFAULT_PROACTIVITY: Proactivity = "prepare and offer";
+const PROACTIVITY_FILE = "proactivity.json";
+
+export function readProactivity(state: StateDir): Proactivity {
+  const level = state.readJson<{ level?: string }>(PROACTIVITY_FILE, {}).level;
+  return (PROACTIVITY_LEVELS as readonly string[]).includes(level ?? "") ? (level as Proactivity) : DEFAULT_PROACTIVITY;
+}
+
+/** [sunshine:in-the-flow] The owner sets how much Sunshine does on its own, in words, until the app has a setting. */
+export function proactivityTool(state: StateDir, config: InstinctConfig): RegisteredTool {
+  const owner = config.owner.name;
+  return defineTool({
+    name: "proactivity",
+    label: "How much to do on your own",
+    description:
+      `When ${owner} tells you how much to do for them on your own with what reaches you from elsewhere (recordings, and later email and other tools): ` +
+      `"ask first" (ask before doing anything for them), "prepare and offer" (do small things that are easy to undo, prepare bigger work and offer it; the default), ` +
+      `"just do it" (do what is clearly theirs and tell them). Anything that goes to other people, costs money or speaks for ${owner} is asked first at every level. Without a level it says the current one.`,
+    parameters: Type.Object({ level: Type.Optional(Type.Union(PROACTIVITY_LEVELS.map((l) => Type.Literal(l)))) }),
+    meta: { capabilities: ["memory.write"], group: "memory", describe: (a) => `proactivity: ${String((a as { level?: unknown }).level ?? "read")}` },
+    execute: async ({ level }) => {
+      if (!level) return textResult(`Now: ${readProactivity(state)}.`);
+      state.writeJson(PROACTIVITY_FILE, { level, at: new Date().toISOString() });
+      return textResult(`Set: ${level}.`);
+    },
+  });
 }
 
 export interface Intake {
@@ -73,12 +120,14 @@ export function intakeSystem(owner: string, source: string): string {
     ...(caveat ? [`${caveat} Go by what the conversation as a whole makes clear.`] : []),
     "",
     "Answer with JSON between <summary> and </summary>:",
-    `{"title": "a few words naming it", "summary": "two or three sentences: what it was about and where it ended", "decisions": [], "owner_tasks": [], "others_tasks": [], "open": []}`,
+    `{"title": "a few words naming it", "summary": "two or three sentences: what it was about and where it ended", "decisions": [], "owner_tasks": [], "others_tasks": [], "open": [], "to_settle": []}`,
     `- decisions: what was agreed or settled, as the conversation left it. A point counts as settled when the group went with it, even if nobody said "decide".`,
     `- owner_tasks: what ${owner} took on, was asked to do, or offered, with any time or deadline that was said.`,
     `- others_tasks: "Name: what they took on".`,
     // Run 2 (2026-10-24): "whether to target a younger group" was kept without the answer given to it.
     "- open: raised and left unsettled, each with where it was left: the last view stated, and by whom.",
+    // [sunshine:in-the-flow] What the agent looks up before asking (2026-10-27: "the event on 3 Nov" was in the email).
+    `- to_settle: what ${owner}'s tasks need that the record leaves out or unsure (which event, what time, which people, which file), each as a short question an assistant could answer from ${owner}'s email, calendar or earlier conversations. Empty when the tasks are clear.`,
     "Each line short and complete on its own, in the plain words someone would later search for. Only what the record supports; empty lists are fine.",
   ].join("\n");
 }
@@ -101,6 +150,7 @@ export function parseSummary(text: string): ItemSummary | undefined {
       ownerTasks: list(j.owner_tasks),
       othersTasks: list(j.others_tasks),
       open: list(j.open),
+      ...(list(j.to_settle).length > 0 ? { toSettle: list(j.to_settle) } : {}), // [sunshine:in-the-flow]
     };
   } catch {
     return undefined;
@@ -163,8 +213,18 @@ export function createIntake(deps: IntakeDeps): Intake {
     return { costUsd: cost };
   }
 
-  /** What the agent gets: the summary as data, and how to act on it. */
-  function handOff(it: ArchiveItem, s: ItemSummary): string {
+  // [sunshine:in-the-flow] Where doing ends and offering or asking starts, by the owner's setting.
+  const doing: Record<Proactivity, string> = {
+    "prepare and offer": `Do what is clearly ${owner}'s and easy to undo (their own calendar, a reminder) and tell them in one line what you did. For bigger work for them (a document, a deck, research), prepare the cheap part (what you know, an outline) and offer once to do the rest.`,
+    "ask first": `${owner} wants to be asked before you do anything for them: gather what you know and can find, then ask in one text, saying what you would do.`,
+    "just do it": `Do what is clearly ${owner}'s (their own calendar, reminders, documents, decks, research) and tell them in one line what you did; offer first only a big piece of work they may not want.`,
+  };
+
+  /**
+   * What the agent gets: the summary and what is already known, as data, and how to act on them. `known`: what recall
+   * found; null when it found nothing; undefined when nothing was looked up (no meaning search, or it failed).
+   */
+  function handOff(it: ArchiveItem, s: ItemSummary, known: string | null | undefined): string {
     const what = it.title ?? s.title ?? "a conversation";
     const caveat = SOURCES[it.source]?.caveat;
     const body = [
@@ -173,16 +233,39 @@ export function createIntake(deps: IntakeDeps): Intake {
       ...bullets(`${owner}'s tasks`, s.ownerTasks),
       ...bullets("Others' tasks", s.othersTasks),
       ...bullets("Open", s.open),
+      ...bullets("Still unclear", s.toSettle ?? []), // [sunshine:in-the-flow]
     ].join("\n");
     return [
       `${owner}'s conversation "${what}" (${from(it)}, ${when(it)}${withWhom(it)}) is now kept in full; history_search finds what was said and by whom.${caveat ? ` ${caveat}` : ""}`,
       "",
       wrapUntrusted(body, "summary of the recording"),
       "",
-      `Handle it as a great personal assistant would. Do what is clearly ${owner}'s and easy to undo, such as a reminder for a task of theirs, without asking. Ask about what is unclear or would matter if it were wrong, all questions in one text. Anything that goes to other people, costs money or speaks for ${owner}: ask first.`,
+      // [sunshine:in-the-flow] What is already known comes with it, so it is part of the decision, not a search to remember.
+      ...(known
+        ? ["What you already know that may bear on it (earlier conversations and kept items, best first; dated, so things may have changed since):", wrapUntrusted(known, "what you already know"), ""]
+        : known === null
+          ? ["Nothing you have kept seems to bear on it.", ""]
+          : []),
+      "Handle it as a great personal assistant would:",
+      `- First settle what you can yourself: what you already know, then ${owner}'s email, calendar and earlier conversations for what is still missing or may have changed (check the calendar before adding to it). Ask ${owner} only what is still unclear after that, all in one text.`,
+      `- ${doing[deps.proactivity?.() ?? DEFAULT_PROACTIVITY]}`,
+      ...(caveat ? [`- Heard is not typed: a task in a recording may be someone else's, a passing thought or misheard; act on it only when it is clearly ${owner}'s.`] : []),
+      `- Anything that goes to other people, costs money or speaks for ${owner}: ask first.`,
       `The summary is already kept with the conversation and noted in today's journal; your memory notes are for lasting facts about ${owner} and their people.`,
-      `Text ${owner} only when something needs them; otherwise end with exactly NO_REPLY.`,
+      `Text ${owner} when there is something to tell or ask; otherwise end with exactly NO_REPLY.`,
     ].join("\n");
+  }
+
+  /** [sunshine:in-the-flow] What is known about what the item is about (null: nothing); never stops the hand-off. */
+  async function knownAbout(it: ArchiveItem, s: ItemSummary): Promise<string | null | undefined> {
+    if (!deps.recall) return undefined;
+    const queries = [it.title ?? s.title ?? "", ...s.ownerTasks, ...(s.toSettle ?? []), ...s.open];
+    try {
+      return (await deps.recall(queries, { exclude: it.id })) ?? null;
+    } catch (err) {
+      deps.audit.append({ kind: "error", detail: { recall: "failed", id: it.id, message: String(err instanceof Error ? err.message : err).slice(0, 300) } });
+      return undefined;
+    }
   }
 
   return {
@@ -206,7 +289,9 @@ export function createIntake(deps: IntakeDeps): Intake {
         deps.items.setSummary(it.id, summary);
         const kept = deps.items.get(it.id) ?? { ...it, summary };
         journal(kept, summary.summary);
-        const reply = await deps.runTask({ id: `intake-${it.id}`, name: kept.title ?? summary.title ?? "conversation", prompt: handOff(kept, kept.summary ?? summary) });
+        const s = kept.summary ?? summary;
+        const known = await knownAbout(kept, s); // [sunshine:in-the-flow]
+        const reply = await deps.runTask({ id: `intake-${it.id}`, name: kept.title ?? summary.title ?? "conversation", prompt: handOff(kept, s, known), ...(deps.load?.length ? { load: deps.load } : {}) });
         record(kept, "handed over", { costUsd: cost, ownerTasks: summary.ownerTasks.length, decisions: summary.decisions.length });
         return { outcome: "handed over", summary, costUsd: cost, reply };
       } catch (err) {

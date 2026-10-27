@@ -341,6 +341,14 @@ export class MeaningSearch {
    * the query cannot be turned into a vector.
    */
   async search(query: string, range: HistoryRange = {}, mode: SearchMode = "both"): Promise<Piece[]> {
+    return (await this.searchScored(query, range, mode)).map((h) => h.piece);
+  }
+
+  /**
+   * [sunshine:in-the-flow] As `search`, with each piece's merged score and how close its meaning is to the query
+   * (cosine, 0-1; absent in word mode or for a piece not stored yet), so a caller can leave out weak matches.
+   */
+  async searchScored(query: string, range: HistoryRange = {}, mode: SearchMode = "both"): Promise<Array<{ piece: Piece; score: number; near?: number }>> {
     const inRange = (p: Piece) => (range.since === undefined || p.ts > range.since) && (range.until === undefined || p.ts <= range.until);
     const pieces = this.pieces().filter(inRange);
     if (pieces.length === 0 || !query.trim()) return [];
@@ -373,6 +381,9 @@ export class MeaningSearch {
     const bestWords = wordy[0]?.[1] ?? 1;
     for (const [p, s] of near) score.set(p, MEANING_WEIGHT * s);
     for (const [p, s] of wordy) score.set(p, (score.get(p) ?? 0) + (1 - MEANING_WEIGHT) * (s / bestWords) * bestNear);
-    return [...score.entries()].sort((a, b) => b[1] - a[1]).map(([p]) => p);
+    const closeness = new Map(near);
+    return [...score.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([piece, s]) => ({ piece, score: s, ...(closeness.has(piece) ? { near: closeness.get(piece)! } : {}) }));
   }
 }

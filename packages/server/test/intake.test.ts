@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { AuditLog, ItemArchive, MemoryStore, StateDir, defaultConfig } from "@open-instinct/core";
 import type { ModelCall } from "@open-instinct/watcher";
-import { createIntake, parseSummary, speakersOf } from "../src/intake.js";
+import { createIntake, parseSummary, proactivityTool, readProactivity, speakersOf, type IntakeDeps } from "../src/intake.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -46,7 +46,7 @@ function fakeModel(replies: Array<string | Error>): ModelCall & { asked: Array<{
   return call;
 }
 
-function setup(call?: ModelCall) {
+function setup(call?: ModelCall, extra: Partial<Pick<IntakeDeps, "recall" | "proactivity" | "load">> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "intake-"));
   dirs.push(dir);
   const state = new StateDir(dir);
@@ -57,10 +57,10 @@ function setup(call?: ModelCall) {
   memory.replaceDurable("## About\n- Maya is the marketing expert on a team designing a TV remote.\n");
   const items = new ItemArchive(state, { now: () => new Date(T + 60 * MIN) });
   const audit = new AuditLog(state);
-  const tasks: Array<{ id: string; name?: string; prompt: string }> = [];
-  const intake = createIntake({ items, memory, config, audit, ...(call ? { call } : {}), runTask: async (t) => (tasks.push(t), "NO_REPLY") });
+  const tasks: Array<{ id: string; name?: string; prompt: string; load?: string[] }> = [];
+  const intake = createIntake({ items, memory, config, audit, ...(call ? { call } : {}), runTask: async (t) => (tasks.push(t), "NO_REPLY"), ...extra });
   const audits = () => audit.read().map((e) => e.detail).filter((d) => d && "intake" in d) as Array<Record<string, unknown>>;
-  return { state, memory, items, intake, tasks, audits };
+  return { state, config, memory, items, intake, tasks, audits };
 }
 
 const meeting = { id: "es2004b", source: "band", startedAt: T, endedAt: T + 39 * MIN, text: MEETING };
@@ -104,9 +104,13 @@ describe("intake", () => {
     expect(prompt).toContain("Maya's tasks:\n- Research what consumers think of instruction manuals before the next meeting");
     expect(prompt).toContain("Decided:\n- Target buyer: young, business-class people, mid-range price");
     expect(prompt).toContain("Do what is clearly Maya's and easy to undo");
-    expect(prompt).toContain("all questions in one text");
+    expect(prompt).toContain("Ask Maya only what is still unclear after that, all in one text.");
     expect(prompt).toMatch(/otherwise end with exactly NO_REPLY\.$/);
     expect(prompt).not.toContain("Instruction manuals, I'd say");
+    // [sunshine:in-the-flow] Without meaning search nothing was looked up, and the prompt does not pretend it was.
+    expect(prompt).not.toContain("already know that may bear");
+    expect(prompt).not.toContain("Nothing you have kept");
+    expect(tasks[0]!.load).toBeUndefined();
 
     expect(audits()).toEqual([expect.objectContaining({ intake: "handed over", id: "es2004b", source: "band", costUsd: 0.03, ownerTasks: 1, decisions: 2 })]);
   });
@@ -139,8 +143,65 @@ describe("intake", () => {
     expect(audits()[0]).toMatchObject({ intake: "failed", error: "overloaded" });
   });
 
+  it("[sunshine:in-the-flow] brings what is already known and what is still unclear, with email and calendar loaded", async () => {
+    // The first voice note (2026-10-27): "the event on 3 Nov" was asked about while it was in his email.
+    const model = fakeModel([answer({ ...SUMMARY_JSON, to_settle: ["Which event is on 3 Nov, and at what time"] })]);
+    const asked: Array<{ queries: string[]; exclude?: string }> = [];
+    const recall = async (queries: string[], opts?: { exclude?: string }) => {
+      asked.push({ queries, ...(opts?.exclude ? { exclude: opts.exclude } : {}) });
+      return "[Thu 22 Oct 2026] Brand week planning (recorded on their phone)\n  Owner's tasks: Book the venue for the 3 Nov launch";
+    };
+    const { intake, tasks, items } = setup(model, { recall, load: ["apps"] });
+    await intake.receive(meeting);
+
+    // Asked about the title, the owner's tasks, what is unclear and what was left open; the item itself left out.
+    expect(asked).toEqual([{ queries: ["Remote control design meeting", SUMMARY_JSON.owner_tasks[0], "Which event is on 3 Nov, and at what time", "Repetitive strain injury"], exclude: "es2004b" }]);
+    expect(model.asked[0]!.system).toContain("to_settle: what Maya's tasks need that the record leaves out or unsure");
+    expect(items.get("es2004b")!.summary!.toSettle).toEqual(["Which event is on 3 Nov, and at what time"]);
+
+    const prompt = tasks[0]!.prompt;
+    expect(prompt).toContain("Still unclear:\n- Which event is on 3 Nov, and at what time");
+    expect(prompt).toContain('What you already know that may bear on it (earlier conversations and kept items, best first; dated, so things may have changed since):\n<untrusted source="what you already know">');
+    expect(prompt).toContain("Owner's tasks: Book the venue for the 3 Nov launch");
+    expect(prompt).toContain("First settle what you can yourself: what you already know, then Maya's email, calendar and earlier conversations");
+    expect(prompt).toContain("Heard is not typed"); // a band recording
+    expect(tasks[0]!.load).toEqual(["apps"]);
+  });
+
+  it("[sunshine:in-the-flow] says so when nothing kept bears on it, and the owner's setting decides where doing ends", async () => {
+    const levels = ["ask first", "prepare and offer", "just do it"] as const;
+    const prompts: string[] = [];
+    for (const level of levels) {
+      const { intake, tasks } = setup(fakeModel([answer(SUMMARY_JSON)]), { recall: async () => undefined, proactivity: () => level });
+      await intake.receive({ ...meeting, source: "claude-code" });
+      prompts.push(tasks[0]!.prompt);
+    }
+    for (const p of prompts) {
+      expect(p).toContain("Nothing you have kept seems to bear on it.");
+      expect(p).toContain("Anything that goes to other people, costs money or speaks for Maya: ask first.");
+      expect(p).not.toContain("Heard is not typed"); // typed work, not a recording
+    }
+    expect(prompts[0]).toContain("Maya wants to be asked before you do anything for them");
+    expect(prompts[1]).toContain("prepare the cheap part (what you know, an outline) and offer once to do the rest");
+    expect(prompts[2]).toContain("offer first only a big piece of work they may not want");
+  });
+
+  it("[sunshine:in-the-flow] the owner sets how much is done on its own; the default is to prepare and offer", async () => {
+    const { state, config } = setup();
+    expect(readProactivity(state)).toBe("prepare and offer");
+    const tool = proactivityTool(state, config);
+    const text = (r: unknown) => (r as { content: Array<{ text?: string }> }).content.map((c) => c.text ?? "").join("");
+    const ctx = {} as never;
+    expect(text(await tool.spec.execute({ level: "just do it" }, ctx))).toBe("Set: just do it.");
+    expect(readProactivity(state)).toBe("just do it");
+    expect(text(await tool.spec.execute({}, ctx))).toBe("Now: just do it.");
+    state.writeJson("proactivity.json", { level: "whatever" });
+    expect(readProactivity(state)).toBe("prepare and offer");
+  });
+
   it("reads the summary leniently and finds the named speakers", () => {
     expect(parseSummary(answer({ summary: " Short. ", decisions: ["a", 3, " ", "b"], owner_tasks: "none" }))).toEqual({ summary: "Short.", decisions: ["a", "b"], ownerTasks: [], othersTasks: [], open: [] });
+    expect(parseSummary(answer({ summary: "S.", to_settle: ["When is it?", 4] }))!.toSettle).toEqual(["When is it?"]); // [sunshine:in-the-flow]
     expect(parseSummary(answer({ title: "x" }))).toBeUndefined();
     expect(parseSummary("no tags")).toBeUndefined();
     expect(speakersOf(MEETING, "Maya")).toEqual(["Sarah", "Ian", "Una"]);

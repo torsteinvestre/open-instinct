@@ -278,6 +278,8 @@ export class Conversation {
   readonly loadedGroups = new Set<LoadableGroup>();
   /** [sunshine:tool-loader] Set by a load during a run: the next model call gets the new tool list. */
   toolsChanged = false;
+  /** [sunshine:in-the-flow] Loads the groups the next run needs from its start; returns what loading says. */
+  loadBeforeRun: (() => string) | undefined;
   /** [sunshine:delivery-mirror] Copies that arrived while a run was going; added when it ends. */
   private pendingNotes: AgentMessage[] = [];
   private readonly sessionFile: string;
@@ -326,6 +328,11 @@ export class Conversation {
       this.agent.state.messages = this.stableCache ? foldInSteps(kept, this.now()) : trimContext(kept, this.now());
       this.pruneIfPaidAnyway(kept); // [sunshine:prune]
       this.unloadIfPaidAnyway(kept); // [sunshine:tool-loader]
+      // [sunshine:in-the-flow] Groups this run needs from its start: loaded after the unload above (which would drop
+      // them again on a cold cache), what loading says going with the prompt.
+      const preloaded = this.loadBeforeRun?.() ?? "";
+      this.loadBeforeRun = undefined;
+      if (preloaded) text = `${text}\n\n${preloaded}`;
       const before = this.agent.state.messages.length;
       await this.agent.prompt(this.stamped(text), images);
       await this.agent.waitForIdle();
@@ -488,7 +495,7 @@ export class AgentRuntime {
   }
 
   /** [sunshine:tool-loader] Adds groups to a conversation; the next model call gets their tools (see createConversation). */
-  private loadToolGroups(conv: Conversation, requested: string[]): string {
+  private loadToolGroups(conv: Conversation, requested: string[], before = false): string {
     const { registry, policy, audit, toolLoader } = this.deps;
     const known = [...new Set(requested)].filter((g): g is LoadableGroup => g in LOADABLE_GROUPS);
     const toolsOf = (g: LoadableGroup) =>
@@ -497,7 +504,7 @@ export class AgentRuntime {
     const lines: string[] = [];
     for (const g of added) {
       conv.loadedGroups.add(g);
-      lines.push(`Loaded ${g}, ready from your next step: ${toolsOf(g).join(", ")}.`);
+      lines.push(`Loaded ${g}, ready ${before ? "now" : "from your next step"}: ${toolsOf(g).join(", ")}.`); // [sunshine:in-the-flow] before: loaded ahead of the task
       const guidance = toolLoader?.guidance?.[g]?.trim();
       if (guidance) lines.push(guidance);
     }
@@ -938,11 +945,15 @@ export class AgentRuntime {
    * scheduled job, the owner did not write the prompt, so ownerTurn stays false and
    * approval_settle is refused inside it.
    */
-  async runSystemTask(task: { id: string; name?: string; prompt: string; quiet?: boolean }): Promise<string> {
+  async runSystemTask(task: { id: string; name?: string; prompt: string; quiet?: boolean; load?: string[] }): Promise<string> {
     const principal = this.ownerPrincipal();
     const key = `system:${task.id}`;
     const conv = this.conversation(key, principal);
     this.deps.audit.append({ kind: "schedule", conversationKey: key, principal: principal.id, detail: { systemTask: task.id, name: task.name, quiet: task.quiet === true } });
+    // [sunshine:in-the-flow] A task that will need some groups (a hand-off looks things up in email and calendar
+    // before asking) starts with them loaded, and with what loading them says, instead of finding them first.
+    const load = task.load;
+    if (load?.length && this.loadsTools(conv)) conv.loadBeforeRun = () => this.loadToolGroups(conv, load, true);
     let text = "";
     try {
       text = await conv.run(task.prompt);

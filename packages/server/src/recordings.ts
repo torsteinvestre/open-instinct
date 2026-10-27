@@ -55,10 +55,12 @@ const RETRY_AFTER_MS = [30_000, 120_000];
 /**
  * A service scaled to zero answers 503 at once while it starts (OVHcloud AI Deploy, measured 2026-10-26: "The
  * resources needed to serve your request are being initialized", about 3 minutes from standby): woken with a tiny
- * request, asked again every WAKE_POLL_MS until WAKE_WAIT_MS has passed (see `ready`).
+ * request, asked again every WAKE_POLL_MS until WAKE_WAIT_MS has passed (see `ready`). The wait is long because a
+ * start can sit in OVH's queue for a free machine (2026-10-27: ranked 105 for 12 cores, the first in line waiting 50
+ * minutes) and the queue costs nothing (billed only once a machine is assigned); a recording is not urgent.
  */
 const WAKE_POLL_MS = 30_000;
-const WAKE_WAIT_MS = 10 * 60 * 1000;
+const WAKE_WAIT_MS = 2 * 60 * 60 * 1000;
 /** The schedule that keeps this agent awake while a job is out runs this gate (boot.ts), in code only. */
 export const RECORDINGS_GATE = "recordings";
 /**

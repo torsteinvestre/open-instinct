@@ -869,7 +869,9 @@ the audio is deleted after transcription (as Bee does).
   print.
 - A service scaled to zero (OVHcloud AI Deploy, measured 2026-10-26) answers 503 at once while it starts, for about 3
   minutes, and a large first request got 502 without waking it (live, 2026-10-27): a tiny `POST /ping` wakes it and is
-  asked again every 30 s for up to 10 minutes before any audio goes; other failures are tried again after 30 s and 2 min.
+  asked again every 30 s before any audio goes, for up to 2 hours (a start can wait in OVH's queue for a free machine:
+  ranked 105, the first in line 50 minutes, 2026-10-27; the queue is not billed); other failures are tried again after
+  30 s and 2 min.
 - Long recordings (2026-10-27, Torstein: "it has to work for longer recordings"). Four limits, each handled:
   (1) the service: OVH scaled the app to zero in the middle of a job, because only new requests count as use; a job is
   now created (`POST /jobs`), its audio sent as it is (`PUT /jobs/<id>/audio`, streamed from the file with

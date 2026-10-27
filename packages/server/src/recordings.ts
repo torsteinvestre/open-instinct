@@ -61,8 +61,11 @@ const WAKE_POLL_MS = 30_000;
 const WAKE_WAIT_MS = 10 * 60 * 1000;
 /** The schedule that keeps this agent awake while a job is out runs this gate (boot.ts), in code only. */
 export const RECORDINGS_GATE = "recordings";
-/** Maritime wakes an agent, or keeps it up, for its schedules: every 5 minutes is well inside its 15 idle minutes. */
-const AWAKE_CRON = "*/5 * * * *";
+/**
+ * Maritime wakes an agent, or keeps it up, for its schedules: every 5 minutes is well inside its 15 idle minutes. The
+ * minutes are listed, as in the news watch's crons, the form Maritime is known to take (the list goes in one push).
+ */
+const AWAKE_CRON = "0,5,10,15,20,25,30,35,40,45,50,55 * * * *";
 
 class StartingError extends Error {}
 class StuckError extends Error {}

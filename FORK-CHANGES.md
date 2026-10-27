@@ -878,7 +878,8 @@ the audio is deleted after transcription (as Bee does).
   sent again; one that runs over 10 minutes plus half the recording's length is given up on and the owner told (the
   asking would otherwise keep a stuck service up and paid). (2) This agent: Maritime snapshots an agent after 15 minutes
   without requests, which would stop the asking; while a job is out, a schedule in code (`RECORDINGS_GATE`, every 5
-  minutes, its gate never calls the model) makes Maritime send the agent a request, and it is removed when the last job
+  minutes as a minute list like the news watch's crons, its gate never calls the model) makes Maritime send the agent
+  a request, and it is removed when the last job
   ends (and at boot, or at its next run when no job is out). (3) The way in: upstream downloads attachments up to 10 MB
   in 20 s (`packages/inkbox/src/hydration.ts`), about 20 minutes of Voice Memos; a new `limitsFor` option there lets
   `boot.ts` give the owner's attachments up to `MAX_SENT_RECORDING_BYTES` (200 MB, 10 minutes); everyone else keeps

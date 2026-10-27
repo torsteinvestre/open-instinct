@@ -31,6 +31,7 @@ import {
   phoneCountryOf,
   resolveDataDir,
   resolveModel,
+  resolvePrincipal, // [sunshine:recordings]
 } from "@open-instinct/core";
 import type { InboundMessage, InstinctConfig, Outbox, Principal, RegisteredTool } from "@open-instinct/core";
 import type { LoadableGroup } from "@open-instinct/core"; // [sunshine:tool-loader]
@@ -51,7 +52,7 @@ import { researchWith, writerContextFor } from "./watcher-writer.js";
 import { DEFAULT_MEMORY_MODEL, MEMORY_GATE, MEMORY_REASONING, createMemoryPass } from "./memory-pass.js"; // [sunshine:memory]
 import { DEFAULT_INTAKE_MODEL, INTAKE_REASONING, createIntake, type Intake } from "./intake.js"; // [sunshine:intake]
 import { createLocalEmbedder } from "./embedder.js"; // [sunshine:meaning-search]
-import { recordingsTools } from "./recordings.js"; // [sunshine:recordings]
+import { MAX_SENT_RECORDING_BYTES, RECORDINGS_GATE, createRecordings, type Recordings } from "./recordings.js"; // [sunshine:recordings]
 import { ChatAwareOutbox, ConsoleOutbox, type ChatReplyBuffer } from "./console-outbox.js";
 import { fileTools, resolveInsideWorkspace } from "./file-tools.js";
 import { describeDataPart, promptExtraFor } from "./hooks.js";
@@ -233,20 +234,24 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
 
   // [sunshine:recordings] Recordings the owner sends: transcribed by the service, kept through the intake, the audio
   // deleted. With TRANSCRIBE_URL and TRANSCRIBE_KEY; the intake and runtime are made further down.
+  let recordings: Recordings | undefined;
   if (items && env.TRANSCRIBE_URL?.trim() && env.TRANSCRIBE_KEY?.trim()) {
-    registry.registerMany(
-      recordingsTools({
-        state,
-        config,
-        audit,
-        intake: { receive: (item) => (intake ? intake.receive(item) : Promise.reject(new Error("the intake is not available"))) },
-        runTask: (task) => runtime.runSystemTask(task),
-        service: { url: env.TRANSCRIBE_URL.trim(), key: env.TRANSCRIBE_KEY.trim() },
-        workspace: state.path("workspace"),
-        ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
-      }),
-    );
+    recordings = createRecordings({
+      state,
+      config,
+      audit,
+      intake: { receive: (item) => (intake ? intake.receive(item) : Promise.reject(new Error("the intake is not available"))) },
+      runTask: (task) => runtime.runSystemTask(task),
+      service: { url: env.TRANSCRIBE_URL.trim(), key: env.TRANSCRIBE_KEY.trim() },
+      workspace: state.path("workspace"),
+      scheduler,
+      ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
+    });
+    registry.registerMany(recordings.tools);
     log("recordings: on");
+  } else {
+    // A keep-awake schedule left from when recordings were on would wake the agent every 5 minutes for nothing.
+    for (const e of scheduler.list()) if (e.gate === RECORDINGS_GATE) scheduler.delete(e.id);
   }
 
   if (env.CONTEXT_DEV_API_KEY) {
@@ -278,6 +283,11 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
     channel,
     mediaDir: state.path("workspace", "inbound"),
     ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
+    // [sunshine:recordings] The owner's attachments up to MAX_SENT_RECORDING_BYTES, with time to download them (a
+    // 3-hour recording is about 90 MB); everyone else keeps upstream's 10 MB and 20 s.
+    ...(recordings
+      ? { limitsFor: (message: InboundMessage) => (resolvePrincipal(message, config, contacts).kind === "owner" ? { maxBytes: MAX_SENT_RECORDING_BYTES, timeoutMs: 10 * 60_000 } : undefined) }
+      : {}),
   }) : undefined;
 
   registry.registerMany(fileTools(state.path("workspace"), { env }));
@@ -572,6 +582,7 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
     scheduleGates: {
       ...(watcher ? { [WATCH_GATE]: watcher.gate } : {}),
       ...(memoryPass ? { [MEMORY_GATE]: memoryPass.gate } : {}),
+      ...(recordings ? { [RECORDINGS_GATE]: recordings.gate } : {}), // [sunshine:recordings] keeps the agent awake, in code
     },
     // [sunshine:onboarding] The welcome guide goes with a new owner's very first text.
     firstContactGuide: () => skillGuide(skillCatalog.list(), "onboarding"),

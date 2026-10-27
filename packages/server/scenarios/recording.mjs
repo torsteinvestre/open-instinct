@@ -10,7 +10,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { createModels, fauxProvider } from "@earendil-works/pi-ai";
-import { ItemArchive } from "@open-instinct/core";
+import { AuditLog, ItemArchive } from "@open-instinct/core";
 import { boot } from "../dist/boot.js";
 
 const need = (n) => process.env[n]?.trim() || (() => { throw new Error(`${n} must be set`); })();
@@ -40,28 +40,45 @@ const text = (r) => (typeof r === "string" ? r : r.content.map((c) => c.text ?? 
 const inbound = join(dir, "workspace", "inbound");
 mkdirSync(inbound, { recursive: true });
 
-const sample = join(inbound, basename(need("SAMPLE")));
-copyFileSync(need("SAMPLE"), sample);
+// Without SAMPLE the voice step is skipped: then the recording is the first request (the cold-start case).
 let t = Date.now();
-console.log("voice_mine:", text(await registry.get("voice_mine").spec.execute({ path: sample }, ctx)), `(${Date.now() - t} ms)`);
-// It learns in the background: wait for the print (the outcome also goes to the agent as a note).
-for (let i = 0; i < 300 && !app.state.exists("voice/owner.json"); i++) await new Promise((r) => setTimeout(r, 1000));
-console.log(`voice learned after ${((Date.now() - t) / 1000).toFixed(0)} s:`, app.state.exists("voice/owner.json"), "| sample deleted:", !existsSync(sample));
+const sample = process.env.SAMPLE?.trim() ? join(inbound, basename(process.env.SAMPLE.trim())) : undefined;
+if (sample) {
+  copyFileSync(process.env.SAMPLE.trim(), sample);
+  console.log("voice_mine:", text(await registry.get("voice_mine").spec.execute({ path: sample }, ctx)), `(${Date.now() - t} ms)`);
+  // It learns in the background: wait for the print (the outcome also goes to the agent as a note).
+  for (let i = 0; i < 600 && !app.state.exists("voice/owner.json"); i++) await new Promise((r) => setTimeout(r, 1000));
+  console.log(`voice learned after ${((Date.now() - t) / 1000).toFixed(0)} s:`, app.state.exists("voice/owner.json"), "| sample deleted:", !existsSync(sample));
+}
 
 const meeting = join(inbound, basename(need("MEETING")));
 copyFileSync(need("MEETING"), meeting);
 t = Date.now();
 console.log("recording_add:", text(await registry.get("recording_add").spec.execute({ path: meeting, title: "remote control design meeting" }, ctx)), `(${Date.now() - t} ms)`);
 
+// WAIT_MINUTES (default 15): a long recording takes about a tenth of its length, plus the service's start.
 const items = new ItemArchive(app.state);
+const waitMs = Number(process.env.WAIT_MINUTES ?? 15) * 60_000;
+const failed = () => new AuditLog(app.state).read({ kinds: ["error"] }).some((e) => e.detail?.recording);
 let item;
-for (let i = 0; i < 120 && !item; i++) {
+let awakeSeen = false;
+while (!item && Date.now() - t < waitMs && !failed()) {
   await new Promise((r) => setTimeout(r, 2000));
   item = items.all().find((it) => it.source === "recording");
+  // The keep-awake schedule is there while the job is out.
+  if (!awakeSeen && app.scheduler.list().some((e) => e.gate === "recordings")) {
+    awakeSeen = true;
+    console.log(`keep-awake schedule there after ${((Date.now() - t) / 1000).toFixed(0)} s`);
+  }
 }
-if (!item) throw new Error("no recording item after 4 minutes");
+if (!item) {
+  console.log(`no recording item after ${((Date.now() - t) / 60_000).toFixed(1)} minutes; audit errors:`, JSON.stringify(new AuditLog(app.state).read({ kinds: ["error"] }).map((e) => e.detail)));
+  process.exit(1);
+}
+console.log("keep-awake schedule gone after:", !app.scheduler.list().some((e) => e.gate === "recordings"));
 console.log(`kept after ${((Date.now() - t) / 1000).toFixed(0)} s: ${item.id}, "${item.title}", people ${JSON.stringify(item.people)}, ${item.text.split("\n").length} lines`);
 console.log("meeting file deleted:", !existsSync(meeting), "| owner print kept:", app.state.exists("voice/owner.json"));
+console.log("calls to the service:", JSON.stringify(new AuditLog(app.state).read({}).filter((e) => e.detail?.recording).map((e) => e.detail.recording)));
 const mine = item.text.split("\n").filter((l) => /^\[[\d:]+\] Maya:/.test(l)).length;
 console.log(`lines named Maya: ${mine}; first lines:\n${item.text.split("\n").slice(0, 4).join("\n")}`);
 const found = text(await registry.get("history_search").spec.execute({ query: "instruction manuals" }, ctx));

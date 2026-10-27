@@ -857,8 +857,8 @@ the audio is deleted after transcription (as Bee does).
 
 **What the fork adds** (`packages/server/src/recordings.ts`, owner-only tools in the always-loaded memory group):
 - `recording_add` {path, title?, startedAt?}: for an audio file the owner sent. Returns at once ("Transcribing it
-  now..."); in the background the file goes to the service (base64, with the owner's voice print if learned; tried
-  again after 30 s and 2 min if the service is busy or starting), the transcript ("[mm:ss] Name: ..." lines; unknown
+  now..."); in the background the file goes to the service (as a job, with the owner's voice print if learned; see
+  long recordings below), the transcript ("[mm:ss] Name: ..." lines; unknown
   voices "Speaker N") into the intake as an item with source `recording` (kept, summarized once, journaled, handed to
   the agent with the act-or-ask criteria), and the audio file is deleted whatever happens. No speech, an unsupported
   language (Norwegian, for now) or a failure: nothing kept, a short note to the agent to tell the owner if it matters.
@@ -868,8 +868,23 @@ the audio is deleted after transcription (as Bee does).
   In the background too, the outcome reaching the agent as a note. The sample is deleted; `forget: true` deletes the
   print.
 - A service scaled to zero (OVHcloud AI Deploy, measured 2026-10-26) answers 503 at once while it starts, for about 3
-  minutes: a 503 is waited out (asked again every 30 s for up to 10 minutes); other failures are tried again after 30 s
-  and 2 min. Without this the first recording after a quiet spell failed.
+  minutes, and a large first request got 502 without waking it (live, 2026-10-27): a tiny `POST /ping` wakes it and is
+  asked again every 30 s for up to 10 minutes before any audio goes; other failures are tried again after 30 s and 2 min.
+- Long recordings (2026-10-27, Torstein: "it has to work for longer recordings"). Four limits, each handled:
+  (1) the service: OVH scaled the app to zero in the middle of a job, because only new requests count as use; a job is
+  now created (`POST /jobs`), its audio sent as it is (`PUT /jobs/<id>/audio`, streamed from the file with
+  `fs.openAsBlob`, no base64 copy in memory) and asked about every 30 s (`GET /jobs/<id>`), so no request lasts as long
+  as the job and the asking keeps the service up exactly while it works. A job the service lost (it restarted: 404) is
+  sent again; one that runs over 10 minutes plus half the recording's length is given up on and the owner told (the
+  asking would otherwise keep a stuck service up and paid). (2) This agent: Maritime snapshots an agent after 15 minutes
+  without requests, which would stop the asking; while a job is out, a schedule in code (`RECORDINGS_GATE`, every 5
+  minutes, its gate never calls the model) makes Maritime send the agent a request, and it is removed when the last job
+  ends (and at boot, or at its next run when no job is out). (3) The way in: upstream downloads attachments up to 10 MB
+  in 20 s (`packages/inkbox/src/hydration.ts`), about 20 minutes of Voice Memos; a new `limitsFor` option there lets
+  `boot.ts` give the owner's attachments up to `MAX_SENT_RECORDING_BYTES` (200 MB, 10 minutes); everyone else keeps
+  10 MB. By size, not by type: a Voice Memos file arrives with no name or known type (saved as `.bin`). (4) The
+  agent's memory: the audio is no longer read whole and base64-encoded (a 500 MB file would have passed V8's string
+  limit).
 - The intake (`intake.ts`) words the source "recorded on their phone" with the same caveat as the band, plus that
   unknown voices show as "Speaker N"; `speakersOf` no longer takes "Speaker 2" for a person. `core-tools.ts` names the
   source in search results.
@@ -879,7 +894,11 @@ the audio is deleted after transcription (as Bee does).
 **Tested** (free). `packages/server/test/recordings.test.ts` with a stand-in service: handed to the intake with times
 and people, audio deleted, the owner's print sent once learned and forgotten on request, no speech and Norwegian told
 and nothing kept, a busy service tried again, a service that never answers told and the audio still deleted, files
-outside the workspace refused, a two-voice print refused, "Speaker 1" not taken for a person.
+outside the workspace refused, a two-voice print refused, "Speaker 1" not taken for a person; since 2026-10-27 also:
+the audio sent as it is (not in the JSON), a service in standby woken with pings before anything else, a long job asked
+about until done through a service restart (one job, not sent twice), a lost job sent again, a stuck one given up on
+and not sent again, the keep-awake schedule there while a job is out and gone after (and a leftover one removed by its
+gate). `packages/inkbox/test/hydration.test.ts`: the larger size only for the messages `limitsFor` names.
 `scenarios/recording.mjs` (real server, real service on the laptop GPU, no model calls): Maya's voice learned in 4.2 s
 (sample deleted); the AMI ES2004b meeting as an iPhone-style .m4a (17.6 MB, 39 min) kept 18 s after recording_add
 answered (96 ms): 235 lines, 57 named Maya, the others "Speaker 1, 2...", the file deleted, history_search finds it.
@@ -909,10 +928,13 @@ you send me": 0 flags on all 3 ($0.078 for both runs; one run per case).
 
 **Open.** Other people's names: only the owner's voice is recognised; connected people's prints (connect = consent)
 come with agent-to-agent. Voice messages to Sunshine (one voice, the owner's) go the same way as a meeting for now.
-The service needs a host (EU, pay per use) before live use.
+The service runs on OVHcloud AI Deploy (CPU, scale to zero; sunshine-ops NOTES). How large a file iMessage carries is
+published by neither Apple nor Inkbox (reports: 100-220 MB; Voice Memos is about 0.5 MB a minute): to be seen with a
+real long recording; past it, recordings need the app's upload.
 
 **To remove.** Unset `TRANSCRIBE_URL`/`TRANSCRIBE_KEY`, or revert the commit (`git log --grep "sunshine:recordings"`)
-or delete `recordings.ts`, its test and scenario, and the tagged lines in `boot.ts`, `intake.ts` and `core-tools.ts`.
+or delete `recordings.ts`, its test and scenario, and the tagged lines in `boot.ts`, `intake.ts`, `core-tools.ts` and
+`packages/inkbox/src/hydration.ts` (`limitsFor`) with its test.
 
 ### `[sunshine:tool-loader]`: email, desktop, file and people tools load when a request needs them
 

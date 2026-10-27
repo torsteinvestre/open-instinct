@@ -16,6 +16,11 @@ export interface HydrationOptions {
   fetchImpl?: typeof fetch;
   lookup?: Lookup;
   maxAttachmentBytes?: number;
+  /**
+   * [sunshine:recordings] A larger size and more time for some attachments (the owner's recordings, which can be over
+   * 100 MB); undefined keeps the defaults.
+   */
+  limitsFor?: (message: InboundMessage) => { maxBytes: number; timeoutMs: number } | undefined;
 }
 
 export class InkboxInboundHydrator {
@@ -83,6 +88,7 @@ export class InkboxInboundHydrator {
     await mkdir(dir, { recursive: true, mode: 0o700 });
     const saved: NonNullable<InboundMessage["attachments"]> = [];
     const attachments = msg.attachments ?? [];
+    const limits = this.opts.limitsFor?.(msg); // [sunshine:recordings]
     for (const attachment of attachments.slice(0, INBOUND_ATTACHMENT_LIMIT)) {
       if (!attachment.url || attachment.path) {
         saved.push(attachment);
@@ -90,13 +96,13 @@ export class InkboxInboundHydrator {
       }
       try {
         const fetched = await fetchPublic(this.opts.fetchImpl ?? fetch, attachment.url, {
-          signal: AbortSignal.timeout(20_000),
+          signal: AbortSignal.timeout(limits?.timeoutMs ?? 20_000),
           headers: { accept: "*/*" },
           ...(this.opts.lookup ? { lookup: this.opts.lookup } : {}),
         });
         if (!fetched.ok) throw new Error("The attachment URL is not available for download");
         if (!fetched.res.ok) throw new Error(`Attachment download returned HTTP ${fetched.res.status}`);
-        const data = await boundedBytes(fetched.res, this.opts.maxAttachmentBytes ?? INBOUND_ATTACHMENT_BYTES);
+        const data = await boundedBytes(fetched.res, limits?.maxBytes ?? this.opts.maxAttachmentBytes ?? INBOUND_ATTACHMENT_BYTES);
         const hash = createHash("sha256").update(`${msg.id}\n${attachment.url}`).digest("hex");
         const path = join(dir, `${hash}${extension(attachment.mimeType, attachment.name)}`);
         await writeFile(path, data, { mode: 0o600 });

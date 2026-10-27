@@ -118,4 +118,18 @@ describe("email and media hydration", () => {
     expect(msg.text).toContain("could not be downloaded");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
+
+  it("[sunshine:recordings] gives the messages it is told a larger size, and keeps the default for the rest", async () => {
+    const mediaDir = await mkdtemp(join(tmpdir(), "instinct-media-"));
+    dirs.push(mediaDir);
+    const fetchImpl = vi.fn(async () => new Response("a long recording")) as unknown as typeof fetch;
+    const limitsFor = (m: InboundMessage) => (m.from === "owner@example.com" ? { maxBytes: 100, timeoutMs: 60_000 } : undefined);
+    const { hydrator } = harness({ mediaDir, fetchImpl, lookup: async () => ["8.8.8.8"], maxAttachmentBytes: 2, limitsFor });
+    const attachments = [{ url: "https://media.example.test/recording" }];
+    const owner = await hydrator.hydrate({ ...email(), from: "owner@example.com", meta: {}, attachments });
+    expect(await readFile(owner.attachments![0]!.path!, "utf8")).toBe("a long recording");
+    const other = await hydrator.hydrate({ ...email(), meta: {}, attachments });
+    expect(other.attachments).toEqual(attachments);
+    expect(other.text).toContain("could not be downloaded");
+  });
 });

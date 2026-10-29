@@ -10,7 +10,9 @@
 //
 // Usage (from packages/server, after `pnpm build`):
 //   BOOT=<dist/boot.js of the version> LABEL=before|after RUNS=3 CASES=nov3,group,... MAX_USD=2 OUT=<file.json> node scenarios/in-the-flow.mjs
-//   DRY=1   checks the checks on known answers (the live reply of 2026-10-27 and written ones); no model call
+//   DRY=1   checks the checks on known answers (the live reply of 2026-10-27 and written ones) and the stand-in inbox's
+//           matching on known searches; no model call
+//   LOOKUP=0  without the code's look-up of email and calendar before the hand-off (2026-10-29, lookup.ts)
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -77,12 +79,13 @@ const CASES = {
   },
 };
 
-if (process.env.DRY) {
+// DRY=1 runs this once the stand-ins below are defined.
+async function dryRun() {
   const run = (o) => ({ texts: [], adds: [], schedules: [], tools: [], ...o });
   const known = [
     // Live, 2026-10-27 (the old hand-off): asked instead of looking.
     ["nov3", run({ texts: ["J. Cole (Thu 12 Nov, 19:00) is already in your calendar. What's the event on 3 Nov, and what time? I'll add it once you tell me."] }), false],
-    ["nov3", run({ adds: [{ title: "Startup Norway founder meetup", start: "2026-11-03T18:00:00+01:00" }], texts: ["Added the Startup Norway founder meetup on Mon 3 Nov at 18:00 (from your email)."] }), true],
+    ["nov3", run({ adds: [{ title: "Startup Norway founder meetup", start: "2026-11-03T18:00:00+01:00" }], texts: ["Added the Startup Norway founder meetup on Tue 3 Nov at 18:00 (from your email)."] }), true],
     ["group", run({ texts: ["What's the topic of the presentation, and who's in your group?"] }), false],
     ["group", run({ texts: ["Started an outline for the wormholes deck with Ian and Scott. Want me to build the slides?"] }), true],
     ["others", run({ adds: [{ title: "Book the venue", start: "2026-10-29T09:00:00+01:00" }] }), false],
@@ -100,15 +103,32 @@ if (process.env.DRY) {
     console.log(`${right ? "ok   " : "WRONG"} ${c} ${got.pass ? "pass" : "fail"} (${got.notes.join("; ")})`);
   }
   console.log(`${ok}/${known.length} known answers checked right`);
-  process.exit(ok === known.length ? 0 : 1);
+  // The stand-in inbox's matching, on known searches (subjects of what each should find).
+  const searches = [
+    ['"3 November" OR "Nov 3" OR "3 Nov"', ["You're registered: Founder Meetup, Tue 3 Nov 18:00"]],
+    ["(founder meetup) newer_than:60d -category:promotions", ["You're registered: Founder Meetup, Tue 3 Nov 18:00"]],
+    ['"J. Cole"', ["Your tickets: J. Cole, Unity Arena, Thu 12 Nov 19:00"]],
+    ["chargers", []], // only in a promotion
+    ['"Kari"', []],
+  ];
+  let found = 0;
+  for (const [query, want] of searches) {
+    const got = (await liveSources({ searches: [], days: [] }).searchEmail(query, 5)).map((m) => m.subject);
+    const right = JSON.stringify(got) === JSON.stringify(want);
+    found += right;
+    console.log(`${right ? "ok   " : "WRONG"} search ${query} -> ${got.length} found`);
+  }
+  console.log(`${found}/${searches.length} stand-in searches right`);
+  process.exit(ok === known.length && found === searches.length ? 0 : 1);
 }
 
 // ---- the stand-in inbox and calendar --------------------------------------------------------------------------------
+// 3 November 2026 is a Tuesday (the first version said Monday, a mismatch the agent could stumble on).
 const INBOX = [
-  { from: "Startup Norway <events@startupnorway.no>", date: "Mon 20 Oct", subject: "You're registered: Founder Meetup, Mon 3 Nov 18:00", body: "Thanks for registering for the Startup Norway Founder Meetup on Monday 3 November, 18:00-21:00, Oslo Science Park, Gaustadalleen 21." },
-  { from: "Ticketmaster", date: "Fri 10 Oct", subject: "Your tickets: J. Cole, Unity Arena, Thu 12 Nov 19:00", body: "Two tickets for J. Cole: The Fall-Off Tour." },
-  { from: "SATS", date: "Tue 27 Oct", subject: "Your gym week", body: "You trained 3 times this week." },
-  { from: "Elkjop", date: "Sat 25 Oct", subject: "Weekend deals", body: "Chargers and cables 20% off." },
+  { from: "Startup Norway <events@startupnorway.no>", date: "Tue 20 Oct", at: "2026-10-20T08:30:00Z", subject: "You're registered: Founder Meetup, Tue 3 Nov 18:00", body: "Thanks for registering for the Startup Norway Founder Meetup on Tuesday 3 November, 18:00-21:00, Oslo Science Park, Gaustadalleen 21." },
+  { from: "Ticketmaster", date: "Sat 10 Oct", at: "2026-10-10T12:00:00Z", subject: "Your tickets: J. Cole, Unity Arena, Thu 12 Nov 19:00", body: "Two tickets for J. Cole: The Fall-Off Tour." },
+  { from: "SATS", date: "Tue 27 Oct", at: "2026-10-27T06:00:00Z", subject: "Your gym week", body: "You trained 3 times this week." },
+  { from: "Elkjop", date: "Sun 25 Oct", at: "2026-10-25T09:00:00Z", subject: "Weekend deals", body: "Chargers and cables 20% off.", category: "promotions" },
 ];
 const EVENTS = [{ title: "J. Cole: The Fall-Off Tour", start: "2026-11-12T19:00:00+01:00", end: "2026-11-12T22:00:00+01:00" }];
 function appsTools(record) {
@@ -150,6 +170,36 @@ function appsTools(record) {
   ];
 }
 
+// The look-up before the hand-off (lookup.ts) on the same inbox and calendar. Gmail's own matching is richer (whole
+// words, its own handling of dates); this one takes a message when every quoted phrase or word of one OR-alternative is
+// in its subject or text, ignores operators such as newer_than:, and leaves out promotions as the Composio plug does.
+// Whether the summary's searches find things in a REAL inbox is look-up-real.mjs's question, not this one's.
+function gmailMatch(query, text) {
+  const hay = text.toLowerCase();
+  return query
+    .replace(/-?\b[a-z_]+:\S+/gi, " ")
+    .replace(/[()]/g, " ")
+    .split(/\s+OR\s+/)
+    .some((alt) => {
+      const parts = [...alt.matchAll(/"([^"]+)"|(\S+)/g)].map((m) => (m[1] ?? m[2]).toLowerCase());
+      return parts.length > 0 && parts.every((p) => hay.includes(p));
+    });
+}
+function liveSources(record) {
+  return {
+    searchEmail: async (query, max) => {
+      record.searches.push(query);
+      return INBOX.filter((m) => m.category !== "promotions" && gmailMatch(query, `${m.subject} ${m.body}`))
+        .slice(0, max)
+        .map((m) => ({ at: Date.parse(m.at), from: m.from, subject: m.subject, preview: m.body }));
+    },
+    events: async (from, to, max) => {
+      record.days.push(`${from.slice(0, 10)}..${to.slice(0, 10)}`);
+      return EVENTS.filter((e) => Date.parse(e.start) < Date.parse(to) && Date.parse(e.end ?? e.start) > Date.parse(from)).slice(0, max);
+    },
+  };
+}
+
 // ---- the kept memory every run starts with --------------------------------------------------------------------------
 function seed(state, config) {
   const items = new ItemArchive(state, { now: () => new Date(NOW - 9 * DAY) });
@@ -165,6 +215,8 @@ function seed(state, config) {
   items.setSummary(gym.id, { title: "Gym plan with Jonas", summary: "Torstein and Jonas set a gym plan: legs on Tuesdays and Fridays.", decisions: ["Legs on Tuesdays and Fridays"], ownerTasks: [], othersTasks: [], open: [] });
   return items;
 }
+
+if (process.env.DRY) await dryRun();
 
 // ---- one run ----------------------------------------------------------------------------------------------------------
 const need = (n) => process.env[n]?.trim() || (() => { throw new Error(`${n} must be set`); })();
@@ -199,7 +251,7 @@ async function once(name) {
   const items = seed(state, config);
   // The kept memory is stored for meaning search before the agent starts (as on a live agent after its backfill).
   await new MeaningSearch({ state, embedder, config, items, audit: new AuditLog(state) }).sync();
-  const record = { tools: [], adds: [] };
+  const record = { tools: [], adds: [], searches: [], days: [] };
   const sent = [];
   const env = {
     PATH: process.env.PATH, HOME: process.env.HOME, INSTINCT_DATA_DIR: dir, INSTINCT_SKILLS_DIR: SKILLS,
@@ -208,7 +260,9 @@ async function once(name) {
     INKBOX_API_KEY: "dummy", INKBOX_AGENT_HANDLE: "sunshine-torstein-test", INKBOX_IDENTITY_ID: "00000000-0000-0000-0000-000000000000",
     MEMORY_PASS_MODEL: "off",
   };
-  const app = await boot(env, { embedder, extraTools: appsTools(record), outbox: { send: async (m) => void sent.push(m), typing: async () => {}, markRead: async () => {} }, logger: () => {} });
+  // LOOKUP=0 leaves the look-up out (a version without it ignores the option anyway).
+  const live = process.env.LOOKUP === "0" ? {} : { liveSources: liveSources(record) };
+  const app = await boot(env, { embedder, extraTools: appsTools(record), ...live, outbox: { send: async (m) => void sent.push(m), typing: async () => {}, markRead: async () => {} }, logger: () => {} });
   const result = await app.intake.receive({ id: `rec-${name}`, source: "recording", startedAt: NOW - 10 * 60_000, endedAt: NOW - 9 * 60_000, text: CASES[name].text });
   const audit = new AuditLog(state).read({});
   const calls = audit.filter((e) => e.kind === "tool_call").map((e) => e.detail);
@@ -217,6 +271,8 @@ async function once(name) {
     adds: record.adds,
     schedules: calls.filter((c) => c.tool === "schedule_create").map((c) => String(c.summary ?? "")),
     tools: [...new Set([...record.tools, ...calls.map((c) => c.tool)])],
+    searches: record.searches,
+    days: record.days,
     reply: result.reply,
     summary: result.summary,
     cost: result.costUsd + spent(dir),
@@ -238,6 +294,7 @@ for (const name of WANT) {
     total += r.cost;
     results.push(r);
     console.log(`${LABEL} ${name} #${i + 1}: ${r.pass ? "PASS" : "FAIL"} (${r.notes.join("; ")}) $${r.cost.toFixed(3)} | tools ${r.tools.join(",") || "-"}`);
+    if (r.searches.length || r.days.length) console.log(`    looked up: ${[...r.searches.map((s) => `email ${s}`), ...r.days.map((d) => `calendar ${d}`)].join(" ; ")}`);
     for (const t of r.texts) console.log(`    text: ${t.replace(/\s+/g, " ").slice(0, 300)}`);
   }
 }

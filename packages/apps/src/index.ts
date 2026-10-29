@@ -27,6 +27,7 @@ export {
   type McpEndpoint,
   type AppsState,
   type ToolkitStatus,
+  type AppActionResult, // [sunshine:in-the-flow]
 } from "./composio.js";
 export { appsGuidance, appsForOthersGuidance, type AppsGuidanceOptions } from "./guidance.js"; // [sunshine:app-permissions] appsForOthersGuidance
 export { appsTools, describeStatus, type AppsLike, type AppsToolDeps } from "./tools.js";

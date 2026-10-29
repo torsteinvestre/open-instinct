@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { AuditLog, ItemArchive, MemoryStore, StateDir, defaultConfig } from "@open-instinct/core";
 import type { ModelCall } from "@open-instinct/watcher";
-import { createIntake, parseSummary, proactivityTool, readProactivity, speakersOf, type IntakeDeps } from "../src/intake.js";
+import { createIntake, parseAsk, parseSummary, proactivityTool, readProactivity, speakersOf, type IntakeDeps } from "../src/intake.js";
+import type { LookUpAsk } from "../src/lookup.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -46,7 +47,7 @@ function fakeModel(replies: Array<string | Error>): ModelCall & { asked: Array<{
   return call;
 }
 
-function setup(call?: ModelCall, extra: Partial<Pick<IntakeDeps, "recall" | "proactivity" | "load">> = {}) {
+function setup(call?: ModelCall, extra: Partial<Pick<IntakeDeps, "recall" | "proactivity" | "load" | "lookUp">> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "intake-"));
   dirs.push(dir);
   const state = new StateDir(dir);
@@ -168,6 +169,47 @@ describe("intake", () => {
     expect(tasks[0]!.load).toEqual(["apps"]);
   });
 
+  it("[sunshine:in-the-flow] runs the summary's email searches and calendar days by code and hands over what they show", async () => {
+    // The live check (2026-10-27): told what was unclear, the agent asked instead of searching his email.
+    const model = fakeModel([answer({ ...SUMMARY_JSON, to_settle: ["Which event is on 3 Nov, and at what time"], searches: ['"3 November" OR "Nov 3"'], days: ["2026-11-03"] })]);
+    const asks: LookUpAsk[] = [];
+    const lookUp = async (ask: LookUpAsk) => (asks.push(ask), 'Email, searched for "3 November" OR "Nov 3":\n- Sat, 17 Oct 2026, from Oslo Startup Lab: Founders Story Oslo\nCalendar, Tue, 3 Nov 2026: nothing in the calendar.');
+    const { intake, tasks, items } = setup(model, { lookUp, recall: async () => undefined });
+    await intake.receive(meeting);
+
+    // The summary step is asked for the searches and days, knows the year, and is told to leave other systems' state out.
+    expect(model.asked[0]!.system).toContain("searches: for each to_settle point Maya's email may answer");
+    expect(model.asked[0]!.system).toContain("days: the dates Maya's tasks and open points are about");
+    expect(model.asked[0]!.system).toContain("not what is in a calendar, an inbox or another app now");
+    expect(model.asked[0]!.user).toContain("It was made on 2026-10-24.");
+    expect(asks).toEqual([{ searches: ['"3 November" OR "Nov 3"'], days: ["2026-11-03"] }]);
+
+    const prompt = tasks[0]!.prompt;
+    expect(prompt).toContain('What Maya\'s email and calendar show for it, looked up just now for what is still unclear and the days it is about:\n<untrusted source="email and calendar">\nEmail, searched for "3 November" OR "Nov 3":\n- Sat, 17 Oct 2026, from Oslo Startup Lab: Founders Story Oslo');
+    expect(prompt).toContain("First settle what you can yourself: what you already know and what was just looked up, then Maya's email");
+    // The searches are for this hand-off only; the kept summary does not carry them.
+    expect(items.get("es2004b")!.summary).not.toHaveProperty("searches");
+    expect(items.get("es2004b")!.summary).not.toHaveProperty("days");
+  });
+
+  it("[sunshine:in-the-flow] looks nothing up when the summary asks nothing, and a failed look-up does not stop the hand-off", async () => {
+    let called = 0;
+    const counting = async () => (called++, "x");
+    const quiet = setup(fakeModel([answer(SUMMARY_JSON)]), { lookUp: counting });
+    await quiet.intake.receive(meeting);
+    expect(called).toBe(0);
+    expect(quiet.tasks[0]!.prompt).not.toContain("looked up just now");
+    expect(quiet.tasks[0]!.prompt).toContain("First settle what you can yourself: what you already know, then Maya's email");
+
+    const failing = setup(fakeModel([answer({ ...SUMMARY_JSON, searches: ["Founders"] })]), {
+      lookUp: async () => {
+        throw new Error("composio down");
+      },
+    });
+    expect(await failing.intake.receive(meeting)).toMatchObject({ outcome: "handed over" });
+    expect(failing.tasks[0]!.prompt).not.toContain("looked up just now");
+  });
+
   it("[sunshine:in-the-flow] says so when nothing kept bears on it, and the owner's setting decides where doing ends", async () => {
     const levels = ["ask first", "prepare and offer", "just do it"] as const;
     const prompts: string[] = [];
@@ -202,6 +244,10 @@ describe("intake", () => {
   it("reads the summary leniently and finds the named speakers", () => {
     expect(parseSummary(answer({ summary: " Short. ", decisions: ["a", 3, " ", "b"], owner_tasks: "none" }))).toEqual({ summary: "Short.", decisions: ["a", "b"], ownerTasks: [], othersTasks: [], open: [] });
     expect(parseSummary(answer({ summary: "S.", to_settle: ["When is it?", 4] }))!.toSettle).toEqual(["When is it?"]); // [sunshine:in-the-flow]
+    // [sunshine:in-the-flow] What to look up, read as leniently; missing or unreadable asks nothing.
+    expect(parseAsk(answer({ summary: "S.", searches: [" J. Cole ", 3, ""], days: ["2026-11-12", null] }))).toEqual({ searches: ["J. Cole"], days: ["2026-11-12"] });
+    expect(parseAsk(answer({ summary: "S.", searches: "J. Cole" }))).toEqual({ searches: [], days: [] });
+    expect(parseAsk("<summary>{not json</summary>")).toEqual({ searches: [], days: [] });
     expect(parseSummary(answer({ title: "x" }))).toBeUndefined();
     expect(parseSummary("no tags")).toBeUndefined();
     expect(speakersOf(MEETING, "Maya")).toEqual(["Sarah", "Ian", "Una"]);

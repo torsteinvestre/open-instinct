@@ -409,6 +409,26 @@ describe("ComposioApps.connectLink and connectedToolkits", () => {
   });
 });
 
+describe("[sunshine:in-the-flow] ComposioApps.execute", () => {
+  const saved = { [APPS_STATE_FILE]: { sessionId: "s", userId: "maria", toolkits: ["gmail", "googlecalendar"], mode: "direct", createdAt: "x" } };
+
+  it("runs one action through the stored session, with the owner's connection", async () => {
+    const execute = vi.fn(async () => ({ data: { messages: [] }, error: null, logId: "log_1" }));
+    const composio = fakeComposio({ sessions: { s: fakeSession("s", { execute }) } });
+    const apps = new ComposioApps({ ...base, state: fakeState(saved), adapters: { createComposio: () => composio.client, connectMcp: fakeMcp().connectMcp } });
+    expect(await apps.execute("GMAIL_FETCH_EMAILS", { query: "x", max_results: 5 })).toMatchObject({ data: { messages: [] }, error: null });
+    expect(execute).toHaveBeenCalledWith("GMAIL_FETCH_EMAILS", { query: "x", max_results: 5 });
+    expect(composio.used).toEqual(["s"]);
+    expect(composio.created).toHaveLength(0);
+  });
+
+  it("says so when the session cannot run actions from code", async () => {
+    const composio = fakeComposio({ sessions: { s: fakeSession("s") } });
+    const apps = new ComposioApps({ ...base, state: fakeState(saved), adapters: { createComposio: () => composio.client, connectMcp: fakeMcp().connectMcp } });
+    await expect(apps.execute("GMAIL_FETCH_EMAILS", {})).rejects.toThrow("cannot run actions from code");
+  });
+});
+
 describe("ComposioApps.close", () => {
   it("closes the MCP client and reconnects on the next use", async () => {
     const composio = fakeComposio();

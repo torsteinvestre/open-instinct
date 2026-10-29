@@ -52,6 +52,7 @@ import { researchWith, writerContextFor } from "./watcher-writer.js";
 import { DEFAULT_MEMORY_MODEL, MEMORY_GATE, MEMORY_REASONING, createMemoryPass } from "./memory-pass.js"; // [sunshine:memory]
 import { DEFAULT_INTAKE_MODEL, INTAKE_REASONING, createIntake, proactivityTool, readProactivity, type Intake } from "./intake.js"; // [sunshine:intake] [sunshine:in-the-flow] proactivity
 import { createRecall } from "./recall.js"; // [sunshine:in-the-flow]
+import { composioSources, createLookUp, type LiveSources } from "./lookup.js"; // [sunshine:in-the-flow]
 import { createLocalEmbedder } from "./embedder.js"; // [sunshine:meaning-search]
 import { MAX_SENT_RECORDING_BYTES, RECORDINGS_GATE, createRecordings, type Recordings } from "./recordings.js"; // [sunshine:recordings]
 import { ChatAwareOutbox, ConsoleOutbox, type ChatReplyBuffer } from "./console-outbox.js";
@@ -79,6 +80,8 @@ export interface BootOptions {
   embedder?: Embedder;
   /** [sunshine:in-the-flow] Scenarios: stand-in tools (an inbox and a calendar in the "apps" group) added to the agent's. */
   extraTools?: RegisteredTool[];
+  /** [sunshine:in-the-flow] Scenarios: stand-in email and calendar for the look-up before a hand-off (instead of Composio's). */
+  liveSources?: LiveSources;
 }
 
 /** [sunshine:meaning-search] After boot, wait this long before storing what is not stored yet (the agent settles first). */
@@ -610,6 +613,8 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
         const apiKey = m ? apiKeyFor(m.provider, env) : undefined;
         const call = m && apiKey ? modelCall(m, { reasoning: INTAKE_REASONING, apiKey }) : undefined;
         log(`intake: ${call ? `summaries by ${spec}` : "items kept without summaries"}`);
+        // [sunshine:in-the-flow] Email and calendar read by code for what each summary says is unclear.
+        const live = opts.liveSources ?? (apps ? composioSources(apps, () => config.owner.timezone || "UTC") : undefined);
         return createIntake({
           items,
           memory,
@@ -622,6 +627,7 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
           ...(meaning ? { recall: createRecall({ meaning, config, audit }) } : {}),
           proactivity: () => readProactivity(state),
           ...(apps || opts.extraTools?.some((t) => t.spec.meta.group === "apps") ? { load: ["apps"] } : {}),
+          ...(live ? { lookUp: createLookUp({ sources: live, config, audit }) } : {}),
         });
       })
     : undefined;

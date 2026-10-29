@@ -769,8 +769,41 @@ help or clutter).
 **Open.** The same for the owner's own messages (only on strong matches; next). The live check: a voice note about
 something only in his real email, through Composio.
 
-**To remove.** Revert the commits (`git log --grep "sunshine:in-the-flow"`), or delete `recall.ts`, its test and the
-two scenarios, and the tagged lines in `intake.ts`, `boot.ts`, core `items.ts`, `meaning.ts` and `runtime.ts`.
+**Live check, then the look-up by code** (2026-10-29). The live check of 27 Oct ("do I have anything next week?")
+failed twice: the agent asked "What is the 3 Nov event?" again without searching his email (instructions and loaded
+tools were not enough), and it offered to add a concert already in his calendar because the 27 Oct summary had guessed
+"not in it yet" and that guess was kept. Evaluated first (`DESIGN-memory-in-the-flow.md`, "Fixes after the live
+check"); Composio's own `session.execute` checked on his real Gmail first (free, OK'd): the date search found the
+right email alone, about 1 s a search; his event confirmation and ticket order are both in Gmail's Updates category.
+- `packages/server/src/lookup.ts`: code reads the live sources before the hand-off. The summary step writes
+  `searches` (for the points still unclear, in Gmail's search words) and `days` (YYYY-MM-DD or a span, worked out from
+  the record's date, now given with its year); each search runs on the email plug (newest 5 shown, promotions left out,
+  Updates kept) and each day or span (cut at 14 days) on the calendar plug, from the owner's midnight to the next. Shown
+  under "What ... email and calendar show for it, looked up just now", as untrusted data, with "nothing found" told apart
+  from "not looked at" (a failed or slow source: 30 s); at most 8,000 characters. The plugs are Composio's
+  GMAIL_FETCH_EMAILS and GOOGLECALENDAR_EVENTS_LIST, each only when its toolkit is in the agent's list; another app is
+  one more plug. Searches and days are for that hand-off only, not kept with the item (other systems' state is read
+  live, never kept as memory). No extra model call; a failed look-up never stops the hand-off.
+- `apps/src/composio.ts`: `ComposioApps.execute(slug, args)` runs one action through the session the agent's tools
+  use; code only, the model never gets it.
+- `intake.ts`: the summary is told the record says what was said and asked for, not what is in a calendar, an inbox
+  or another app now. `boot.ts` wires the Composio plugs (or a scenario's `liveSources`).
+- Not done: leaving "(note)" lines out of recall (seen once as noise; notes may be copies of texts Sunshine sent, so
+  watch list until checked).
+
+**Tested** (free): `test/lookup.test.ts` (10: each search and day shown, nothing found vs not looked at, slow source,
+spans and all-day events, the owner's midnights across daylight saving, size bounds, the Composio plugs' requests and
+answers, only connected toolkits), `test/intake.test.ts` (+2: the summary asked for searches and days with the year,
+the hand-off section and wording, nothing looked up when nothing asked, a failed look-up does not stop the hand-off),
+apps `composio.test.ts` (+2). All tests (1,470), smoke and typecheck pass. `scenarios/in-the-flow.mjs`: the stand-in
+inbox now goes through the look-up with Gmail-like matching (checked free on 5 known searches; `LOOKUP=0` leaves it
+out); the stand-in's 3 Nov is now a Tuesday, as in 2026. `scenarios/look-up-real.mjs` (graders checked free on 14
+known answers): the real summary step against his REAL Gmail and calendar (read only), the agent not run; paid runs
+wait for Torstein's OK.
+
+**To remove.** Revert the commits (`git log --grep "sunshine:in-the-flow"`), or delete `recall.ts`, `lookup.ts`, their
+tests and the three scenarios, and the tagged lines in `intake.ts`, `boot.ts`, apps `composio.ts` and `index.ts`, core
+`items.ts`, `meaning.ts` and `runtime.ts`.
 
 ### `[sunshine:intake]`: what reaches the owner from elsewhere is kept, summarized once and acted on
 

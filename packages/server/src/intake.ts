@@ -13,14 +13,16 @@
  * The journal line is how the owner's own conversation learns the item exists: today's and
  * yesterday's journal are in every owner prompt (MemoryStore.digest); older items are found by search.
  *
- * [sunshine:in-the-flow] The hand-off brings what is already known (recall.ts) and the email and calendar tools along,
- * lists what is still unclear for the agent to look up, and says where doing ends and asking starts, by the owner's
- * proactivity setting. His first voice note (2026-10-27) was answered with a question whose answer was in his email.
+ * [sunshine:in-the-flow] The hand-off brings what is already known (recall.ts), what the email and calendar show now for
+ * what is unclear (lookup.ts, read by code) and the email and calendar tools along, and says where doing ends and asking
+ * starts, by the owner's proactivity setting. His first voice note (2026-10-27) was answered with a question whose
+ * answer was in his email.
  */
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool, textResult, wrapUntrusted, type ArchiveItem, type AuditLog, type InstinctConfig, type ItemArchive, type ItemSummary, type MemoryStore, type RegisteredTool, type StateDir } from "@open-instinct/core";
 import type { ModelCall } from "@open-instinct/watcher";
 import type { Recall } from "./recall.js";
+import type { LookUp, LookUpAsk } from "./lookup.js";
 
 /** The model for the summary (env INTAKE_MODEL; "off" keeps items without summarizing them). */
 export const DEFAULT_INTAKE_MODEL = "anthropic/claude-sonnet-5-5";
@@ -72,6 +74,8 @@ export interface IntakeDeps {
   proactivity?: () => Proactivity;
   /** [sunshine:in-the-flow] Tool groups the hand-off starts with ("apps": email and calendar). */
   load?: string[];
+  /** [sunshine:in-the-flow] Email and calendar read by code for what the summary says is unclear (lookup.ts). */
+  lookUp?: LookUp;
 }
 
 /**
@@ -120,7 +124,7 @@ export function intakeSystem(owner: string, source: string): string {
     ...(caveat ? [`${caveat} Go by what the conversation as a whole makes clear.`] : []),
     "",
     "Answer with JSON between <summary> and </summary>:",
-    `{"title": "a few words naming it", "summary": "two or three sentences: what it was about and where it ended", "decisions": [], "owner_tasks": [], "others_tasks": [], "open": [], "to_settle": []}`,
+    `{"title": "a few words naming it", "summary": "two or three sentences: what it was about and where it ended", "decisions": [], "owner_tasks": [], "others_tasks": [], "open": [], "to_settle": [], "searches": [], "days": []}`,
     `- decisions: what was agreed or settled, as the conversation left it. A point counts as settled when the group went with it, even if nobody said "decide".`,
     `- owner_tasks: what ${owner} took on, was asked to do, or offered, with any time or deadline that was said.`,
     `- others_tasks: "Name: what they took on".`,
@@ -128,7 +132,12 @@ export function intakeSystem(owner: string, source: string): string {
     "- open: raised and left unsettled, each with where it was left: the last view stated, and by whom.",
     // [sunshine:in-the-flow] What the agent looks up before asking (2026-10-27: "the event on 3 Nov" was in the email).
     `- to_settle: what ${owner}'s tasks need that the record leaves out or unsure (which event, what time, which people, which file), each as a short question an assistant could answer from ${owner}'s email, calendar or earlier conversations. Empty when the tasks are clear.`,
+    // [sunshine:in-the-flow] Code runs these before the hand-off (lookup.ts): the 2026-10-27 live check asked instead of searching.
+    `- searches: for each to_settle point ${owner}'s email may answer, what to search their email for, in Gmail's search words: quote exact phrases and put OR between the ways the same thing may be written (for example "12 May" OR "May 12").`,
+    `- days: the dates ${owner}'s tasks and open points are about, worked out from the day the record was made, as YYYY-MM-DD, or YYYY-MM-DD/YYYY-MM-DD for a span such as "next week". Their calendar is read for these days.`,
     "Each line short and complete on its own, in the plain words someone would later search for. Only what the record supports; empty lists are fine.",
+    // [sunshine:in-the-flow] 2026-10-27: a summary's guess that a concert was "not in the calendar yet" was kept, and the agent offered to add one already there.
+    "The record tells what was said and asked for, not what is in a calendar, an inbox or another app now: the assistant reads those live, so leave their state out.",
   ].join("\n");
 }
 
@@ -154,6 +163,21 @@ export function parseSummary(text: string): ItemSummary | undefined {
     };
   } catch {
     return undefined;
+  }
+}
+
+/**
+ * [sunshine:in-the-flow] What the summary asks to look up (email searches, days). Not part of the kept summary: it is
+ * for this hand-off only, and the state it finds is read again live whenever it matters.
+ */
+export function parseAsk(text: string): LookUpAsk {
+  const m = /<summary>\s*([\s\S]*?)\s*<\/summary>/i.exec(text);
+  try {
+    const j = m ? (JSON.parse(m[1]!) as Record<string, unknown>) : {};
+    const list = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.trim().length > 0).map((x) => clip(x.trim(), LINE_MAX)).slice(0, LIST_MAX) : []);
+    return { searches: list(j.searches), days: list(j.days) };
+  } catch {
+    return { searches: [], days: [] };
   }
 }
 
@@ -194,11 +218,15 @@ export function createIntake(deps: IntakeDeps): Intake {
     deps.memory.appendJournal(text.replace(/\s+/g, " "), new Date(it.startedAt));
   };
 
-  async function summarize(it: ArchiveItem, call: ModelCall): Promise<{ summary?: ItemSummary; costUsd: number }> {
+  // [sunshine:in-the-flow] The record's date with its year, for the summary's days.
+  const isoDay = (ms: number) => new Intl.DateTimeFormat("en-CA", { timeZone: tz(), year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(ms));
+
+  async function summarize(it: ArchiveItem, call: ModelCall): Promise<{ summary?: ItemSummary; ask?: LookUpAsk; costUsd: number }> {
     const notes = deps.memory.readDurable().trim();
     const user = [
       ...(notes ? [`What you know about ${owner} (their notes):`, "<notes>", notes, "</notes>", ""] : []),
       `The record: ${it.title ? `"${it.title}", ` : ""}${from(it)}, ${when(it)}${withWhom(it)}.`,
+      `It was made on ${isoDay(it.startedAt)}.`, // [sunshine:in-the-flow]
       wrapUntrusted(it.text, `a recording of ${owner}'s conversation`),
     ].join("\n");
     let cost = 0;
@@ -207,7 +235,7 @@ export function createIntake(deps: IntakeDeps): Intake {
       const reply = await call({ system: intakeSystem(owner, it.source), user: user + feedback });
       cost += reply.costUsd;
       const summary = parseSummary(reply.text);
-      if (summary) return { summary, costUsd: cost };
+      if (summary) return { summary, ask: parseAsk(reply.text), costUsd: cost };
       feedback = '\n\nAnswer with the JSON between <summary> and </summary>, with at least "summary" filled in.';
     }
     return { costUsd: cost };
@@ -222,9 +250,10 @@ export function createIntake(deps: IntakeDeps): Intake {
 
   /**
    * What the agent gets: the summary and what is already known, as data, and how to act on them. `known`: what recall
-   * found; null when it found nothing; undefined when nothing was looked up (no meaning search, or it failed).
+   * found; null when it found nothing; undefined when nothing was looked up (no meaning search, or it failed). `live`:
+   * what the email and calendar showed just now, when anything was looked up there.
    */
-  function handOff(it: ArchiveItem, s: ItemSummary, known: string | null | undefined): string {
+  function handOff(it: ArchiveItem, s: ItemSummary, known: string | null | undefined, live?: string): string {
     const what = it.title ?? s.title ?? "a conversation";
     const caveat = SOURCES[it.source]?.caveat;
     const body = [
@@ -246,8 +275,10 @@ export function createIntake(deps: IntakeDeps): Intake {
         : known === null
           ? ["Nothing you have kept seems to bear on it.", ""]
           : []),
+      // [sunshine:in-the-flow] Read by code just now, so looking is not left to remembering to look.
+      ...(live ? [`What ${owner}'s email and calendar show for it, looked up just now for what is still unclear and the days it is about:`, wrapUntrusted(live, "email and calendar"), ""] : []),
       "Handle it as a great personal assistant would:",
-      `- First settle what you can yourself: what you already know, then ${owner}'s email, calendar and earlier conversations for what is still missing or may have changed (check the calendar before adding to it). Ask ${owner} only what is still unclear after that, all in one text.`,
+      `- First settle what you can yourself: what you already know${live ? " and what was just looked up" : ""}, then ${owner}'s email, calendar and earlier conversations for what is still missing or may have changed (check the calendar before adding to it). Ask ${owner} only what is still unclear after that, all in one text.`,
       `- ${doing[deps.proactivity?.() ?? DEFAULT_PROACTIVITY]}`,
       ...(caveat ? [`- Heard is not typed: a task in a recording may be someone else's, a passing thought or misheard; act on it only when it is clearly ${owner}'s.`] : []),
       `- Anything that goes to other people, costs money or speaks for ${owner}: ask first.`,
@@ -268,6 +299,17 @@ export function createIntake(deps: IntakeDeps): Intake {
     }
   }
 
+  /** [sunshine:in-the-flow] What the email and calendar show for what the summary asked; never stops the hand-off. */
+  async function liveAbout(it: ArchiveItem, ask: LookUpAsk | undefined): Promise<string | undefined> {
+    if (!deps.lookUp || !ask || (ask.searches.length === 0 && ask.days.length === 0)) return undefined;
+    try {
+      return await deps.lookUp(ask);
+    } catch (err) {
+      deps.audit.append({ kind: "error", detail: { lookUp: "failed", id: it.id, message: String(err instanceof Error ? err.message : err).slice(0, 300) } });
+      return undefined;
+    }
+  }
+
   return {
     async receive(input) {
       const people = input.people?.length ? input.people : speakersOf(input.text, owner);
@@ -279,7 +321,7 @@ export function createIntake(deps: IntakeDeps): Intake {
       }
       let cost = 0;
       try {
-        const { summary, costUsd } = await summarize(it, deps.call);
+        const { summary, ask, costUsd } = await summarize(it, deps.call);
         cost = costUsd;
         if (!summary) {
           journal(it, undefined);
@@ -290,8 +332,8 @@ export function createIntake(deps: IntakeDeps): Intake {
         const kept = deps.items.get(it.id) ?? { ...it, summary };
         journal(kept, summary.summary);
         const s = kept.summary ?? summary;
-        const known = await knownAbout(kept, s); // [sunshine:in-the-flow]
-        const reply = await deps.runTask({ id: `intake-${it.id}`, name: kept.title ?? summary.title ?? "conversation", prompt: handOff(kept, s, known), ...(deps.load?.length ? { load: deps.load } : {}) });
+        const [known, live] = await Promise.all([knownAbout(kept, s), liveAbout(kept, ask)]); // [sunshine:in-the-flow]
+        const reply = await deps.runTask({ id: `intake-${it.id}`, name: kept.title ?? summary.title ?? "conversation", prompt: handOff(kept, s, known, live), ...(deps.load?.length ? { load: deps.load } : {}) });
         record(kept, "handed over", { costUsd: cost, ownerTasks: summary.ownerTasks.length, decisions: summary.decisions.length });
         return { outcome: "handed over", summary, costUsd: cost, reply };
       } catch (err) {

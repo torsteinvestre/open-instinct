@@ -110,6 +110,14 @@ export interface ComposioSessionLike {
     items: Array<{ slug: string; isNoAuth?: boolean; connection?: { isActive: boolean } }>;
     nextCursor?: string | null;
   }>;
+  /** [sunshine:in-the-flow] Runs one app action with the owner's connection (Composio's programmatic session.execute). */
+  execute?(toolSlug: string, args?: Record<string, unknown>): Promise<AppActionResult>;
+}
+
+/** [sunshine:in-the-flow] What one app action run from code answers: the action's data, or Composio's error. */
+export interface AppActionResult {
+  data: Record<string, unknown>;
+  error: string | null;
 }
 
 export interface ComposioClientLike {
@@ -325,6 +333,19 @@ export class ComposioApps {
       cursor = res.nextCursor;
     }
     return [...slugs].sort().map((slug) => ({ slug, connected: true }));
+  }
+
+  /**
+   * [sunshine:in-the-flow] Runs one app action from code with the owner's connection, through the session the agent's
+   * tools use (Composio's own programmatic `session.execute`; checked on Torstein's Gmail 2026-10-29: about 1 s a
+   * search). For reading what a new item needs before the agent decides (server lookup.ts); the model never gets it,
+   * it reaches the apps through its tools and their policy checks.
+   */
+  async execute(slug: string, args: Record<string, unknown>): Promise<AppActionResult> {
+    await this.connect();
+    const session = this.requireSession();
+    if (!session.execute) throw new Error("this Composio session cannot run actions from code");
+    return session.execute(slug, args);
   }
 
   async close(): Promise<void> {

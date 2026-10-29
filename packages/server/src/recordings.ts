@@ -328,7 +328,10 @@ export function createRecordings(deps: RecordingsDeps): Recordings {
       // [2026-10-27] Facts for the agent in what they mean for the owner, no internal labels or sizes: live, "Speaker N"
       // and a hedged "I'll tell you if it doesn't work" were passed straight on to the owner.
       const voice = ownerPrint() ? "" : ` You cannot yet tell ${owner}'s voice from the other voices in recordings; a short recording of just them talking (20-60 seconds) would let you (voice_mine).`;
-      return textResult(`Started: it is being transcribed in the background (usually a few minutes); its summary comes to you then, to act on as with any conversation from elsewhere.${voice}`);
+      // [2026-10-29] "its summary comes to you" came back as "I'll send you the summary" every time: a promise of a
+      // summary (not the product) that often never came. The facts: what was said comes to the agent, the owner only
+      // hears when something needs them.
+      return textResult(`Started: it is being transcribed in the background (usually a few minutes). Then what was said comes to you, to act on as with any conversation from elsewhere; you text ${owner} about it only if something needs them.${voice}`);
     },
   });
 

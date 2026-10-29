@@ -854,6 +854,9 @@ its index; Town feeds its wiki into every session. Design: `~/sunshine-ops/DESIG
   how it began.
 - `recall.ts`: `chatsBefore`. `boot.ts`: recall and the look-up built once for the hand-offs and the grounding; the
   grounding's recall waits 8 s for a cold search model, then word search answers.
+- `lookup.ts` `weeksLine`: this week and next, Monday to Sunday with their dates, in the step's "Now" line and in a
+  recording summary's date line, so "next week" is read, not worked out (10 runs of "Anything happening next week for
+  me", 29 Oct: 2 took it as the next 7 days). The prompt's "(a week runs Monday to Sunday)" removed.
 
 **Tested** (free): core `runtime.test.ts` (+2: the grounding in both model calls of a run with a tool step, not in the
 next run, never on disk; the step's input; a failing step does not stop the reply; strangers not grounded),

@@ -23,7 +23,7 @@
  */
 import { wrapUntrusted, type AuditLog, type GroundInput, type InstinctConfig, type MemoryStore } from "@open-instinct/core";
 import type { ModelCall } from "@open-instinct/watcher";
-import type { LookUp } from "./lookup.js";
+import { weeksLine, type LookUp } from "./lookup.js";
 import type { Recall } from "./recall.js";
 
 /** The grounding step's model (env GROUND_MODEL; "off" grounds nothing): small and fast, since every reply waits for it. */
@@ -61,7 +61,7 @@ export function groundSystem(owner: string): string {
     `{"needed": true, "about": [], "days": [], "searches": []}`,
     `- needed: false when the answer needs nothing from ${owner}'s own life, plans or records (a greeting, thanks, a general question such as the weather or a fact); then leave the lists empty.`,
     `- about: what the message concerns in ${owner}'s life (people, projects, events, plans, places), each in a few plain words someone would search for, including what it implies: "is the weekend free?" concerns their plans and events that weekend.`,
-    `- days: the dates it concerns, worked out from now, as YYYY-MM-DD, or YYYY-MM-DD/YYYY-MM-DD for a span (a week runs Monday to Sunday). Their calendar is read for these.`,
+    `- days: the dates it concerns, worked out from now, as YYYY-MM-DD, or YYYY-MM-DD/YYYY-MM-DD for a span. Their calendar is read for these.`,
     `- searches: what to search ${owner}'s email for when the answer or part of it may be in an email (invitations, registrations, tickets, bookings, plans with someone named), in Gmail's search words: quote exact phrases and put OR between the ways the same thing may be written. Anything the assistant knows of only in part (an event without its time or place, a booking without its details) gets a search that would find the rest, by its name or its date as an email would write it. A search finds emails by their words and by when they were sent, not by when an event takes place. Empty when email cannot help.`,
   ].join("\n");
 }
@@ -107,7 +107,7 @@ export function createGround(deps: GroundDeps): (input: GroundInput) => Promise<
     // What is known about the message itself comes first, so the searches go after what is missing from it.
     const first = deps.recall ? await deps.recall([input.text], { chatsBefore }).catch(() => undefined) : undefined;
     const user = [
-      `Now: ${when(at)}.`,
+      `Now: ${when(at)}. ${weeksLine(at, tz())}`,
       ...(notes ? ["", `What the assistant knows about ${owner} (their notes):`, "<notes>", notes, "</notes>"] : []),
       ...(first ? ["", "What the assistant has kept that may bear on the new message (earlier conversations and recordings, dated):", wrapUntrusted(first, "what the assistant has kept")] : []),
       ...(input.recent.length ? ["", "The conversation so far, latest last:", ...input.recent.map((r) => `${r.who === "owner" ? owner : "Assistant"}: ${r.text.replace(/\s+/g, " ")}`)] : []),

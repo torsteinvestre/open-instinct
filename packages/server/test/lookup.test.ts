@@ -6,7 +6,7 @@ import { AuditLog, StateDir, defaultConfig } from "@open-instinct/core";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { EMAILS_PER_SEARCH, EVENTS_PER_SPAN, composioSources, createLookUp, midnightIn, parseSpan, plainText, type AppsRunner, type EmailHit, type EventHit, type LiveSources } from "../src/lookup.js";
+import { EMAILS_PER_SEARCH, EVENTS_PER_SPAN, composioSources, createLookUp, midnightIn, parseSpan, plainText, weeksLine, type AppsRunner, type EmailHit, type EventHit, type LiveSources } from "../src/lookup.js";
 
 const FOUNDERS: EmailHit = { at: Date.parse("2026-10-17T09:12:00Z"), from: "Oslo Startup Lab <hello@oslostartuplab.no>", subject: "You're on the guestlist for Founders Story Oslo", preview: "See you Tuesday 3 November at 18:00, Startup Lab, Gaustadalleen 21." };
 const JCOLE: EventHit = { title: "J. Cole: The Fall-Off Tour", start: "2026-11-12T19:00:00+01:00", end: "2026-11-12T22:00:00+01:00", location: "Unity Arena" };
@@ -143,6 +143,16 @@ describe("look-up dates", () => {
     expect(midnightIn("2026-03-29", "Europe/Oslo")).toBe("2026-03-29T00:00:00+01:00"); // summer time starts at 02:00
     expect(midnightIn("2026-11-01", "America/New_York")).toBe("2026-11-01T00:00:00-04:00");
     expect(midnightIn("2026-11-03", "UTC")).toBe("2026-11-03T00:00:00+00:00");
+  });
+
+  // [sunshine:grounding] The weeks a model is given, Monday to Sunday, by the owner's own day.
+  it("names this week and next, Monday to Sunday, by the day in the owner's zone", () => {
+    const week44 = "This week: Mon 26 Oct to Sun 1 Nov (2026-10-26/2026-11-01). Next week: Mon 2 Nov to Sun 8 Nov (2026-11-02/2026-11-08).";
+    expect(weeksLine(new Date("2026-10-29T10:41:00Z"), "Europe/Oslo")).toBe(week44); // a Thursday
+    expect(weeksLine(new Date("2026-10-26T00:30:00+01:00"), "Europe/Oslo")).toBe(week44); // Monday just after midnight
+    expect(weeksLine(new Date("2026-11-01T22:30:00Z"), "Europe/Oslo")).toBe(week44); // Sunday 23:30 in Oslo
+    expect(weeksLine(new Date("2026-11-01T23:30:00Z"), "Europe/Oslo")).toMatch(/^This week: Mon 2 Nov to Sun 8 Nov \(2026-11-02\/2026-11-08\)\. Next week: Mon 9 Nov/); // Monday 00:30 in Oslo, still Sunday in UTC
+    expect(weeksLine(new Date("2026-12-31T12:00:00Z"), "UTC")).toBe("This week: Mon 28 Dec to Sun 3 Jan (2026-12-28/2027-01-03). Next week: Mon 4 Jan to Sun 10 Jan (2027-01-04/2027-01-10).");
   });
 });
 

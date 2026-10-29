@@ -19,6 +19,7 @@
 // Usage (from packages/server, after `pnpm build`; ANTHROPIC_API_KEY set):
 //   SNAPSHOT=~/sunshine-memory/repro-2026-10-29/data MAX_USD=0.05 node scenarios/ground-plan.mjs
 //   DRY=1   checks the check on known answers; no model call
+//   ONLY="Anything happening" ROUNDS=10   only the texts starting so, each ROUNDS times (how often, not once)
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -139,9 +140,12 @@ const call = async (req) => { const t = Date.now(); const r = await inner(req); 
 
 const notes = new MemoryStore(state);
 
+const ONLY = process.env.ONLY?.trim();
+const ROUNDS = Number(process.env.ROUNDS ?? 1);
+const runs = ownerTexts.filter((e) => !ONLY || e.text.startsWith(ONLY)).flatMap((e) => Array.from({ length: ROUNDS }, () => e));
 const results = [];
 let spent = 0;
-for (const e of ownerTexts) {
+for (const e of runs) {
   if (spent + last.costUsd > MAX_USD) { console.log(`stopped: $${spent.toFixed(4)} spent, the next would pass MAX_USD ${MAX_USD}`); break; }
   // As the live runtime picks them: the latest 8 texts, Sunshine's own notes left out, each clipped to 500 characters.
   const recent = thread.slice(0, e.i).filter((r) => r.who === "owner" || r.who === "agent").slice(-8).map((r) => ({ who: r.who, text: r.text.slice(0, 500) }));
@@ -164,7 +168,7 @@ const q = (p) => ms[Math.min(ms.length - 1, Math.floor(p * ms.length))];
 const everyday = results.filter((r) => expectFor(r.text).need === false);
 console.log(`\n${graded.filter((r) => r.pass).length}/${graded.length} graded passed; ${results.filter((r) => !r.ask).length}/${results.length} unreadable; everyday texts with nothing gathered ${everyday.filter((r) => r.pass).length}/${everyday.length}`);
 console.log(`model time: median ${(q(0.5) / 1000).toFixed(1)} s, 90th ${(q(0.9) / 1000).toFixed(1)} s, max ${(ms.at(-1) / 1000).toFixed(1)} s; spent $${spent.toFixed(4)}`);
-const out = join(homedir(), "sunshine-memory", `ground-plan-${new Date().toISOString().slice(0, 10)}.json`);
+const out = join(homedir(), "sunshine-memory", `ground-plan-${new Date().toISOString().slice(0, 10)}${ONLY ? `-only-${ROUNDS}x` : ""}.json`);
 writeFileSync(out, JSON.stringify(results, null, 1));
 console.log(`saved ${out}`);
 await embedder.close?.();

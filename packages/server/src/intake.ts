@@ -25,7 +25,7 @@ import { Type } from "@earendil-works/pi-ai";
 import { defineTool, textResult, wrapUntrusted, type ArchiveItem, type AuditLog, type InstinctConfig, type ItemArchive, type ItemSummary, type MemoryStore, type RegisteredTool, type StateDir } from "@open-instinct/core";
 import type { ModelCall } from "@open-instinct/watcher";
 import type { Recall } from "./recall.js";
-import type { LookUp, LookUpAsk } from "./lookup.js";
+import { weeksLine, type LookUp, type LookUpAsk } from "./lookup.js";
 
 /** The model for the summary (env INTAKE_MODEL; "off" keeps items without summarizing them). */
 export const DEFAULT_INTAKE_MODEL = "anthropic/claude-sonnet-5-5";
@@ -235,7 +235,7 @@ export function createIntake(deps: IntakeDeps): Intake {
     const user = [
       ...(notes ? [`What you know about ${owner} (their notes):`, "<notes>", notes, "</notes>", ""] : []),
       `The record: ${it.title ? `"${it.title}", ` : ""}${from(it)}, ${when(it)}${withWhom(it)}.`,
-      `It was made on ${isoDay(it.startedAt)}.`, // [sunshine:in-the-flow]
+      `It was made on ${isoDay(it.startedAt)}. From that day: ${weeksLine(new Date(it.startedAt), tz())}`, // [sunshine:in-the-flow] [sunshine:grounding] the weeks
       wrapUntrusted(it.text, `a recording of ${owner}'s conversation`),
     ].join("\n");
     const reply = await call({ system: intakeSystem(owner, it.source), user, schema: SUMMARY_SCHEMA });

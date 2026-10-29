@@ -182,7 +182,7 @@ describe("intake", () => {
     expect(model.asked[0]!.system).toContain("searches: for each to_settle point Maya's email may answer");
     expect(model.asked[0]!.system).toContain("days: the dates Maya's tasks and open points are about");
     expect(model.asked[0]!.system).toContain("not what is in a calendar, an inbox or another app now");
-    expect(model.asked[0]!.user).toContain("It was made on 2026-10-24.");
+    expect(model.asked[0]!.user).toContain("It was made on 2026-10-24. From that day: This week: Mon 19 Oct to Sun 25 Oct (2026-10-19/2026-10-25). Next week: Mon 26 Oct to Sun 1 Nov");
     expect(asks).toEqual([{ searches: ['"3 November" OR "Nov 3"'], days: ["2026-11-03"] }]);
 
     const prompt = tasks[0]!.prompt;

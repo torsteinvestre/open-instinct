@@ -92,6 +92,18 @@ function addDays(day: string, n: number): string {
 }
 
 /**
+ * [sunshine:grounding] This week and next, Monday to Sunday, around `at` in the owner's zone, given to a model with its
+ * dates so "next week" is read, not worked out (2026-10-29: 2 grounding answers in 10 took it as the next 7 days).
+ */
+export function weeksLine(at: Date, timeZone: string): string {
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(at);
+  const monday = addDays(today, -((new Date(`${today}T00:00:00Z`).getUTCDay() + 6) % 7));
+  const name = (day: string) => new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", weekday: "short", day: "numeric", month: "short" }).format(new Date(`${day}T00:00:00Z`));
+  const week = (first: string) => `${name(first)} to ${name(addDays(first, 6))} (${first}/${addDays(first, 6)})`;
+  return `This week: ${week(monday)}. Next week: ${week(addDays(monday, 7))}.`;
+}
+
+/**
  * "2026-11-03" or "2026-11-02/2026-11-08" as first and last day; undefined when not a date. A span past SPAN_DAYS_MAX
  * ends there, with `askedLast` the day it was asked to end.
  */

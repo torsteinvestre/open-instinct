@@ -39,7 +39,7 @@ describe("grounding", () => {
     expect(asked[0]!.system).toBe(groundSystem("Torstein"));
     expect(asked[0]!.schema).toBe(GROUND_SCHEMA); // [sunshine:fixed-form]
     expect(asked[0]!.system).toContain("worked out from now, as YYYY-MM-DD");
-    expect(asked[0]!.user).toContain("Now: Thu, 29 Oct 2026, 11:41 Europe/Oslo (2026-10-29).");
+    expect(asked[0]!.user).toContain("Now: Thu, 29 Oct 2026, 11:41 Europe/Oslo (2026-10-29). This week: Mon 26 Oct to Sun 1 Nov (2026-10-26/2026-11-01). Next week: Mon 2 Nov to Sun 8 Nov (2026-11-02/2026-11-08).");
     expect(asked[0]!.user).toContain("- Lives in Oslo; builds Sunshine.");
     expect(asked[0]!.user).toContain("Torstein: [Wed 28 Oct 2026, 10:38 Europe/Oslo, UTC+01:00] Does ripple want banks to use xrp\nAssistant: Both, but they do different jobs.");
     expect(asked[0]!.user).toMatch(/Torstein's new message: Anything happening next week for me$/);

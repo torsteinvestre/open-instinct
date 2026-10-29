@@ -11,7 +11,7 @@ import { MemoryStore } from "../src/memory.js";
 import { PolicyEngine, defaultPolicy } from "../src/policy.js";
 import { coreTools } from "../src/core-tools.js";
 import { A2AStore } from "../src/a2a-state.js";
-import { A2A_TOPIC_CHARS, AgentRuntime, FOLD_HIGH_MESSAGES, FOLD_LOW_CHARS, FOLD_LOW_MESSAGES, InboundUncertainError, PROMPT_CACHE_MS, PRUNED_RESULT, SESSION_KEEP_MESSAGES, cacheLapsed, foldInSteps, hashArgs, pruneToolResults, readSession, restoreMessages, runtimeKey, stableJson, type Outbox, type RuntimeDeps } from "../src/runtime.js";
+import { A2A_TOPIC_CHARS, AgentRuntime, FOLD_HIGH_MESSAGES, FOLD_LOW_CHARS, FOLD_LOW_MESSAGES, InboundUncertainError, PROMPT_CACHE_MS, PRUNED_RESULT, SESSION_KEEP_MESSAGES, cacheLapsed, foldInSteps, hashArgs, pruneToolResults, readSession, restoreMessages, runtimeKey, stableJson, type GroundInput, type Outbox, type RuntimeDeps } from "../src/runtime.js";
 import { Scheduler } from "../src/scheduler.js";
 import { HistoryArchive } from "../src/history.js"; // [sunshine:history]
 import { ToolRegistry, defineTool, textResult, type RegisteredTool } from "../src/tools.js";
@@ -956,6 +956,60 @@ describe("AgentRuntime.handleInbound", () => {
       none.faux.setResponses([textTurn("Hi!")]);
       await ownerSays(none, "Hej!", "m1");
       expect(userTexts(none)).toHaveLength(1);
+    });
+  });
+
+  // [sunshine:grounding] What is known and looked up goes with the owner's message to the model, for that run only.
+  describe("grounding", () => {
+    const THREAD = "imessage:c1";
+    type Request = { messages: AgentMessage[] };
+    function groundHarness(groundMessage?: RuntimeDeps["groundMessage"]) {
+      const requests: Request[] = [];
+      const streamFn: StreamFn = (model, context, options) => {
+        requests.push(JSON.parse(JSON.stringify(context)) as Request);
+        return (streamSimple as StreamFn)(model, context, options);
+      };
+      return { h: harness({ deps: { streamFn, ...(groundMessage ? { groundMessage } : {}) } }), requests };
+    }
+    const ownerSays = (h: Harness, text: string, id: string) => h.runtime.handleInbound(inbound({ channel: "imessage", from: OWNER_PHONE, conversationKey: THREAD, text, id }));
+    const lastUser = (r: Request) => JSON.stringify(r.messages.filter((m) => m.role === "user").at(-1)!.content);
+    const GATHERED = "[Not a message from Maria: gathered]\nFounders Story, Tue 3 Nov 18:00";
+
+    it("adds what was gathered after the owner's message for that run's model calls, and never saves it", async () => {
+      const inputs: GroundInput[] = [];
+      const { h, requests } = groundHarness(async (input) => (inputs.push(input), /week/.test(input.text) ? GATHERED : undefined));
+      h.faux.setResponses([textTurn("Hi!"), toolTurn("echo", { text: "x" }), textTurn("Founders Story on Tuesday."), textTurn("Sure.")]);
+      await ownerSays(h, "hello", "m1");
+      await ownerSays(h, "anything next week?", "m2");
+      await ownerSays(h, "thanks", "m3");
+      expect(requests).toHaveLength(4);
+      expect(lastUser(requests[0]!)).not.toContain("gathered");
+      // Both calls of the second run (before and after its tool step) carry it after the owner's own words.
+      for (const r of requests.slice(1, 3)) expect(lastUser(r)).toMatch(/anything next week\?.*Founders Story, Tue 3 Nov 18:00/);
+      // The next run does not, not even on the earlier message; the kept thread never had it.
+      expect(JSON.stringify(requests[3]!.messages)).not.toContain("Founders Story, Tue 3 Nov");
+      expect(JSON.stringify(readSession(`${h.deps.state.path("sessions")}/${encodeURIComponent(THREAD)}.jsonl`))).not.toContain("Founders Story, Tue 3 Nov");
+      // The step got the owner's text and the texts before it, oldest first.
+      expect(inputs.map((i) => i.text)).toEqual(["hello", "anything next week?", "thanks"]);
+      expect(inputs[1]!.conversationKey).toBe(THREAD);
+      expect(inputs[1]!.recent.map((r) => r.who)).toEqual(["owner", "agent"]);
+      expect(inputs[1]!.recent[0]!.text).toMatch(/hello$/);
+      expect(inputs[1]!.recent[1]!.text).toBe("Hi!");
+    });
+
+    it("grounds only the owner's own messages, and a failing step does not stop the reply", async () => {
+      let calls = 0;
+      const { h } = groundHarness(async () => {
+        calls++;
+        throw new Error("haiku down");
+      });
+      h.faux.setResponses([textTurn("Hi Maria!"), textTurn("Hello, I'm Maria's assistant.")]);
+      expect((await ownerSays(h, "hello", "m1")).reply).toBe("Hi Maria!");
+      expect(calls).toBe(1);
+      expect(h.deps.audit.read({ limit: 50 }).some((e) => e.kind === "error" && JSON.stringify(e.detail).includes("haiku down"))).toBe(true);
+      // Someone else's message is not grounded in the owner's life.
+      await h.runtime.handleInbound(inbound({ channel: "imessage", from: "+15550001111", conversationKey: "imessage:stranger", text: "who are you?", id: "s1" }));
+      expect(calls).toBe(1);
     });
   });
 

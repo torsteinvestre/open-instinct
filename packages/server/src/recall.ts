@@ -42,8 +42,11 @@ export interface RecallDeps {
   minNear?: number;
 }
 
-/** Lines about `queries`, best first, without the item `exclude`; undefined when nothing related is kept. */
-export type Recall = (queries: string[], opts?: { exclude?: string }) => Promise<string | undefined>;
+/**
+ * Lines about `queries`, best first, without the item `exclude` and ([sunshine:grounding]) without chat stretches from
+ * `chatsBefore` on (they are in the thread already); undefined when nothing related is kept.
+ */
+export type Recall = (queries: string[], opts?: { exclude?: string; chatsBefore?: number }) => Promise<string | undefined>;
 
 function clip(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
@@ -75,7 +78,7 @@ export function createRecall(deps: RecallDeps): Recall {
   return async (queries, opts = {}) => {
     const asked = [...new Set(queries.map((q) => q.trim()).filter(Boolean))].slice(0, QUERIES);
     if (asked.length === 0) return undefined;
-    const other = (p: Piece) => !(p.kind === "item" && p.item.id === opts.exclude);
+    const other = (p: Piece) => !(p.kind === "item" && p.item.id === opts.exclude) && !(p.kind === "chat" && opts.chatsBefore !== undefined && p.ts >= opts.chatsBefore);
     const best = new Map<string, { piece: Piece; score: number }>();
     let wordsOnly = false;
     for (const q of asked) {

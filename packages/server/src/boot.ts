@@ -53,6 +53,7 @@ import { DEFAULT_MEMORY_MODEL, MEMORY_GATE, MEMORY_REASONING, createMemoryPass }
 import { DEFAULT_INTAKE_MODEL, INTAKE_REASONING, createIntake, proactivityTool, readProactivity, type Intake } from "./intake.js"; // [sunshine:intake] [sunshine:in-the-flow] proactivity
 import { createRecall } from "./recall.js"; // [sunshine:in-the-flow]
 import { composioSources, createLookUp, type LiveSources } from "./lookup.js"; // [sunshine:in-the-flow]
+import { DEFAULT_GROUND_MODEL, createGround } from "./ground.js"; // [sunshine:grounding]
 import { createLocalEmbedder } from "./embedder.js"; // [sunshine:meaning-search]
 import { MAX_SENT_RECORDING_BYTES, RECORDINGS_GATE, createRecordings, type Recordings } from "./recordings.js"; // [sunshine:recordings]
 import { ChatAwareOutbox, ConsoleOutbox, type ChatReplyBuffer } from "./console-outbox.js";
@@ -552,6 +553,23 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
     return actions.length > 0 ? [appsForOthersGuidance(config.owner.name, actions)] : [];
   };
 
+  // [sunshine:in-the-flow] What is kept, brought to what is new (with meaning search), and the email and calendar read
+  // by code (Composio's, or a scenario's stand-ins): for each recording's hand-off and ([sunshine:grounding]) each of
+  // the owner's messages.
+  const recall = meaning ? createRecall({ meaning, config, audit }) : undefined;
+  const live = opts.liveSources ?? (apps ? composioSources(apps, () => config.owner.timezone || "UTC") : undefined);
+  const lookUp = live ? createLookUp({ sources: live, config, audit }) : undefined;
+  // [sunshine:grounding] GROUND_MODEL picks the grounding step's model; "off" (or no key for it) grounds nothing.
+  const groundMessage = await safely(log, "grounding", () => {
+    const spec = stepModelSpec(env.GROUND_MODEL, DEFAULT_GROUND_MODEL);
+    const m = spec ? resolveWatcherModel(spec, env) : undefined;
+    const apiKey = m ? apiKeyFor(m.provider, env) : undefined;
+    log(`grounding: ${m && apiKey ? `by ${spec}` : "off"}`);
+    // A reply waits on it: after an idle spell the search model takes a few seconds to load; past 8 s word search answers.
+    const groundRecall = meaning ? createRecall({ meaning, config, audit, waitMs: 8_000 }) : undefined;
+    return m && apiKey ? createGround({ call: modelCall(m, { reasoning: "low", apiKey }), config, memory, audit, ...(groundRecall ? { recall: groundRecall } : {}), ...(lookUp ? { lookUp } : {}) }) : undefined;
+  });
+
   // eslint-disable-next-line prefer-const
   let runtime: AgentRuntime;
   runtime = new AgentRuntime({
@@ -596,6 +614,7 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
     },
     // [sunshine:onboarding] The welcome guide goes with a new owner's very first text.
     firstContactGuide: () => skillGuide(skillCatalog.list(), "onboarding"),
+    ...(groundMessage ? { groundMessage } : {}), // [sunshine:grounding]
     ...(history ? { history } : {}), // [sunshine:history]
     // [sunshine:prune] Pi keeps the prompt cache an hour with PI_CACHE_RETENTION=long; pruning waits that long then.
     ...(env.PI_CACHE_RETENTION?.trim() === "long" ? { promptCacheMs: 60 * 60 * 1000 } : {}),
@@ -613,8 +632,6 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
         const apiKey = m ? apiKeyFor(m.provider, env) : undefined;
         const call = m && apiKey ? modelCall(m, { reasoning: INTAKE_REASONING, apiKey }) : undefined;
         log(`intake: ${call ? `summaries by ${spec}` : "items kept without summaries"}`);
-        // [sunshine:in-the-flow] Email and calendar read by code for what each summary says is unclear.
-        const live = opts.liveSources ?? (apps ? composioSources(apps, () => config.owner.timezone || "UTC") : undefined);
         return createIntake({
           items,
           memory,
@@ -624,10 +641,10 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
           runTask: (task) => runtime.runSystemTask(task),
           // [sunshine:in-the-flow] What is already known comes with each hand-off (with meaning search), the owner's
           // setting decides where doing ends, and email and calendar are loaded for looking things up before asking.
-          ...(meaning ? { recall: createRecall({ meaning, config, audit }) } : {}),
+          ...(recall ? { recall } : {}),
           proactivity: () => readProactivity(state),
           ...(apps || opts.extraTools?.some((t) => t.spec.meta.group === "apps") ? { load: ["apps"] } : {}),
-          ...(live ? { lookUp: createLookUp({ sources: live, config, audit }) } : {}),
+          ...(lookUp ? { lookUp } : {}),
         });
       })
     : undefined;

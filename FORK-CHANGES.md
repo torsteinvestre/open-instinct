@@ -824,6 +824,55 @@ in the "nowhere" case (as before; small and undoable, allowed by "prepare and of
 tests and the three scenarios, and the tagged lines in `intake.ts`, `boot.ts`, apps `composio.ts` and `index.ts`, core
 `items.ts`, `meaning.ts` and `runtime.ts`.
 
+### `[sunshine:grounding]`: every message from the owner is grounded before the model answers it
+
+**Why** (2026-10-29). Torstein texted "Anything happening next week for me"; Sunshine read his calendar (empty) and asked
+him for the details of a 3 Nov event it knew of, though they were in his email. Torstein: "this is a very simple task
+... we can't just patch a fix on top"; "looking at everything and then acting is such a core thing". Replayed on a
+local copy of his thread (`scenarios/look-before-ask.mjs`, `[sunshine:look-before-ask]`), it never searched email: 0/3
+as live, 0/3 with thinking at "high" (Sonnet 5.5 judged the texts too simple to think about; no thinking blocks at any
+level), 0/3 without its two old questions in the thread (it then forgot the event and answered from the calendar
+alone). An instruction would still leave looking to the model's diligence. Assistants that know a person's work
+ground in code: Microsoft 365 Copilot grounds each prompt in the person's mail, calendar and files; Glean answers from
+its index; Town feeds its wiki into every session. Design: `~/sunshine-ops/DESIGN-memory-in-the-flow.md` (Part 1, job 4).
+
+**What the fork adds**
+- core `runtime.ts`: `RuntimeDeps.groundMessage(input)`, called for the owner's own messages (imessage, sms, chat;
+  not groups, not delegated results) after the typing dots start; what it returns goes after the owner's text in that
+  run's model calls only (`transformContext`, `withGrounding`), never saved, so the thread, its archive and later recall
+  stay the owner's words. It gets the text and the latest 8 texts before it (notes and tool steps left out, each
+  clipped to 500 characters). A failure is logged and the reply goes on; so it does after 20 s.
+- `packages/server/src/ground.ts`: recall on the message first (`recall.ts`, chats of the last day left out: they are
+  in the thread), then a small model (Claude Haiku 5.5, `GROUND_MODEL`, "off" grounds nothing) sees now, the owner's
+  notes, that recall and the latest texts, and answers `needed`, `about`, `days`, `searches` (criteria: what it
+  concerns including what it implies; dates worked out from now, a week Monday to Sunday; email searches, and for
+  anything known only in part a search for the rest by its name or date; Gmail searches by an email's words and send
+  date, not an event's date). Nothing needed (a greeting, a general question): nothing handed over. Otherwise recall on
+  the message and what it concerns, and the look-up (`lookup.ts`: calendar for the days, email searches), side by side;
+  handed over as a note "[Not a message from <owner>: what Sunshine's own code gathered ...]" with the same blocks as a
+  recording's hand-off. An unreadable answer is asked for once more; JSON in a code fence or bare is read too; an
+  unreadable one is logged with how it began.
+- `recall.ts`: `chatsBefore`. `boot.ts`: recall and the look-up built once for the hand-offs and the grounding; the
+  grounding's recall waits 8 s for a cold search model, then word search answers.
+
+**Tested** (free): core `runtime.test.ts` (+2: the grounding in both model calls of a run with a tool step, not in the
+next run, never on disk; the step's input; a failing step does not stop the reply; strangers not grounded),
+`test/ground.test.ts` (7), `test/recall.test.ts` (+1). All tests (1,482), smoke and typecheck pass.
+Paid (Torstein OK'd each), `look-before-ask.mjs` on the copy of his thread with the stand-in inbox and calendar (the
+Founders Story email found only when a search would match it; grader checked on 5 known answers incl. the live reply):
+first version 1/3 ($0.117): the small model wrote its searches before seeing what was known ("invitation OR booking";
+once "after:2026/10/29", a send-date filter) and the agent then said "I found no invites in your email". Known-first
+version 3/3 ($0.118): "Yes, one thing: Founders Story Oslo, Tuesday 3 Nov, 18:00-21:00 at Startup Lab ... It's not in
+your calendar. Want me to add it?"; without the old questions 2/3 ($0.079), the miss an unreadable answer from the
+small model (1 in 10 calls so far; now asked again). The step: about $0.0004 and 3-6 s a message.
+
+**Open.** Everyday texts (greetings, general questions): nothing gathered, time added. Live: the search model loads
+more often (released after 10 idle minutes), up to 8 s more after a gap. The records of events with dates (design step
+2) and email flowing in (step 3) are still to come; this reads email live.
+
+**To remove.** Revert the commits (`git log --grep "sunshine:grounding"`), or delete `ground.ts`, its test and
+`scenarios/look-before-ask.mjs`, and the tagged lines in core `runtime.ts`, `recall.ts` and `boot.ts`.
+
 ### `[sunshine:intake]`: what reaches the owner from elsewhere is kept, summarized once and acted on
 
 **Why** (2026-10-24). Sunshine should know what its person knows without being told (NOTES "PRINCIPLE: the one AI

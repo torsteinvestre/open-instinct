@@ -34,6 +34,15 @@ function setup(hits: Record<string, Array<{ piece: Piece; score: number; near?: 
 }
 
 describe("recall", () => {
+  it("[sunshine:grounding] leaves out chat stretches from chatsBefore on (they are in the thread already)", async () => {
+    const older = { ...chat("old", "Torstein: the event is on the third of November"), ts: T - 3 * 86_400_000 };
+    const recent = { ...chat("new", "Torstein: anything next week?"), ts: T };
+    const { recall } = setup({ "events next week": [{ piece: recent, score: 0.9, near: 0.9 }, { piece: older, score: 0.8, near: 0.8 }] });
+    const text = await recall(["events next week"], { chatsBefore: T - 86_400_000 });
+    expect(text).toContain("third of November");
+    expect(text).not.toContain("anything next week?");
+  });
+
   it("brings the closest pieces for each subject, best first, one entry per item, without the new item or weak matches", async () => {
     const { recall } = setup({
       "Make the presentation for my group": [

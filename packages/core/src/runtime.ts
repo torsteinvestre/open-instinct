@@ -116,6 +116,19 @@ export interface RuntimeDeps {
    * Unset: every tool is always there.
    */
   toolLoader?: { guidance?: Partial<Record<LoadableGroup, string>> };
+  /**
+   * [sunshine:grounding] What Sunshine already knows and what the owner's sources show for one of the owner's own
+   * messages, gathered by code before the model answers it (server ground.ts). It goes with that run only, after the
+   * owner's text, and is never saved in the thread. Unset: nothing is gathered.
+   */
+  groundMessage?: (input: GroundInput) => Promise<string | undefined>;
+}
+
+/** [sunshine:grounding] What the grounding step gets: the owner's new text and the latest texts before it. */
+export interface GroundInput {
+  text: string;
+  recent: Array<{ who: "owner" | "agent"; text: string }>;
+  conversationKey: string;
 }
 
 export interface HandleResult {
@@ -182,6 +195,16 @@ const PENDING_REPLIES_FILE = "pending-replies.json";
 const DELIVERABLE: ReadonlySet<Channel> = new Set(["imessage", "sms", "email", "a2a"]);
 /** Channels where the sender's identity is bound to the carrier or the process, so an owner reply can settle an approval. */
 const APPROVAL_CHANNELS: ReadonlySet<Channel> = new Set(["imessage", "sms", "chat"]);
+/** [sunshine:grounding] The owner's own conversation channels, where each message is grounded first. */
+const GROUNDED: ReadonlySet<Channel> = new Set(["imessage", "sms", "chat"]);
+/**
+ * [sunshine:grounding] A reply waits for the grounding; past this it goes on without it. Room for a cold search model
+ * (8 s, then word search), the small model (2-4 s seen) and the look-ups (about 1 s each, side by side).
+ */
+const GROUND_WAIT_MS = 20_000;
+/** [sunshine:grounding] Texts before the new one that the grounding step sees, each clipped (what the message refers to). */
+const GROUND_RECENT = 8;
+const GROUND_RECENT_MAX = 500;
 const CHANNELS: ReadonlySet<string> = new Set(["imessage", "sms", "email", "a2a", "chat", "scheduled", "system"]);
 const REPLY_TOOL = "reply_instinct";
 const PROCESSING_FILE = "processing-events.json";
@@ -280,6 +303,11 @@ export class Conversation {
   toolsChanged = false;
   /** [sunshine:in-the-flow] Loads the groups the next run needs from its start; returns what loading says. */
   loadBeforeRun: (() => string) | undefined;
+  /**
+   * [sunshine:grounding] For the current run only: what was gathered for the owner's message, added after it in what
+   * the model gets (transformContext), never saved, so the thread, its archive and later recall stay the owner's words.
+   */
+  grounding: string | undefined;
   /** [sunshine:delivery-mirror] Copies that arrived while a run was going; added when it ends. */
   private pendingNotes: AgentMessage[] = [];
   private readonly sessionFile: string;
@@ -588,7 +616,7 @@ export class AgentRuntime {
       streamFn: this.deps.streamFn ?? (streamSimple as StreamFn),
       getApiKey: this.deps.getApiKey,
       toolExecution: "sequential",
-      transformContext: async (messages) => (stable ? foldInSteps(messages, this.now(), false) : trimContext(messages, this.now())),
+      transformContext: async (messages) => withGrounding(stable ? foldInSteps(messages, this.now(), false) : trimContext(messages, this.now()), conv.grounding), // [sunshine:grounding]
       beforeToolCall: async ({ toolCall, args }) => this.guard(conv, toolCall.name, args),
       afterToolCall: async ({ toolCall, args, isError, result }) => {
         this.recordToolCall(conv, toolCall.name, args, isError, result?.content);
@@ -849,8 +877,13 @@ export class AgentRuntime {
     // Only a run the owner started with their own words may settle an approval through a tool.
     conv.ownerTurn = principal.kind === "owner" && !group && !msg.meta?.delegatedResult && APPROVAL_CHANNELS.has(msg.channel);
     const ack = this.startSlowReplyAck(msg, principal, group || arrival.queued || Boolean(msg.meta?.delegatedResult));
+    // [sunshine:grounding] What is known and what the owner's email and calendar show, gathered before the model
+    // answers (2026-10-29: "anything happening next week?" was answered from the calendar alone, and the details of an
+    // event it knew about were asked for although they were in his email).
+    if (principal.kind === "owner" && !group && !msg.meta?.delegatedResult && GROUNDED.has(conv.channel)) conv.grounding = await this.groundFor(conv, text);
     const run = conv.run(prompt).finally(() => {
       conv.ownerTurn = false;
+      conv.grounding = undefined; // [sunshine:grounding]
     }).then(
       (reply) => ({ ok: true as const, reply }),
       (error: unknown) => ({ ok: false as const, error }),
@@ -1431,6 +1464,31 @@ export class AgentRuntime {
     } catch (error) {
       this.auditError(conversationKey, principal, error);
       throw error;
+    }
+  }
+
+  /**
+   * [sunshine:grounding] The grounding for one of the owner's messages. It never stops the reply: a failure is logged
+   * and the reply goes on without it, as it does past GROUND_WAIT_MS.
+   */
+  private async groundFor(conv: Conversation, text: string): Promise<string | undefined> {
+    const ground = this.deps.groundMessage;
+    if (!ground) return undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<undefined>((resolve) => {
+      timer = setTimeout(() => {
+        this.deps.audit.append({ kind: "error", conversationKey: conv.key, principal: conv.principal.id, detail: { grounding: `no answer within ${GROUND_WAIT_MS} ms` } });
+        resolve(undefined);
+      }, GROUND_WAIT_MS);
+    });
+    try {
+      const work = ground({ text, recent: recentTexts(conv.agent.state.messages), conversationKey: conv.key }).catch((error: unknown) => {
+        this.auditError(conv.key, conv.principal, error);
+        return undefined;
+      });
+      return await Promise.race([work, late]);
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -2025,6 +2083,44 @@ function compactStamp(text: string): string {
 
 function userMessage(text: string, now: Date): AgentMessage {
   return { role: "user", content: [{ type: "text", text }], timestamp: now.getTime() };
+}
+
+/** A message's text parts, joined. */
+function textOf(m: AgentMessage): string {
+  const content = (m as { content?: unknown }).content;
+  if (typeof content === "string") return content;
+  return Array.isArray(content) ? content.map((c: { type?: string; text?: string }) => (c.type === "text" ? c.text ?? "" : "")).join("") : "";
+}
+
+/**
+ * [sunshine:grounding] The owner's and Sunshine's latest texts, oldest first: what a new message may refer to ("that
+ * event", "and next week?"). Notes ("[Not a message from ...]"), tool steps and empty turns are left out.
+ */
+function recentTexts(messages: AgentMessage[]): GroundInput["recent"] {
+  const out: GroundInput["recent"] = [];
+  for (let i = messages.length - 1; i >= 0 && out.length < GROUND_RECENT; i--) {
+    const m = messages[i]!;
+    if (m.role !== "user" && m.role !== "assistant") continue;
+    const text = textOf(m).trim();
+    if (!text || /^(\[[^\]\n]*\]\n)?\[Not a message from /.test(text)) continue;
+    out.unshift({ who: m.role === "user" ? "owner" : "agent", text: text.length <= GROUND_RECENT_MAX ? text : `${text.slice(0, GROUND_RECENT_MAX - 1)}…` });
+  }
+  return out;
+}
+
+/**
+ * [sunshine:grounding] What the model gets for this run: the grounding added after the latest user message (the run's
+ * prompt; tool results are not user messages), on a copy. The kept history is not touched.
+ */
+function withGrounding(messages: AgentMessage[], grounding: string | undefined): AgentMessage[] {
+  if (!grounding) return messages;
+  let i = messages.length - 1;
+  while (i >= 0 && messages[i]!.role !== "user") i--;
+  if (i < 0) return messages;
+  const m = messages[i] as AgentMessage & { content: unknown };
+  const parts = typeof m.content === "string" ? [{ type: "text", text: m.content }] : Array.isArray(m.content) ? m.content : [];
+  const grounded = { ...m, content: [...parts, { type: "text", text: `\n\n${grounding}` }] } as AgentMessage;
+  return [...messages.slice(0, i), grounded, ...messages.slice(i + 1)];
 }
 
 /** [sunshine:delivery-mirror] A copy of a text Sunshine sent, as its own message in the owner's thread. */

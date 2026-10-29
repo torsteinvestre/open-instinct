@@ -979,6 +979,10 @@ and machine talk, checked first on 7 known answers incl. the two real replies): 
 voice unknown got "Otherwise they show up as "Speaker 1""; after, "I can pick out your voice in future recordings",
 "I'm learning your voice now. I'll tell you when it's done", "I can now tell you apart from other voices in recordings
 you send me": 0 flags on all 3 ($0.078 for both runs; one run per case).
+2026-10-29 (d3428c1, not yet deployed): live, every recording got "Got it, transcribing now. I'll send the summary
+when it's done", echoing the tool result's "its summary comes to you then": a promised summary (not the product) that
+often never came. The result now says what happens: what was said comes to the agent to act on, and the owner hears
+only if something needs them.
 
 **Open.** Other people's names: only the owner's voice is recognised; connected people's prints (connect = consent)
 come with agent-to-agent. Voice messages to Sunshine (one voice, the owner's) go the same way as a meeting for now.

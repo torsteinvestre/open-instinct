@@ -48,13 +48,17 @@ export type LookUp = (ask: LookUpAsk) => Promise<string | undefined>;
 
 /**
  * Emails shown per search. Gmail lists the newest first, not the best match first; on Torstein's inbox (2026-10-29) the
- * answer was the only hit and no search had more than 4. A bound on size, not a target: the agent can search further.
+ * answer came first, and the rest were old newsletters. A bound on size, not a target: one more is asked for, so a cut
+ * is said, and the agent can search further.
  */
 export const EMAILS_PER_SEARCH = 5;
-/** Events shown per day or span: a full working week of meetings. */
-const EVENTS_PER_SPAN = 25;
-/** A span longer than this ("this month") is cut to its first two weeks; the agent reads the rest with its tools. */
-export const SPAN_DAYS_MAX = 14;
+/** Events shown per day or span: a full working week of meetings; a cut is said. */
+export const EVENTS_PER_SPAN = 25;
+/**
+ * A span longer than this is cut, and the cut is said. A month: "the concert in November" was asked as the whole month
+ * (2026-10-29, both runs); a cut at two weeks, unsaid, could have shown the agent half the month as all of it.
+ */
+export const SPAN_DAYS_MAX = 31;
 const PREVIEW_MAX = 300;
 const FIELD_MAX = 140;
 /** Everything shown, at most: about what recall shows (six pieces of four 300-character lines). */
@@ -87,15 +91,30 @@ function addDays(day: string, n: number): string {
   return new Date(Date.parse(`${day}T00:00:00Z`) + n * DAY_MS).toISOString().slice(0, 10);
 }
 
-/** "2026-11-03" or "2026-11-02/2026-11-08" as first and last day (the last at most SPAN_DAYS_MAX on); undefined when not a date. */
-export function parseSpan(s: string): { first: string; last: string } | undefined {
+/**
+ * "2026-11-03" or "2026-11-02/2026-11-08" as first and last day; undefined when not a date. A span past SPAN_DAYS_MAX
+ * ends there, with `askedLast` the day it was asked to end.
+ */
+export function parseSpan(s: string): { first: string; last: string; askedLast?: string } | undefined {
   const [a, b] = s.trim().split("/");
   const first = realDay(a?.trim());
   if (!first) return undefined;
   const given = b === undefined ? first : realDay(b.trim());
   if (!given || given < first) return undefined;
   const cap = addDays(first, SPAN_DAYS_MAX - 1);
-  return { first, last: given > cap ? cap : given };
+  return given > cap ? { first, last: cap, askedLast: given } : { first, last: given };
+}
+
+/** Text as a person reads it: HTML entities decoded, invisible characters (email preheader padding and the like) gone. */
+export function plainText(s: string): string {
+  const named: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
+  return s
+    .replace(/&(?:#(\d{1,7})|#x([0-9a-f]{1,6})|([a-z]+));/gi, (all, dec: string | undefined, hex: string | undefined, name: string | undefined) => {
+      const code = dec ? Number(dec) : hex ? parseInt(hex, 16) : undefined;
+      if (code !== undefined) return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : all;
+      return named[name!.toLowerCase()] ?? all;
+    })
+    .replace(/[­͏؜ᅟᅠ឴឵᠋-᠏​-‏‪-‮⁠-⁤⁪-⁯ㅤ﻿ﾠ]/g, "");
 }
 
 /** "+01:00" for `tz` at the instant `ms`. */
@@ -121,12 +140,15 @@ export function createLookUp(deps: { sources: LiveSources; config: InstinctConfi
   const clock = (ms: number) => new Intl.DateTimeFormat("en-GB", { timeZone: tz(), hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(ms));
   const timed = (s: string | undefined) => (s && s.includes("T") && !Number.isNaN(Date.parse(s)) ? Date.parse(s) : undefined);
 
+  const dayLabel = (e: EventHit): string => {
+    const at = timed(e.start);
+    return at !== undefined ? dateOf(at) : realDay(e.start) ? dayName(e.start) : e.start;
+  };
   const eventLine = (e: EventHit, withDay: boolean): string => {
     const at = timed(e.start);
     const end = timed(e.end);
-    const day = at !== undefined ? dateOf(at) : realDay(e.start) ? dayName(e.start) : e.start;
     const when = at !== undefined ? `${clock(at)}${end !== undefined ? `-${clock(end)}` : ""}` : "all day";
-    return `- ${withDay ? `${day} ` : ""}${when} ${clip(e.title || "(no title)", FIELD_MAX)}${e.location ? ` (${clip(e.location, FIELD_MAX)})` : ""}`;
+    return `- ${withDay ? `${dayLabel(e)} ` : ""}${when} ${clip(e.title || "(no title)", FIELD_MAX)}${e.location ? ` (${clip(e.location, FIELD_MAX)})` : ""}`;
   };
 
   return async (ask) => {
@@ -138,29 +160,36 @@ export function createLookUp(deps: { sources: LiveSources; config: InstinctConfi
     const email = async (query: string): Promise<string> => {
       const label = `Email, searched for ${query}`;
       try {
-        const hits = (await within(deps.sources.searchEmail!(query, EMAILS_PER_SEARCH), wait)).slice(0, EMAILS_PER_SEARCH);
+        // One more than is shown, so a cut is known and said.
+        const got = await within(deps.sources.searchEmail!(query, EMAILS_PER_SEARCH + 1), wait);
+        const hits = got.slice(0, EMAILS_PER_SEARCH);
         counts.emails += hits.length;
         if (hits.length === 0) return `${label}: nothing found.`;
         const lines = hits.map((h) => `- ${h.at !== undefined ? `${dateOf(h.at)}, ` : ""}from ${clip(h.from || "(unknown sender)", FIELD_MAX)}: ${clip(h.subject || "(no subject)", FIELD_MAX)}${h.preview.trim() ? ` | ${clip(h.preview, PREVIEW_MAX)}` : ""}`);
-        return [`${label}:`, ...lines].join("\n");
+        const more = got.length > EMAILS_PER_SEARCH ? [`(the newest ${EMAILS_PER_SEARCH} shown; older matches not looked at)`] : [];
+        return [`${label}:`, ...lines, ...more].join("\n");
       } catch {
         counts.failed += 1;
         return `${label}: the search did not work just now (not looked at).`;
       }
     };
 
-    const calendar = async (span: { first: string; last: string }): Promise<string> => {
+    const calendar = async (span: { first: string; last: string; askedLast?: string }): Promise<string> => {
       const one = span.first === span.last;
-      const label = `Calendar, ${dayName(span.first)}${one ? "" : ` to ${dayName(span.last)}`}`;
+      const cut = span.askedLast ? ` (asked to ${dayName(span.askedLast)}; the days after not looked at)` : "";
+      const label = `Calendar, ${dayName(span.first)}${one ? "" : ` to ${dayName(span.last)}`}${cut}`;
       try {
         const from = midnightIn(span.first, tz());
         const to = midnightIn(addDays(span.last, 1), tz());
-        const hits = (await within(deps.sources.events!(from, to, EVENTS_PER_SPAN), wait)).slice(0, EVENTS_PER_SPAN);
+        // One more than is shown, so a cut is known and said.
+        const got = await within(deps.sources.events!(from, to, EVENTS_PER_SPAN + 1), wait);
+        const hits = got.slice(0, EVENTS_PER_SPAN);
         counts.events += hits.length;
         if (hits.length === 0) return `${label}: nothing in the calendar.`;
         // Over a span each event names its day; an event that began the day before still shows on its own day.
         const multi = !one || hits.some((h) => timed(h.start) !== undefined && dayOf(timed(h.start)!) !== span.first);
-        return [`${label}:`, ...hits.map((h) => eventLine(h, multi))].join("\n");
+        const more = got.length > EVENTS_PER_SPAN ? [`(the first ${EVENTS_PER_SPAN} shown; later events${multi ? ` from ${dayLabel(hits[hits.length - 1]!)} on` : ""} not looked at)`] : [];
+        return [`${label}:`, ...hits.map((h) => eventLine(h, multi)), ...more].join("\n");
       } catch {
         counts.failed += 1;
         return `${label}: the calendar could not be read just now (not looked at).`;
@@ -218,9 +247,10 @@ export function composioSources(apps: AppsRunner, timezone: () => string): LiveS
             // confirmation and his ticket order were both filed there (2026-10-29).
             const data = await run(apps, "GMAIL_FETCH_EMAILS", { query: `(${query}) -category:promotions`, max_results: max, include_payload: false, verbose: false });
             const messages = Array.isArray(data.messages) ? data.messages.map(asRecord) : [];
+            // Gmail's snippets come HTML-encoded ("&#39;") and newsletters pad them with invisible characters (2026-10-29).
             return messages.map((m): EmailHit => {
               const at = Date.parse(text(m.messageTimestamp));
-              return { ...(Number.isNaN(at) ? {} : { at }), from: text(m.sender), subject: text(m.subject), preview: previewOf(m) };
+              return { ...(Number.isNaN(at) ? {} : { at }), from: plainText(text(m.sender)), subject: plainText(text(m.subject)), preview: plainText(previewOf(m)) };
             });
           },
         }

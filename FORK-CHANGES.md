@@ -778,9 +778,11 @@ right email alone, about 1 s a search; his event confirmation and ticket order a
 - `packages/server/src/lookup.ts`: code reads the live sources before the hand-off. The summary step writes
   `searches` (for the points still unclear, in Gmail's search words) and `days` (YYYY-MM-DD or a span, worked out from
   the record's date, now given with its year); each search runs on the email plug (newest 5 shown, promotions left out,
-  Updates kept) and each day or span (cut at 14 days) on the calendar plug, from the owner's midnight to the next. Shown
-  under "What ... email and calendar show for it, looked up just now", as untrusted data, with "nothing found" told apart
-  from "not looked at" (a failed or slow source: 30 s); at most 8,000 characters. The plugs are Composio's
+  Updates kept; HTML entities decoded, invisible padding dropped) and each day or span (up to 31 days: "in November"
+  is asked as the whole month) on the calendar plug, from the owner's midnight to the next. Shown under "What ... email
+  and calendar show for it, looked up just now", as untrusted data, with "nothing found" told apart from "not looked
+  at" (a failed or slow source: 30 s), and every cut said (one more email or event is asked for than is shown; a longer
+  span names the day it was asked to end); at most 8,000 characters. The plugs are Composio's
   GMAIL_FETCH_EMAILS and GOOGLECALENDAR_EVENTS_LIST, each only when its toolkit is in the agent's list; another app is
   one more plug. Searches and days are for that hand-off only, not kept with the item (other systems' state is read
   live, never kept as memory). No extra model call; a failed look-up never stops the hand-off.
@@ -791,15 +793,22 @@ right email alone, about 1 s a search; his event confirmation and ticket order a
 - Not done: leaving "(note)" lines out of recall (seen once as noise; notes may be copies of texts Sunshine sent, so
   watch list until checked).
 
-**Tested** (free): `test/lookup.test.ts` (10: each search and day shown, nothing found vs not looked at, slow source,
-spans and all-day events, the owner's midnights across daylight saving, size bounds, the Composio plugs' requests and
-answers, only connected toolkits), `test/intake.test.ts` (+2: the summary asked for searches and days with the year,
+**Tested** (free): `test/lookup.test.ts` (12: each search and day shown, nothing found vs not looked at, slow source,
+spans and all-day events, cuts said, the owner's midnights across daylight saving, size bounds, entities and invisible
+characters, the Composio plugs' requests and answers, only connected toolkits), `test/intake.test.ts` (+2: the summary asked for searches and days with the year,
 the hand-off section and wording, nothing looked up when nothing asked, a failed look-up does not stop the hand-off),
-apps `composio.test.ts` (+2). All tests (1,470), smoke and typecheck pass. `scenarios/in-the-flow.mjs`: the stand-in
+apps `composio.test.ts` (+2). All tests (1,472), smoke and typecheck pass. `scenarios/in-the-flow.mjs`: the stand-in
 inbox now goes through the look-up with Gmail-like matching (checked free on 5 known searches; `LOOKUP=0` leaves it
 out); the stand-in's 3 Nov is now a Tuesday, as in 2026. `scenarios/look-up-real.mjs` (graders checked free on 14
-known answers): the real summary step against his REAL Gmail and calendar (read only), the agent not run; paid runs
-wait for Torstein's OK.
+known answers): the real summary step against his REAL Gmail and calendar (read only), the agent not run.
+Paid, test 1 (Torstein OK'd; 2 runs x 3 cases, $0.027): 6/6. "The event on the third of November" -> a search for the
+date written six ways found the Founders Story guestlist email first, calendar 3 Nov read; "put the J. Cole concert in
+my calendar" -> the Ticketmaster order AND the calendar's J. Cole event on 12 Nov (already there: the 27 Oct
+duplicate offer cannot happen with this); "do I have anything next week?" -> 2-8 Nov read. No calendar-state claim
+in any summary (no before run, so (B) itself is not shown). It showed three things, fixed after it: the month span was
+cut at 14 days without saying so (J. Cole on 12 Nov was inside by luck), the same silent cut at 5 emails and 25
+events, and snippets with HTML entities and invisible padding. Watch: with one real match the date search fills up
+with old newsletters (dated, so the agent can tell).
 
 **To remove.** Revert the commits (`git log --grep "sunshine:in-the-flow"`), or delete `recall.ts`, `lookup.ts`, their
 tests and the three scenarios, and the tagged lines in `intake.ts`, `boot.ts`, apps `composio.ts` and `index.ts`, core

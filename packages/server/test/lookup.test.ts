@@ -6,7 +6,7 @@ import { AuditLog, StateDir, defaultConfig } from "@open-instinct/core";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { EMAILS_PER_SEARCH, composioSources, createLookUp, midnightIn, parseSpan, type AppsRunner, type EmailHit, type EventHit, type LiveSources } from "../src/lookup.js";
+import { EMAILS_PER_SEARCH, EVENTS_PER_SPAN, composioSources, createLookUp, midnightIn, parseSpan, plainText, type AppsRunner, type EmailHit, type EventHit, type LiveSources } from "../src/lookup.js";
 
 const FOUNDERS: EmailHit = { at: Date.parse("2026-10-17T09:12:00Z"), from: "Oslo Startup Lab <hello@oslostartuplab.no>", subject: "You're on the guestlist for Founders Story Oslo", preview: "See you Tuesday 3 November at 18:00, Startup Lab, Gaustadalleen 21." };
 const JCOLE: EventHit = { title: "J. Cole: The Fall-Off Tour", start: "2026-11-12T19:00:00+01:00", end: "2026-11-12T22:00:00+01:00", location: "Unity Arena" };
@@ -40,8 +40,8 @@ describe("look-up", () => {
         "- 19:00-22:00 J. Cole: The Fall-Off Tour (Unity Arena)",
       ].join("\n"),
     );
-    // Each search and day once; the day from the owner's midnight to the next.
-    expect(searched).toEqual([{ query: '"3 November" OR "Nov 3"', max: EMAILS_PER_SEARCH }, { query: "J. Cole", max: EMAILS_PER_SEARCH }]);
+    // Each search and day once (one email more than is shown, to know of a cut); the day from the owner's midnight to the next.
+    expect(searched).toEqual([{ query: '"3 November" OR "Nov 3"', max: EMAILS_PER_SEARCH + 1 }, { query: "J. Cole", max: EMAILS_PER_SEARCH + 1 }]);
     expect(asked).toEqual([
       { from: "2026-11-03T00:00:00+01:00", to: "2026-11-04T00:00:00+01:00" },
       { from: "2026-11-12T00:00:00+01:00", to: "2026-11-13T00:00:00+01:00" },
@@ -49,7 +49,7 @@ describe("look-up", () => {
     expect(lookUps()).toEqual([{ lookUp: expect.objectContaining({ searches: 2, spans: 2, emails: 1, events: 1, failed: 0 }) }]);
   });
 
-  it("over a span each event names its day; an all-day event says so; a span past two weeks is cut", async () => {
+  it("over a span each event names its day; an all-day event says so; a span past a month is cut and says so", async () => {
     const asked: Array<{ from: string; to: string }> = [];
     const { lookUp } = setup({
       events: async (from, to) => {
@@ -63,8 +63,26 @@ describe("look-up", () => {
     expect(await lookUp({ searches: [], days: ["2026-11-02/2026-11-08"] })).toBe(
       ["Calendar, Mon, 2 Nov 2026 to Sun, 8 Nov 2026:", "- Thu, 5 Nov 2026 10:00-10:15 Standup", "- Fri, 6 Nov 2026 all day Founders' day"].join("\n"),
     );
-    await lookUp({ searches: [], days: ["2026-11-01/2026-12-31"] });
-    expect(asked[1]).toEqual({ from: "2026-11-01T00:00:00+01:00", to: "2026-11-15T00:00:00+01:00" });
+    // "The concert in November" is asked as the whole month (2026-10-29) and read whole.
+    await lookUp({ searches: [], days: ["2026-11-01/2026-11-30"] });
+    expect(asked[1]).toEqual({ from: "2026-11-01T00:00:00+01:00", to: "2026-12-01T00:00:00+01:00" });
+    const cut = await lookUp({ searches: [], days: ["2026-11-01/2026-12-31"] });
+    expect(asked[2]).toEqual({ from: "2026-11-01T00:00:00+01:00", to: "2026-12-02T00:00:00+01:00" });
+    expect(cut).toMatch(/^Calendar, Sun, 1 Nov 2026 to Tue, 1 Dec 2026 \(asked to Thu, 31 Dec 2026; the days after not looked at\):\n/);
+  });
+
+  it("says when more emails or events matched than are shown", async () => {
+    const standup: EventHit = { title: "Standup", start: "2026-11-05T10:00:00+01:00" };
+    const { lookUp } = setup({
+      // "busy" fills what is asked for (one more than is shown); "exact" has just as many as are shown.
+      searchEmail: async (query, max) => Array.from({ length: query === "busy" ? max : EMAILS_PER_SEARCH }, () => FOUNDERS),
+      events: async (_from, _to, max) => Array.from({ length: max }, () => standup),
+    });
+    const text = (await lookUp({ searches: ["busy", "exact"], days: ["2026-11-02/2026-11-08"] }))!;
+    expect(text).toContain(`(the newest ${EMAILS_PER_SEARCH} shown; older matches not looked at)`);
+    expect(text.split("(the newest").length).toBe(2); // only for the search that had more
+    expect(text).toContain(`(the first ${EVENTS_PER_SPAN} shown; later events from Thu, 5 Nov 2026 on not looked at)`);
+    expect(text.split("\n").filter((l) => l.includes("Standup"))).toHaveLength(EVENTS_PER_SPAN);
   });
 
   it("tells a failed or slow source apart from nothing found, and still shows the rest", async () => {
@@ -114,6 +132,8 @@ describe("look-up dates", () => {
   it("reads one day or a span, and nothing that is not a real date", () => {
     expect(parseSpan("2026-11-03")).toEqual({ first: "2026-11-03", last: "2026-11-03" });
     expect(parseSpan(" 2026-11-02/2026-11-08 ")).toEqual({ first: "2026-11-02", last: "2026-11-08" });
+    expect(parseSpan("2026-11-01/2026-11-30")).toEqual({ first: "2026-11-01", last: "2026-11-30" });
+    expect(parseSpan("2026-11-01/2026-12-31")).toEqual({ first: "2026-11-01", last: "2026-12-01", askedLast: "2026-12-31" });
     for (const bad of ["next week", "2026-02-30", "2026-11-08/2026-11-02", "3 Nov", "2026-11-03/soon"]) expect(parseSpan(bad)).toBeUndefined();
   });
 
@@ -123,6 +143,14 @@ describe("look-up dates", () => {
     expect(midnightIn("2026-03-29", "Europe/Oslo")).toBe("2026-03-29T00:00:00+01:00"); // summer time starts at 02:00
     expect(midnightIn("2026-11-01", "America/New_York")).toBe("2026-11-01T00:00:00-04:00");
     expect(midnightIn("2026-11-03", "UTC")).toBe("2026-11-03T00:00:00+00:00");
+  });
+});
+
+describe("look-up text", () => {
+  it("decodes HTML entities and drops invisible padding, as seen in real Gmail snippets (2026-10-29)", () => {
+    expect(plainText("See what&#39;s new &amp; how to manage your data ͏ ͏‌")).toBe("See what's new & how to manage your data  ");
+    expect(plainText("&quot;Hi&quot; &lt;b&gt; &#x27;x&#x27; &nbsp;soft­hyphen")).toBe('"Hi" <b> \'x\'  softhyphen');
+    expect(plainText("&unknown; &#0; 5 & 6")).toBe("&unknown; &#0; 5 & 6");
   });
 });
 
@@ -143,7 +171,7 @@ describe("look-up through Composio", () => {
         data: {
           messages: [
             { messageTimestamp: "2026-10-17T09:12:00Z", sender: "Oslo Startup Lab <hello@oslostartuplab.no>", subject: "Guestlist", preview: { body: "See you 3 November", subject: "Guestlist" } },
-            { messageTimestamp: "not a date", sender: "a@b.no", subject: "Plain", preview: "plain preview" },
+            { messageTimestamp: "not a date", sender: "a@b.no", subject: "Plain &amp; simple", preview: "it&#39;s plain͏" },
             { sender: "c@d.no", subject: "Text only", messageText: "the text" },
           ],
           resultSizeEstimate: 3,
@@ -155,7 +183,7 @@ describe("look-up through Composio", () => {
     expect(calls).toEqual([{ slug: "GMAIL_FETCH_EMAILS", args: { query: '("3 November" OR "Nov 3") -category:promotions', max_results: 5, include_payload: false, verbose: false } }]);
     expect(hits).toEqual([
       { at: Date.parse("2026-10-17T09:12:00Z"), from: "Oslo Startup Lab <hello@oslostartuplab.no>", subject: "Guestlist", preview: "See you 3 November" },
-      { from: "a@b.no", subject: "Plain", preview: "plain preview" },
+      { from: "a@b.no", subject: "Plain & simple", preview: "it's plain" },
       { from: "c@d.no", subject: "Text only", preview: "the text" },
     ]);
   });

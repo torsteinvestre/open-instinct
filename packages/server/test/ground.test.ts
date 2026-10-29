@@ -6,11 +6,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AuditLog, MemoryStore, StateDir, defaultConfig } from "@open-instinct/core";
 import type { ModelCall } from "@open-instinct/watcher";
-import { createGround, groundSystem, parseGround } from "../src/ground.js";
+import { GROUND_SCHEMA, createGround, groundSystem, parseGround } from "../src/ground.js";
 import type { LookUpAsk } from "../src/lookup.js";
 
 const NOW = new Date("2026-10-29T10:41:00Z"); // Thu 29 Oct, 11:41 in Oslo
-const answer = (j: unknown) => `<ground>${JSON.stringify(j)}</ground>`;
+const answer = (j: unknown) => JSON.stringify(j);
 const WEEK = { needed: true, about: ["Torstein's plans and events next week"], days: ["2026-11-02/2026-11-08"], searches: ["(guestlist OR registered OR tickets OR invitation) newer_than:60d"] };
 
 function setup(replies: string[], extra: { recall?: (q: string[], o?: { chatsBefore?: number }) => Promise<string | undefined>; lookUp?: (a: LookUpAsk) => Promise<string | undefined> } = {}) {
@@ -21,9 +21,9 @@ function setup(replies: string[], extra: { recall?: (q: string[], o?: { chatsBef
   const memory = new MemoryStore(state);
   memory.replaceDurable("## About\n- Lives in Oslo; builds Sunshine.\n");
   const audit = new AuditLog(state);
-  const asked: Array<{ system: string; user: string }> = [];
-  const call = (async ({ system, user }) => {
-    asked.push({ system, user });
+  const asked: Array<{ system: string; user: string; schema?: unknown }> = [];
+  const call = (async ({ system, user, schema }) => {
+    asked.push({ system, user, schema });
     return { text: replies.shift() ?? "", costUsd: 0.001, model: "haiku" };
   }) as ModelCall;
   const ground = createGround({ call, config, memory, audit, now: () => NOW, ...extra });
@@ -37,6 +37,7 @@ describe("grounding", () => {
     const { ground, asked } = setup([answer({ needed: false })]);
     await ground(input("Anything happening next week for me"));
     expect(asked[0]!.system).toBe(groundSystem("Torstein"));
+    expect(asked[0]!.schema).toBe(GROUND_SCHEMA); // [sunshine:fixed-form]
     expect(asked[0]!.system).toContain("worked out from now, as YYYY-MM-DD");
     expect(asked[0]!.user).toContain("Now: Thu, 29 Oct 2026, 11:41 Europe/Oslo (2026-10-29).");
     expect(asked[0]!.user).toContain("- Lives in Oslo; builds Sunshine.");
@@ -95,24 +96,18 @@ describe("grounding", () => {
     expect(await none.ground(input("Anything happening next week for me"))).toBeUndefined();
   });
 
-  it("reads the answer leniently", () => {
+  it("reads the answer's lists leniently", () => {
     expect(parseGround(answer({ needed: true, about: [" plans ", 3, ""], days: ["2026-11-02"], searches: "x" }))).toEqual({ needed: true, about: ["plans"], days: ["2026-11-02"], searches: [] });
     expect(parseGround(answer({ about: ["plans"] }))!.needed).toBe(true);
-    // In a code fence, or bare with words around it.
-    expect(parseGround('```json\n{"needed": true, "about": ["plans"]}\n```')!.about).toEqual(["plans"]);
-    expect(parseGround('Here it is: {"needed": true, "days": ["2026-11-03"]} done')!.days).toEqual(["2026-11-03"]);
-    expect(parseGround("<ground>{not json</ground>")).toBeUndefined();
-    expect(parseGround("no json at all")).toBeUndefined();
+    expect(parseGround("{not json")).toBeUndefined();
+    expect(parseGround("null")).toBeUndefined();
   });
 
-  it("asks once more when the answer cannot be read, and logs how an unreadable one began", async () => {
-    const twice = setup(["I think it's about next week.", answer(WEEK)], { lookUp: async () => "Calendar, Mon, 2 Nov 2026 to Sun, 8 Nov 2026: nothing in the calendar." });
-    expect(await twice.ground(input("Anything happening next week for me"))).toContain("nothing in the calendar");
-    expect(twice.asked).toHaveLength(2);
-    expect(twice.asked[1]!.user).toMatch(/Answer with the JSON between <ground> and <\/ground>\.$/);
-    expect(twice.grounded()[0]).toMatchObject({ outcome: "grounded", costUsd: 0.002 });
-    const never = setup(["no idea", "still no idea"]);
+  // [sunshine:fixed-form] The form makes an unreadable answer rare (a refusal); no second try.
+  it("asks once and logs how an unreadable answer began", async () => {
+    const never = setup(["I can't help with that."]);
     expect(await never.ground(input("Anything happening next week for me"))).toBeUndefined();
-    expect(never.grounded()[0]).toMatchObject({ outcome: "unreadable", start: "still no idea" });
+    expect(never.asked).toHaveLength(1);
+    expect(never.grounded()[0]).toMatchObject({ outcome: "unreadable", start: "I can't help with that.", costUsd: 0.001 });
   });
 });

@@ -18,6 +18,8 @@
  * Nov event was known, so it searched for "invitation OR booking" and missed the email, and the agent then said there
  * was nothing in email. Now recall on the message itself goes to the small model, which plans the searches for what
  * is known only in part.
+ * [sunshine:fixed-form] The small model answers in a fixed form (structured outputs): written between tags, 1 answer
+ * in 10 could not be read, and the agent then answered without what was gathered.
  */
 import { wrapUntrusted, type AuditLog, type GroundInput, type InstinctConfig, type MemoryStore } from "@open-instinct/core";
 import type { ModelCall } from "@open-instinct/watcher";
@@ -38,11 +40,24 @@ export interface GroundAsk {
   searches: string[];
 }
 
+/** [sunshine:fixed-form] The form the small model's answer must fill. */
+export const GROUND_SCHEMA = {
+  type: "object",
+  properties: {
+    needed: { type: "boolean" },
+    about: { type: "array", items: { type: "string" } },
+    days: { type: "array", items: { type: "string" } },
+    searches: { type: "array", items: { type: "string" } },
+  },
+  required: ["needed", "about", "days", "searches"],
+  additionalProperties: false,
+};
+
 export function groundSystem(owner: string): string {
   return [
     `You prepare ${owner}'s personal assistant to answer ${owner}'s new message. Before it answers, code gathers what the assistant already knows about what you list and reads ${owner}'s calendar and email for it.`,
     "",
-    "Answer with JSON between <ground> and </ground>:",
+    "Answer with JSON:",
     `{"needed": true, "about": [], "days": [], "searches": []}`,
     `- needed: false when the answer needs nothing from ${owner}'s own life, plans or records (a greeting, thanks, a general question such as the weather or a fact); then leave the lists empty.`,
     `- about: what the message concerns in ${owner}'s life (people, projects, events, plans, places), each in a few plain words someone would search for, including what it implies: "is the weekend free?" concerns their plans and events that weekend.`,
@@ -57,20 +72,9 @@ function list(v: unknown): string[] {
     : [];
 }
 
-/** The JSON object in an answer: between <ground> tags, else in a code fence or bare (2026-10-29: 1 answer in 10 unreadable). */
-function jsonIn(text: string): string | undefined {
-  const tagged = /<ground>\s*([\s\S]*?)\s*<\/ground>/i.exec(text)?.[1];
-  const inner = tagged ?? /```(?:json)?\s*([\s\S]*?)```/i.exec(text)?.[1] ?? text;
-  const start = inner.indexOf("{");
-  const end = inner.lastIndexOf("}");
-  return start >= 0 && end > start ? inner.slice(start, end + 1) : undefined;
-}
-
 export function parseGround(text: string): GroundAsk | undefined {
-  const json = jsonIn(text);
-  if (!json) return undefined;
   try {
-    const j = JSON.parse(json) as Record<string, unknown>;
+    const j = JSON.parse(text) as Record<string, unknown>;
     const ask = { about: list(j.about), days: list(j.days), searches: list(j.searches) };
     return { needed: j.needed !== false && (ask.about.length > 0 || ask.days.length > 0 || ask.searches.length > 0), ...ask };
   } catch {
@@ -110,19 +114,12 @@ export function createGround(deps: GroundDeps): (input: GroundInput) => Promise<
       "",
       `${owner}'s new message: ${input.text}`,
     ].join("\n");
-    // One more try when the answer cannot be read, as the intake's summary does.
-    let costUsd = 0;
-    let ask: GroundAsk | undefined;
-    let last = "";
-    for (let attempt = 0; attempt < 2 && !ask; attempt++) {
-      const reply = await deps.call({ system: groundSystem(owner), user: attempt === 0 ? user : `${user}\n\nAnswer with the JSON between <ground> and </ground>.` });
-      costUsd += reply.costUsd;
-      last = reply.text;
-      ask = parseGround(reply.text);
-    }
+    const reply = await deps.call({ system: groundSystem(owner), user, schema: GROUND_SCHEMA });
+    const costUsd = reply.costUsd;
+    const ask = parseGround(reply.text);
     const record = (detail: Record<string, unknown>) => deps.audit.append({ kind: "policy", conversationKey: input.conversationKey, principal: "owner", detail: { grounding: { ...detail, costUsd, ms: Date.now() - started } } });
     if (!ask) {
-      record({ outcome: "unreadable", start: last.slice(0, 200) });
+      record({ outcome: "unreadable", start: reply.text.slice(0, 200) });
       return undefined;
     }
     if (!ask.needed) {

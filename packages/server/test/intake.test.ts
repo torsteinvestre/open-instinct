@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { AuditLog, ItemArchive, MemoryStore, StateDir, defaultConfig } from "@open-instinct/core";
 import type { ModelCall } from "@open-instinct/watcher";
-import { createIntake, parseAsk, parseSummary, proactivityTool, readProactivity, speakersOf, type IntakeDeps } from "../src/intake.js";
+import { SUMMARY_SCHEMA, createIntake, parseAsk, parseSummary, proactivityTool, readProactivity, speakersOf, type IntakeDeps } from "../src/intake.js";
 import type { LookUpAsk } from "../src/lookup.js";
 
 const dirs: string[] = [];
@@ -32,12 +32,12 @@ const SUMMARY_JSON = {
   others_tasks: ["Una: work the company logo into the design"],
   open: ["Repetitive strain injury"],
 };
-const answer = (j: unknown) => `<summary>${JSON.stringify(j)}</summary>`;
+const answer = (j: unknown) => JSON.stringify(j);
 
-function fakeModel(replies: Array<string | Error>): ModelCall & { asked: Array<{ system: string; user: string }> } {
-  const asked: Array<{ system: string; user: string }> = [];
-  const call = (async ({ system, user }) => {
-    asked.push({ system, user });
+function fakeModel(replies: Array<string | Error>): ModelCall & { asked: Array<{ system: string; user: string; schema?: unknown }> } {
+  const asked: Array<{ system: string; user: string; schema?: unknown }> = [];
+  const call = (async ({ system, user, schema }) => {
+    asked.push({ system, user, schema });
     const r = replies.shift();
     if (r === undefined) throw new Error("no reply queued");
     if (r instanceof Error) throw r;
@@ -75,6 +75,7 @@ describe("intake", () => {
 
     // The summary model saw the whole record as data, with the owner's notes and what may be wrong in it.
     expect(model.asked).toHaveLength(1);
+    expect(model.asked[0]!.schema).toBe(SUMMARY_SCHEMA); // [sunshine:fixed-form]
     expect(model.asked[0]!.system).toContain("Speaker names come from voice recognition");
     expect(model.asked[0]!.system).toContain('even if nobody said "decide"');
     expect(model.asked[0]!.system).toContain("where it was left: the last view stated, and by whom");
@@ -116,12 +117,12 @@ describe("intake", () => {
     expect(audits()).toEqual([expect.objectContaining({ intake: "handed over", id: "es2004b", source: "band", costUsd: 0.03, ownerTasks: 1, decisions: 2 })]);
   });
 
-  it("asks once more when the summary cannot be read, then keeps the item without handing it over", async () => {
-    const model = fakeModel(["Here is the summary: the meeting went well.", "<summary>{not json</summary>"]);
+  // [sunshine:fixed-form] The form makes this rare (a refusal, an empty summary); no second try.
+  it("keeps the item without handing it over when the summary cannot be read", async () => {
+    const model = fakeModel(['{"title": "x", "summary": " "}']);
     const { items, memory, intake, tasks, audits } = setup(model);
-    expect(await intake.receive(meeting)).toMatchObject({ outcome: "summary unreadable", costUsd: 0.06 });
-    expect(model.asked).toHaveLength(2);
-    expect(model.asked[1]!.user).toMatch(/Answer with the JSON between <summary> and <\/summary>/);
+    expect(await intake.receive(meeting)).toMatchObject({ outcome: "summary unreadable", costUsd: 0.03 });
+    expect(model.asked).toHaveLength(1);
     expect(items.get("es2004b")!.summary).toBeUndefined();
     expect(memory.readJournal(new Date(T))).toContain("A conversation (heard by the band, 10:14-10:53 Europe/Oslo, with Sarah, Ian, Una) (kept in full)");
     expect(tasks).toHaveLength(0);
@@ -247,9 +248,9 @@ describe("intake", () => {
     // [sunshine:in-the-flow] What to look up, read as leniently; missing or unreadable asks nothing.
     expect(parseAsk(answer({ summary: "S.", searches: [" J. Cole ", 3, ""], days: ["2026-11-12", null] }))).toEqual({ searches: ["J. Cole"], days: ["2026-11-12"] });
     expect(parseAsk(answer({ summary: "S.", searches: "J. Cole" }))).toEqual({ searches: [], days: [] });
-    expect(parseAsk("<summary>{not json</summary>")).toEqual({ searches: [], days: [] });
+    expect(parseAsk("{not json")).toEqual({ searches: [], days: [] });
     expect(parseSummary(answer({ title: "x" }))).toBeUndefined();
-    expect(parseSummary("no tags")).toBeUndefined();
+    expect(parseSummary("not json")).toBeUndefined();
     expect(speakersOf(MEETING, "Maya")).toEqual(["Sarah", "Ian", "Una"]);
     expect(speakersOf("[1:02:03] Ola Nordmann: hei\nnot a turn: x", "Maya")).toEqual(["Ola Nordmann"]);
   });

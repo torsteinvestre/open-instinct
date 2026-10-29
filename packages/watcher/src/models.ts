@@ -24,7 +24,10 @@ export interface ModelReply {
   model: string;
 }
 
-export type ModelCall = (req: { system: string; user: string; signal?: AbortSignal }) => Promise<ModelReply>;
+/** [sunshine:fixed-form] A JSON Schema the answer must fit; every object in it needs additionalProperties: false. */
+export type AnswerSchema = Record<string, unknown>;
+
+export type ModelCall = (req: { system: string; user: string; signal?: AbortSignal; schema?: AnswerSchema }) => Promise<ModelReply>;
 
 /**
  * A model spec as the rest of Sunshine reads it, plus Claude Haiku 5.5, which Pi 1.0.1's catalog
@@ -47,18 +50,35 @@ export function resolveWatcherModel(spec: string, env: NodeJS.ProcessEnv = {}): 
  * costs 25% more than sending. Checks run an hour apart, so the copy was never read again: measured,
  * a decide-sized call paid 0.46 of its 0.56 cents for storing. A 1-hour cache costs double to store
  * and, an hour apart, would miss about half the time, so it is not worth it either.
+ *
+ * [sunshine:fixed-form] With a schema, Anthropic's structured outputs make the answer that JSON and nothing else (Pi
+ * has no setting for it, so it goes into the request as it is built). Before (2026-10-29), the answer was JSON between
+ * tags, and 1 grounding answer in 10 could not be read. Other providers get only the instructions in the prompt.
  */
 export function modelCall(model: Model<any>, opts: { apiKey?: string; reasoning?: ThinkingLevel; cacheRetention?: "none" | "short" | "long" } = {}): ModelCall {
-  return async ({ system, user, signal }) => {
+  return async ({ system, user, signal, schema }) => {
+    const format = schema && model.api === "anthropic-messages" ? { type: "json_schema", schema } : undefined;
     const reply = await completeSimple(
       model,
       { systemPrompt: system, messages: [{ role: "user", content: user, timestamp: Date.now() }] },
-      { ...(opts.apiKey ? { apiKey: opts.apiKey } : {}), ...(opts.reasoning ? { reasoning: opts.reasoning } : {}), cacheRetention: opts.cacheRetention ?? "none", ...(signal ? { signal } : {}) },
+      {
+        ...(opts.apiKey ? { apiKey: opts.apiKey } : {}),
+        ...(opts.reasoning ? { reasoning: opts.reasoning } : {}),
+        cacheRetention: opts.cacheRetention ?? "none",
+        ...(signal ? { signal } : {}),
+        ...(format ? { onPayload: (params: unknown) => withFormat(params, format) } : {}),
+      },
     );
     if (reply.stopReason === "error" || reply.stopReason === "aborted") throw new Error(`${model.id}: ${reply.errorMessage ?? reply.stopReason}`);
     const text = reply.content.map((c) => (c.type === "text" ? c.text : "")).join("").trim();
     return { text, costUsd: reply.usage?.cost?.total ?? 0, model: model.id };
   };
+}
+
+/** [sunshine:fixed-form] The request with the answer's format added beside what Pi set in output_config (the effort). */
+export function withFormat(params: unknown, format: Record<string, unknown>): Record<string, unknown> {
+  const p = params as Record<string, unknown> & { output_config?: Record<string, unknown> };
+  return { ...p, output_config: { ...p.output_config, format } };
 }
 
 /** The setting's value, or undefined when the step is switched off. */

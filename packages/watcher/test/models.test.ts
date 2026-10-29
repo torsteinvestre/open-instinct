@@ -18,6 +18,18 @@ describe("a model call", () => {
     expect(options[0]).toMatchObject({ cacheRetention: "none" });
     expect(options[1]).toMatchObject({ cacheRetention: "long" });
   });
+
+  // [sunshine:fixed-form] Structured outputs: the form goes into the request beside the effort Pi set.
+  it("asks for the answer in a fixed form when given a schema, and only then", async () => {
+    vi.mocked(completeSimple).mockClear();
+    const schema = { type: "object", properties: { needed: { type: "boolean" } }, required: ["needed"], additionalProperties: false };
+    await modelCall(resolveWatcherModel(DEFAULT_SCREEN_MODEL))({ system: "s", user: "u", schema });
+    await modelCall(resolveWatcherModel(DEFAULT_SCREEN_MODEL))({ system: "s", user: "u" });
+    const [withSchema, without] = vi.mocked(completeSimple).mock.calls.map((c) => c[2]!);
+    const request = await withSchema.onPayload!({ model: "claude-haiku-5-5", output_config: { effort: "high" } }, resolveWatcherModel(DEFAULT_SCREEN_MODEL));
+    expect(request).toEqual({ model: "claude-haiku-5-5", output_config: { effort: "high", format: { type: "json_schema", schema } } });
+    expect(without.onPayload).toBeUndefined();
+  });
 });
 
 describe("the two model steps", () => {

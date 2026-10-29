@@ -850,8 +850,8 @@ its index; Town feeds its wiki into every session. Design: `~/sunshine-ops/DESIG
   date, not an event's date). Nothing needed (a greeting, a general question): nothing handed over. Otherwise recall on
   the message and what it concerns, and the look-up (`lookup.ts`: calendar for the days, email searches), side by side;
   handed over as a note "[Not a message from <owner>: what Sunshine's own code gathered ...]" with the same blocks as a
-  recording's hand-off. An unreadable answer is asked for once more; JSON in a code fence or bare is read too; an
-  unreadable one is logged with how it began.
+  recording's hand-off. The answer comes in a fixed form (`[sunshine:fixed-form]`); an unreadable one is logged with
+  how it began.
 - `recall.ts`: `chatsBefore`. `boot.ts`: recall and the look-up built once for the hand-offs and the grounding; the
   grounding's recall waits 8 s for a cold search model, then word search answers.
 
@@ -872,6 +872,29 @@ more often (released after 10 idle minutes), up to 8 s more after a gap. The rec
 
 **To remove.** Revert the commits (`git log --grep "sunshine:grounding"`), or delete `ground.ts`, its test and
 `scenarios/look-before-ask.mjs`, and the tagged lines in core `runtime.ts`, `recall.ts` and `boot.ts`.
+
+### `[sunshine:fixed-form]`: small model steps answer in a fixed form
+
+**Why** (2026-10-29). The grounding step and a recording's summary asked the model for JSON between tags. 1 grounding
+answer in 10 could not be read, and the agent then answered without what was gathered; the fix was a second try plus a
+reader for code fences and bare JSON (patches on a weak contract). Anthropic's structured outputs make the answer fit a
+schema by construction (supported on Claude Haiku 5.5 and Sonnet 5.5).
+
+**What the fork adds**
+- watcher `models.ts`: `ModelCall` takes an optional `schema`; `modelCall` puts `output_config.format` (`json_schema`)
+  into the request beside the effort Pi sets (`withFormat`, through Pi's `onPayload`, as Pi has no setting for it).
+  Only for Anthropic models; others get the prompt's instructions alone.
+- `ground.ts`: `GROUND_SCHEMA`; one call; the tag/fence/bare reader and the second try removed.
+- `intake.ts`: `SUMMARY_SCHEMA`; one call; the second try removed. An empty summary still counts as unreadable.
+
+**Tested** (free): watcher `models.test.ts` (+1: the form beside the effort, only with a schema), `ground.test.ts`,
+`intake.test.ts` (the tests for the second try replaced by one-call tests).
+
+**Open.** The nightly memory pass (`memory-notes.ts`, `<changes>`) and the news decider (`watcher/decide.ts`) still
+read JSON out of free text; same change when they are next touched.
+
+**To remove.** Revert the commit (`git log --grep "sunshine:fixed-form"`); the second try and the lenient reader come
+back with it.
 
 ### `[sunshine:intake]`: what reaches the owner from elsewhere is kept, summarized once and acted on
 

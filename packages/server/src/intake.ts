@@ -10,6 +10,9 @@
  * reminder for the owner's task, wrote a paragraph into the always-on notes, and could not find the
  * meeting again when asked about it.
  *
+ * [sunshine:fixed-form] The summary comes in a fixed form (structured outputs, SUMMARY_SCHEMA); it was JSON between
+ * tags, asked for once more when it could not be read.
+ *
  * The journal line is how the owner's own conversation learns the item exists: today's and
  * yesterday's journal are in every owner prompt (MemoryStore.digest); older items are found by search.
  *
@@ -117,13 +120,22 @@ export interface Intake {
   receive(item: IntakeItem): Promise<IntakeResult>;
 }
 
+const LINES = { type: "array", items: { type: "string" } };
+/** [sunshine:fixed-form] The form the summary must fill (structured outputs), so it can always be read. */
+export const SUMMARY_SCHEMA = {
+  type: "object",
+  properties: { title: { type: "string" }, summary: { type: "string" }, decisions: LINES, owner_tasks: LINES, others_tasks: LINES, open: LINES, to_settle: LINES, searches: LINES, days: LINES },
+  required: ["title", "summary", "decisions", "owner_tasks", "others_tasks", "open", "to_settle", "searches", "days"],
+  additionalProperties: false,
+};
+
 export function intakeSystem(owner: string, source: string): string {
   const caveat = SOURCES[source]?.caveat;
   return [
     `You read a record of something ${owner} took part in, such as a conversation their wearable recorded, and write down what ${owner}'s personal assistant needs from it.`,
     ...(caveat ? [`${caveat} Go by what the conversation as a whole makes clear.`] : []),
     "",
-    "Answer with JSON between <summary> and </summary>:",
+    "Answer with JSON:",
     `{"title": "a few words naming it", "summary": "two or three sentences: what it was about and where it ended", "decisions": [], "owner_tasks": [], "others_tasks": [], "open": [], "to_settle": [], "searches": [], "days": []}`,
     `- decisions: what was agreed or settled, as the conversation left it. A point counts as settled when the group went with it, even if nobody said "decide".`,
     `- owner_tasks: what ${owner} took on, was asked to do, or offered, with any time or deadline that was said.`,
@@ -146,10 +158,8 @@ function clip(text: string, max: number): string {
 }
 
 export function parseSummary(text: string): ItemSummary | undefined {
-  const m = /<summary>\s*([\s\S]*?)\s*<\/summary>/i.exec(text);
-  if (!m) return undefined;
   try {
-    const j = JSON.parse(m[1]!) as Record<string, unknown>;
+    const j = JSON.parse(text) as Record<string, unknown>;
     if (typeof j.summary !== "string" || !j.summary.trim()) return undefined;
     const list = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.trim().length > 0).map((x) => clip(x.trim(), LINE_MAX)).slice(0, LIST_MAX) : []);
     return {
@@ -171,9 +181,8 @@ export function parseSummary(text: string): ItemSummary | undefined {
  * for this hand-off only, and the state it finds is read again live whenever it matters.
  */
 export function parseAsk(text: string): LookUpAsk {
-  const m = /<summary>\s*([\s\S]*?)\s*<\/summary>/i.exec(text);
   try {
-    const j = m ? (JSON.parse(m[1]!) as Record<string, unknown>) : {};
+    const j = JSON.parse(text) as Record<string, unknown>;
     const list = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.trim().length > 0).map((x) => clip(x.trim(), LINE_MAX)).slice(0, LIST_MAX) : []);
     return { searches: list(j.searches), days: list(j.days) };
   } catch {
@@ -229,16 +238,9 @@ export function createIntake(deps: IntakeDeps): Intake {
       `It was made on ${isoDay(it.startedAt)}.`, // [sunshine:in-the-flow]
       wrapUntrusted(it.text, `a recording of ${owner}'s conversation`),
     ].join("\n");
-    let cost = 0;
-    let feedback = "";
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const reply = await call({ system: intakeSystem(owner, it.source), user: user + feedback });
-      cost += reply.costUsd;
-      const summary = parseSummary(reply.text);
-      if (summary) return { summary, ask: parseAsk(reply.text), costUsd: cost };
-      feedback = '\n\nAnswer with the JSON between <summary> and </summary>, with at least "summary" filled in.';
-    }
-    return { costUsd: cost };
+    const reply = await call({ system: intakeSystem(owner, it.source), user, schema: SUMMARY_SCHEMA });
+    const summary = parseSummary(reply.text);
+    return summary ? { summary, ask: parseAsk(reply.text), costUsd: reply.costUsd } : { costUsd: reply.costUsd };
   }
 
   // [sunshine:in-the-flow] Where doing ends and offering or asking starts, by the owner's setting.

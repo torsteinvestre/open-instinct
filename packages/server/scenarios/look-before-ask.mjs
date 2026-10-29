@@ -21,6 +21,9 @@
 //   GROUND=off             without the grounding step ([sunshine:grounding], 2026-10-29); on by default in a version
 //                          that has it, with the same stand-in email and calendar
 //   DRY=1                  checks the check on known answers (the live reply among them); no model call
+//   SET=kinds              [sunshine:grounding] is grounding worth its seconds? 17 texts of different kinds (below),
+//                          each run without and with grounding, back to back; graded where an answer is known, and
+//                          the time to the reply measured for every one. OUT=<file.json> keeps the runs.
 // The first run cuts the snapshot once into <SNAPSHOT>-cut and stores its chats and kept items for meaning search there
 // (as the live agent has them stored); later runs copy that.
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -38,7 +41,76 @@ function check(r) {
   return { pass: found && !asked, notes: [r.searchedEmail ? "searched email" : "did NOT search email", found ? "named Founders Story" : "did not name it", asked ? "asked for the details" : "did not ask"] };
 }
 
-if (process.env.DRY) {
+// [sunshine:grounding] SET=kinds: what grounding is for, and what it should stay out of. The answers come from the
+// stand-in inbox and calendar below, his memory notes and his kept recordings (as in the copy of his data); each
+// `want` is a sign the reply carries the answer. No `want`: timed only.
+const KINDS = [
+  // Dates, where part of the answer is only in email.
+  { kind: "time", text: "Anything happening next week for me", grade: (r) => check(r).pass },
+  { kind: "time", text: "Is my Tuesday evening next week free?", want: /founders/i },
+  { kind: "time", text: "Am I free on the evening of 12 Nov?", want: /cole|concert/i },
+  // The answer is only in an email nothing points to.
+  { kind: "implied", text: "When does my Railway trial renew?", want: /12\.? ?nov|nov(ember)? 12/i },
+  { kind: "implied", text: "How did my portfolio do in October?", want: /2[.,]1 ?%/ },
+  { kind: "implied", text: "Can I do dinner with Zia on the 3rd?", want: /founders/i },
+  // He says where to look.
+  { kind: "named", text: "Did Railway send me anything lately?", want: /usage|renew|12\.? ?nov|nov(ember)? 12/i },
+  { kind: "named", text: "Did I get an order confirmation for the J. Cole tickets?", want: /036574171|ticketmaster|ordrebekreftelse|order confirmation/i },
+  // In a kept recording.
+  { kind: "said", text: "What was Morten worried about when we talked?", want: /\bicp\b|interview|nothing (concrete|to (show|offer))|before (a|the|there'?s a) product/i },
+  { kind: "said", text: "When did Morten and I plan the company meeting?", want: /thursday|29\.? ?oct|oct(ober)? 29/i },
+  // In his memory notes, which every reply already has.
+  { kind: "notes", text: "Whats my favorite color", want: /blue/i },
+  { kind: "notes", text: "How much do I have in APLD?", want: /15 ?k|15[ ,.]?000/i },
+  // Nothing of his is needed: grounding should stay out of the way.
+  { kind: "everyday", text: "Yo" },
+  { kind: "everyday", text: "Thanks!" },
+  { kind: "everyday", text: "Should I eat mango before bed" },
+  { kind: "everyday", text: "What's 15% of 2400?", want: /\b360\b/ },
+  { kind: "everyday", text: "Does ripple want banks to use xrp or RLUSD", want: /rlusd/i },
+];
+const gradeKind = (q, r) => (q.grade ? q.grade(r) : q.want ? q.want.test(r.texts.join("\n")) : null);
+
+// The answers and the stand-in inbox, checked free (needs the inbox below, so it runs from there).
+function dryKinds() {
+  const byText = Object.fromEntries(KINDS.map((q) => [q.text, q]));
+  const known = [
+    ["Is my Tuesday evening next week free?", "No: Founders Story Oslo is on Tue 3 Nov, 18:00-21:00 at Startup Lab.", true],
+    ["Is my Tuesday evening next week free?", "Your calendar is empty on Tue 3 Nov, so yes.", false],
+    ["Am I free on the evening of 12 Nov?", "No, J. Cole at Unity Arena is at 19:00.", true],
+    ["When does my Railway trial renew?", "On 12 Nov, per Railway's usage email.", true],
+    ["When does my Railway trial renew?", "I don't see that. Want me to check your Railway account?", false],
+    ["How did my portfolio do in October?", "Up 2,1 % in October, per Nordnet's monthly overview.", true],
+    ["How did my portfolio do in October?", "I don't have your portfolio numbers. Want me to look?", false],
+    ["Can I do dinner with Zia on the 3rd?", "You have Founders Story Oslo from 18:00, so an early dinner only.", true],
+    ["Can I do dinner with Zia on the 3rd?", "Your calendar is free on 3 Nov, so yes.", false],
+    ["Did I get an order confirmation for the J. Cole tickets?", "Yes, Ticketmaster sent it on 25 Feb (order 036574171).", true],
+    ["What was Morten worried about when we talked?", "That you'd have nothing concrete to offer in ICP interviews before a product exists.", true],
+    ["What was Morten worried about when we talked?", "I don't have a record of that conversation.", false],
+    ["When did Morten and I plan the company meeting?", "For Thursday, a full-company meeting.", true],
+    ["How much do I have in APLD?", "About 15k NOK, bought at $27.", true],
+    ["Whats my favorite color", "Blue.", true],
+    ["What's 15% of 2400?", "360.", true],
+    ["What's 15% of 2400?", "3600.", false],
+  ];
+  let ok = 0;
+  for (const [text, reply, want] of known) {
+    const got = gradeKind(byText[text], { texts: [reply], searchedEmail: true });
+    ok += got === want;
+    console.log(`${got === want ? "ok   " : "WRONG"} ${got ? "pass" : "fail"} <- "${text}": ${reply}`);
+  }
+  // The stand-in inbox holds each implied answer where a search would find it.
+  const finds = [["Railway", /renews on 12 Nov/], ["Nordnet OR portefølje", /2,1 %/], ['"3 November"', /Founders Story/]];
+  for (const [q, re] of finds) {
+    const hit = INBOX.some((m) => gmailMatch(q, m) && re.test(`${m.subject} ${m.body}`));
+    ok += hit;
+    console.log(`${hit ? "ok   " : "WRONG"} inbox search ${q}`);
+  }
+  console.log(`${ok}/${known.length + finds.length} known answers checked right`);
+  process.exit(ok === known.length + finds.length ? 0 : 1);
+}
+
+if (process.env.DRY && process.env.SET !== "kinds") {
   const known = [
     [{ texts: ["Your calendar is empty for next week (2 to 8 Nov). The 3 Nov event you mentioned isn't in it. Want me to add it if you give me the details?"], searchedEmail: false }, false], // live, 10:41Z
     [{ texts: ["Next week: Founders Story Oslo on Tue 3 Nov at 18:00, Startup Lab (from your guestlist email of 17 Oct). It isn't in your calendar yet. Want me to add it?"], searchedEmail: true }, true],
@@ -151,6 +223,8 @@ function scripted(name, args) {
   return "Done.";
 }
 
+if (process.env.DRY && process.env.SET === "kinds") dryKinds();
+
 // ---- one run on a fresh copy of the snapshot -----------------------------------------------------------------------
 const need = (n) => process.env[n]?.trim() || (() => { throw new Error(`${n} must be set`); })();
 const SNAPSHOT = resolve(need("SNAPSHOT").replace(/^~/, homedir()));
@@ -215,10 +289,10 @@ function prepare(cut, dir) {
   return { key, record: conv };
 }
 
-async function once(i, text) {
+async function once(i, text, ground = process.env.GROUND !== "off") {
   const runsDir = join(homedir(), "sunshine-memory/look-before-ask-runs");
   mkdirSync(runsDir, { recursive: true });
-  const dir = mkdtempSync(join(runsDir, `${LABEL}-${i}-`));
+  const dir = mkdtempSync(join(runsDir, `${ground ? LABEL : LABEL.replace("grounded", "no-grounding")}-${i}-`));
   const { key, record: conv } = prepare(CUT, dir);
   record.calls = [];
   record.searchedEmail = false;
@@ -232,7 +306,7 @@ async function once(i, text) {
     INKBOX_API_KEY: "dummy", INKBOX_AGENT_HANDLE: "sunshine-look-before-ask-test", INKBOX_IDENTITY_ID: "00000000-0000-0000-0000-000000000000",
     BRAVE_SEARCH_API_KEY: "dummy", COMPOSIO_API_KEY: composioKey, COMPOSIO_TOOLKITS: "gmail,googlecalendar", COMPOSIO_MODE: "router",
     TRANSCRIBE_URL: "https://transcribe.stub", TRANSCRIBE_KEY: "stub", MEMORY_PASS_MODEL: "off",
-    ...(process.env.GROUND === "off" ? { GROUND_MODEL: "off" } : {}),
+    ...(ground ? {} : { GROUND_MODEL: "off" }),
   };
   const realFetch = globalThis.fetch;
   const fetchImpl = async (input, init) => {
@@ -271,6 +345,46 @@ async function once(i, text) {
   const r = { run: i, text, texts, searchedEmail: record.searchedEmail, slugs: [...record.calls], tools, thinking, cost: cost + groundCost, groundCost, grounding, lookedUp: [...record.ground], handed, replyMs, dir };
   writeFileSync(join(dir, "result.json"), JSON.stringify(r, null, 1));
   return { ...r, ...check(r) };
+}
+
+// [sunshine:grounding] SET=kinds: each text without and with grounding, back to back, then what each kind gained and
+// how long the replies took.
+if (process.env.SET === "kinds") {
+  const runs = [];
+  let spentK = 0;
+  let lastK = 0;
+  kinds: for (let i = 1; i <= RUNS; i++) {
+    for (const q of KINDS) {
+      for (const ground of [false, true]) {
+        if (spentK + lastK > MAX_USD) {
+          console.log(`stopped before "${q.text}": $${spentK.toFixed(3)} spent, the next would pass MAX_USD ${MAX_USD}`);
+          break kinds;
+        }
+        const r = await once(i, q.text, ground);
+        const pass = gradeKind(q, r);
+        spentK += r.cost;
+        lastK = r.cost;
+        runs.push({ ...r, kind: q.kind, ground, pass });
+        const g = r.grounding[0];
+        console.log(`${ground ? "grounded    " : "no-grounding"} ${pass === null ? " -  " : pass ? "PASS" : "FAIL"} [${q.kind}] "${q.text}" ${(r.replyMs / 1000).toFixed(1)} s${g ? ` (step ${g.outcome}, ${(g.ms / 1000).toFixed(1)} s)` : ""} $${r.cost.toFixed(3)} | tools ${r.tools.join(", ") || "-"}`);
+        for (const t of r.texts) console.log(`      Sunshine: ${t.replace(/\s+/g, " ").slice(0, 220)}`);
+      }
+    }
+  }
+  const median = (xs) => { const s = [...xs].sort((a, b) => a - b); return s.length ? s[Math.floor((s.length - 1) / 2)] : NaN; };
+  console.log("\nkind      | no grounding: passed, median reply | grounded: passed, median reply");
+  for (const kind of [...new Set(KINDS.map((q) => q.kind))]) {
+    const side = (ground) => {
+      const rs = runs.filter((r) => r.kind === kind && r.ground === ground);
+      const graded = rs.filter((r) => r.pass !== null);
+      return `${graded.length ? `${graded.filter((r) => r.pass).length}/${graded.length}` : "-"}, ${(median(rs.map((r) => r.replyMs)) / 1000).toFixed(1)} s`;
+    };
+    console.log(`${kind.padEnd(9)} | ${side(false).padEnd(34)} | ${side(true)}`);
+  }
+  console.log(`spent $${spentK.toFixed(3)}`);
+  if (process.env.OUT) writeFileSync(process.env.OUT, JSON.stringify(runs, null, 1));
+  await embedder.close?.();
+  process.exit(0);
 }
 
 const results = [];

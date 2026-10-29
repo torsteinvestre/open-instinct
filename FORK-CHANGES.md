@@ -809,6 +809,16 @@ in any summary (no before run, so (B) itself is not shown). It showed three thin
 cut at 14 days without saying so (J. Cole on 12 Nov was inside by luck), the same silent cut at 5 emails and 25
 events, and snippets with HTML entities and invisible padding. Watch: with one real match the date search fills up
 with old newsletters (dated, so the agent can tell).
+Paid, test 2 (Torstein OK'd; `in-the-flow.mjs` on the new version, stand-in inbox through the look-up, 2 runs x 5
+cases, $0.27): 10/10 after a grader fix. Scored 9/10 at first: the 3 Nov reply ("I added the Startup Norway Founder
+Meetup ... Do you want me to look for one? If so, tell me which device it's for.") was counted as asking about the
+event; the question was about the charger. The check now counts only questions (a sentence ending in "?"), checked on
+12 known answers incl. that reply and the live failure of 27 Oct; `REGRADE=<file>` re-judges saved runs free. The
+look-up shows in the replies: "Your calendar was empty that day", "Nothing in email or calendar on the due date", "I
+found nothing in your mail, calendar or past chats". This stand-in cannot show the 3 Nov gain (the old version passed
+it too, with an easy stand-in email tool); that is the live check's job. Watch: broad one-word searches ("PowerPoint
+OR presentation OR slides OR deadline") would fill up with unrelated mail in a real inbox; reminders set without asking
+in the "nowhere" case (as before; small and undoable, allowed by "prepare and offer").
 
 **To remove.** Revert the commits (`git log --grep "sunshine:in-the-flow"`), or delete `recall.ts`, `lookup.ts`, their
 tests and the three scenarios, and the tagged lines in `intake.ts`, `boot.ts`, apps `composio.ts` and `index.ts`, core

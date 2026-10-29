@@ -24,7 +24,9 @@ const NOW = Date.parse("2026-10-28T12:00:00Z"); // Wed 28 Oct, 13:00 in Oslo
 const DAY = 24 * 60 * 60 * 1000;
 
 // ---- the cases: what was recorded, and what counts as handled well ----------------------------------------------
-const asksAbout = (t, re) => /\?/.test(t) && re.test(t);
+// A question (a sentence ending in "?") about it. Per sentence since 2026-10-29: "Do you want me to look for one? If so,
+// tell me which device it's for." about the charger was counted as asking which event it was.
+const asksAbout = (t, re) => t.split(/(?<=[.?!])\s+/).some((s) => /\?\s*$/.test(s) && re.test(s));
 const CASES = {
   nov3: {
     text: [
@@ -86,6 +88,9 @@ async function dryRun() {
     // Live, 2026-10-27 (the old hand-off): asked instead of looking.
     ["nov3", run({ texts: ["J. Cole (Thu 12 Nov, 19:00) is already in your calendar. What's the event on 3 Nov, and what time? I'll add it once you tell me."] }), false],
     ["nov3", run({ adds: [{ title: "Startup Norway founder meetup", start: "2026-11-03T18:00:00+01:00" }], texts: ["Added the Startup Norway founder meetup on Tue 3 Nov at 18:00 (from your email)."] }), true],
+    // Test 2 (2026-10-29), run 2: the question is about the charger, not the event.
+    ["nov3", run({ adds: [{ title: "Startup Norway Founder Meetup", start: "2026-11-03T18:00:00+01:00" }], texts: ["Torstein, I added the Startup Norway Founder Meetup to your calendar. It's on Tue 3 Nov, 18:00–21:00.\n\nI haven't done anything about the charger. Do you want me to look for one? If so, tell me which device it's for."] }), true],
+    ["nov3", run({ texts: ["Which event is it, and what time does it start?"] }), false],
     ["group", run({ texts: ["What's the topic of the presentation, and who's in your group?"] }), false],
     ["group", run({ texts: ["Started an outline for the wormholes deck with Ian and Scott. Want me to build the slides?"] }), true],
     ["others", run({ adds: [{ title: "Book the venue", start: "2026-10-29T09:00:00+01:00" }] }), false],
@@ -217,6 +222,19 @@ function seed(state, config) {
 }
 
 if (process.env.DRY) await dryRun();
+
+// REGRADE=<an OUT file>: the saved runs judged again by the checks as they are now (free; for a fixed check).
+if (process.env.REGRADE) {
+  const saved = JSON.parse(readFileSync(process.env.REGRADE, "utf8"));
+  let passed = 0;
+  for (const r of saved.results) {
+    const got = CASES[r.case].check(r);
+    passed += got.pass;
+    console.log(`${r.case}: ${got.pass ? "PASS" : "FAIL"} (${got.notes.join("; ")})${got.pass !== r.pass ? `  [was ${r.pass ? "PASS" : "FAIL"}]` : ""}`);
+  }
+  console.log(`${saved.label}: ${passed}/${saved.results.length} passed (re-graded)`);
+  process.exit(0);
+}
 
 // ---- one run ----------------------------------------------------------------------------------------------------------
 const need = (n) => process.env[n]?.trim() || (() => { throw new Error(`${n} must be set`); })();

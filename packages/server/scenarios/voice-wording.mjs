@@ -5,7 +5,8 @@
 //   hint   a recording sent before the owner's voice is known: the reply to recording_add's result (the stand-in
 //          never answers, so no further model call)
 //   voice  a voice memo: the reply when learning starts, and the reply to the note when it is learned
-// Each reply is checked for a conditional promise, an internal label and machine talk (CHECKS).
+// Each reply is checked for a conditional promise, an internal label, machine talk and (since 2026-10-29) a promised
+// summary (CHECKS).
 //
 // Usage (from packages/server, after `pnpm build`): CASES=hint[,voice] MAX_USD=0.10 node scenarios/voice-wording.mjs
 //   DRY=1   checks the checks on known answers (Torstein's real replies of 2026-10-26); no model call
@@ -18,6 +19,9 @@ const CHECKS = {
   "conditional promise": /\b(?:i'll|i will|i'd|will)\s+(?:let you know|tell you|text you|update you)\b[^.!?]*\bif\b|\bif (?:it|that|this) (?:doesn't|does not|didn't|fails|failed)\b/i,
   "internal label": /\bspeaker\s*(?:n\b|\d)/i,
   "machine talk": /\b(?:voice_mine|recording_add|history_search|tool|background (?:job|task)|503|\d+(?:\.\d+)? ?MB)\b/i,
+  // 2026-10-29 (d3428c1): live, every recording got "I'll send the summary when it's done", a promise the product does
+  // not keep (what was said goes to the agent to act on; the owner hears only when something needs them).
+  "summary promise": /\b(?:i'll|i will|will)\b[^.!?]*\b(?:send|share|give|text)\b[^.!?]*\bsummary\b|\bsummary\b[^.!?]*\b(?:reaches|comes to|will come|is on its way)\b/i,
 };
 const flags = (text) => Object.entries(CHECKS).filter(([, re]) => re.test(text)).map(([name]) => name);
 
@@ -25,10 +29,14 @@ if (process.env.DRY) {
   const known = [
     ["Got it, I'm learning your voice now. I'll tell you if it doesn't work.", ["conditional promise"]],
     ['Your voice is saved. From now on, your lines in recordings will show as you, not "Speaker N".', ["internal label"]],
-    ["Transcribing it now (17.6 MB); the summary reaches you when it is done.", ["machine talk"]],
+    ["Transcribing it now (17.6 MB); the summary reaches you when it is done.", ["machine talk", "summary promise"]],
     ["Got it, learning your voice now. I'll let you know when it's done.", []],
     ["Done, I can now tell your voice apart from other people in recordings.", []],
-    ["On it. I'll send you the summary in a few minutes.", []],
+    // Fine until 2026-10-29; a summary is no longer what a recording leads to (d3428c1).
+    ["On it. I'll send you the summary in a few minutes.", ["summary promise"]],
+    ["Got it, transcribing now. I'll send the summary when it's done.", ["summary promise"]], // live, 2026-10-27
+    ["Got it, I'm going through it now and will follow up on anything that needs you.", []],
+    ["Got it. I'll go through what was said and text you only if something needs you.", []],
     ["Got it. I don't know your voice yet, so send me 30 seconds of just you talking and I'll learn it.", []],
   ];
   let ok = 0;

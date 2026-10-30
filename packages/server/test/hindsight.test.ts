@@ -133,7 +133,10 @@ describe("hindsight: what goes in", () => {
 
     // A source that is not a conversation is named as what it is.
     s.items.add({ id: "mail-1", source: "email", title: "Your tickets", startedAt: T - 60 * MIN, text: "Order: J. Cole, 12.11.26 19:00" });
-    expect(s.memory.documents().docs.find((d) => d.id === "item:mail-1")!.context).toBe("From Torstein's email. Times are Europe/Oslo time unless it names another zone.");
+    // [sunshine:flowing-in] Email is a source of its own now, named as what it is; one with no rule still reads "From ...".
+    expect(s.memory.documents().docs.find((d) => d.id === "item:mail-1")!.context).toBe("An email Torstein received. Times are Europe/Oslo time unless it names another zone.");
+    s.items.add({ id: "note-1", source: "notion", title: "Plan", startedAt: T - 60 * MIN, text: "Launch on 3 Nov" });
+    expect(s.memory.documents().docs.find((d) => d.id === "item:note-1")!.context).toBe("From Torstein's notion. Times are Europe/Oslo time unless it names another zone.");
   });
 
   it("writes times as local wall-clock time with the offset that holds then", () => {
@@ -286,7 +289,7 @@ describe("hindsight: recall", () => {
       [
         "On the days it concerns, by when each thing happens:",
         "[happens Tue, 3 Nov 2026; noted 27 Oct 2026] Torstein has an event on 3 November (their own texts)",
-        "[happens Tue, 3 Nov 2026, 17:00; noted 30 Oct 2026] Torstein is invited to The Founder's Story Oslo at Startup Lab (from email: Invitation: The Founder's Story Oslo)",
+        "[happens Tue, 3 Nov 2026, 17:00; noted 30 Oct 2026] Torstein is invited to The Founder's Story Oslo at Startup Lab (received by email: Invitation: The Founder's Story Oslo)",
         "[happens Fri, 6 Nov 2026, 19:00] Torstein plans to see Dune: Part Three at Odeon Storo",
         "[happens Sat, 7 Nov 2026] Torstein's passport expires",
         "",

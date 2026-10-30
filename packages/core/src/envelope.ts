@@ -77,6 +77,37 @@ export function intakeItemOf(event: unknown): IntakeItemEvent | undefined {
   return item;
 }
 
+/**
+ * [sunshine:flowing-in] Something that happened in one of the owner's apps (an email arrived or was sent, a calendar
+ * event changed), as the app connector reported it: the gateway checks Composio's signature, finds whose it is and
+ * forwards it here. `trigger` names what happened (Composio's trigger slug); `data` is the app's own fields, read by
+ * that source's rule (server flowing-in.ts).
+ */
+export const APP_EVENT = "app.event";
+
+export interface AppEvent {
+  type: typeof APP_EVENT;
+  /** The connector's event id. */
+  id: string;
+  /** "GMAIL_NEW_GMAIL_MESSAGE", "GOOGLECALENDAR_GOOGLE_CALENDAR_EVENT_SYNC_TRIGGER", ... */
+  trigger: string;
+  /** ISO time the connector sent it, when it says. */
+  at?: string;
+  data: Record<string, unknown>;
+}
+
+export function appEventOf(event: unknown): AppEvent | undefined {
+  if (!event || typeof event !== "object") return undefined;
+  const e = event as Record<string, unknown>;
+  if (e.type !== APP_EVENT) return undefined;
+  if (typeof e.id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(e.id)) return undefined;
+  if (typeof e.trigger !== "string" || !/^[A-Z0-9][A-Z0-9_]{0,127}$/i.test(e.trigger)) return undefined;
+  if (!e.data || typeof e.data !== "object" || Array.isArray(e.data)) return undefined;
+  const out: AppEvent = { type: APP_EVENT, id: e.id, trigger: e.trigger.toUpperCase(), data: e.data as Record<string, unknown> };
+  if (typeof e.at === "string" && !Number.isNaN(Date.parse(e.at))) out.at = e.at;
+  return out;
+}
+
 /** Returns the event, or undefined when the message is ordinary text or malformed. */
 export function decodeEvent(message: string): unknown | undefined {
   if (typeof message !== "string") return undefined;

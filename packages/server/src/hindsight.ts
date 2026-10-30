@@ -130,6 +130,11 @@ function clip(text: string, max: number): string {
   return t.length <= max ? t : `${t.slice(0, max - 1)}…`;
 }
 
+/** [sunshine:flowing-in] "an email ..." as a sentence's start. */
+function capitalize(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 function within<T>(promise: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<never>((_, reject) => {
@@ -257,7 +262,12 @@ export class HindsightMemory {
     const intoIt = /^\[\d{1,2}:\d{2}(?::\d{2})?\]/m.test(it.text) ? "Each line starts with the time into the conversation, not the time of day. " : "";
     const withWhom = it.people?.length ? `, with ${it.people.join(", ")}` : "";
     // A source with no words of its own (email, later team chat) is named as what it is, not called a conversation.
-    const what = SOURCES[it.source] ? `A conversation of ${owner}'s, ${words}${withWhom}.` : `From ${owner}'s ${it.source}.`;
+    const record = SOURCES[it.source]?.record; // [sunshine:flowing-in] an email, a calendar change: named as what it is
+    const what = record
+      ? `${capitalize(record(owner))}${it.people?.length ? `; people in it: ${it.people.join(", ")}` : ""}.`
+      : SOURCES[it.source]
+        ? `A conversation of ${owner}'s, ${words}${withWhom}.`
+        : `From ${owner}'s ${it.source}.`;
     const context = `${what} ${caveat ? `${caveat} ` : ""}${intoIt}${this.zoneLine()}`;
     const timestamp = localIso(it.startedAt, this.tz());
     const metadata = { source: it.source, ...(it.title ? { title: it.title.slice(0, 200) } : {}) };

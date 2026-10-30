@@ -12,6 +12,7 @@ export * from "./envelope.js";
 export * from "./memory.js";
 export * from "./history.js"; // [sunshine:history]
 export * from "./items.js"; // [sunshine:intake]
+export * from "./actions.js"; // [sunshine:action-log]
 export * from "./meaning.js"; // [sunshine:meaning-search]
 export * from "./model.js";
 export * from "./tools.js";

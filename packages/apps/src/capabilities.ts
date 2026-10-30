@@ -155,6 +155,11 @@ export const COMPOSIO_META_TOOLS: readonly string[] = [
   "COMPOSIO_MULTI_EXECUTE_TOOL",
 ];
 
+/** [sunshine:action-log] Whether an app action only reads (a word in READ_VERBS after the toolkit's name). */
+export function isReadSlug(slug: string): boolean {
+  return slug.trim().toUpperCase().split("_").filter(Boolean).slice(1).some((t) => READ_VERBS.has(t));
+}
+
 /** A slug with one of these words after the toolkit is a read; it gets no stricter tag. */
 const READ_VERBS: ReadonlySet<string> = new Set(["GET", "LIST", "RETRIEVE", "SEARCH", "FETCH", "FIND", "READ", "DESCRIBE", "COUNT", "LOOKUP", "QUERY"]);
 const SEND_VERBS: ReadonlySet<string> = new Set(["SEND", "REPLY", "FORWARD"]);

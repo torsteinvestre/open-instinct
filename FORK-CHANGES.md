@@ -1069,6 +1069,93 @@ the reminder come through?" is answered from the copies of sent texts; the actio
 `scenarios/memory-real.mjs`, the dependency, and the tagged lines in `boot.ts`, `ground.ts`, `intake.ts`, `lookup.ts` and `recall.ts`, core
 `core-tools.ts` and `meaning.ts`.
 
+### `[sunshine:flowing-in]`: what happens in the owner's apps flows into memory as it happens
+
+**Why** (2026-10-30). Torstein: "this is not an email door; everything flows through the memory instead of a manual
+search" (DESIGN-memory-in-the-flow.md, job 1). An inbox search cannot answer "what's on next week?" or notice anything
+unasked; only reading each thing once as it arrives can (the 3 Nov case: the answer sat in his email 12 days). Built
+once for every app: Composio reports an event (a trigger), the gateway will check and forward it (next step, not built
+yet), and here it becomes an item through the intake, like a recording. Each source adds only a small rule.
+
+**What the fork adds**
+- `app.event` (core `envelope.ts`, `appEventOf`): the connector's event id, the trigger slug and the app's own fields;
+  `http.ts` hands it to the flow past the HTTP budget, never to owner chat; refused when the flow is off.
+- `packages/server/src/flowing-in.ts`, `createFlowIn`. Rules shared by every source: no catch-up (decided 30 Oct:
+  anything that happened more than an hour before the first event from that trigger is left out, so a first delivery
+  that brings older ones keeps none; `flow-in.json` keeps when each trigger started); once (the same event again is
+  left out by its item id); Sunshine's own change coming back is kept as Sunshine's, from the action log, never handed
+  over again (Google cannot tell: Sunshine acts through the owner's own account); the owner's own change is kept
+  without reading. Every event leaves an audit `policy` entry `flowIn` (taken in / left out, and why).
+- The rules (Composio's trigger list read 30 Oct; Google Contacts has no triggers, so nothing flows from it):
+  - **Email received** (`GMAIL_NEW_GMAIL_MESSAGE`): Gmail's Promotions, Social, Forums, Spam and Trash left out
+    before anything reads them (Updates stay: his event confirmation and ticket order land there); the owner's own
+    email left out (it comes as sent). Kept as a few header lines (From with address, To and Cc shortened to six names
+    and "and N more", Subject, attachment names) and the email's own words: HTML made plain, the quoted earlier
+    messages cut (English, Norwegian and other languages' "... wrote:" headers with a clock time or an address on the
+    line, "Original Message", Outlook's From/Sent block; a forwarded message stays whole, it is the content), links
+    over 60 characters shortened to their site, text over 8,000 characters cut with the cut said.
+  - **Email sent** (`GMAIL_EMAIL_SENT_TRIGGER`): the owner's own words, where promises are ("I'll send the deck by
+    Friday"); read like received ones, source `email-sent`; one Sunshine sent is kept as Sunshine's.
+  - **Calendar** (`GOOGLECALENDAR_GOOGLE_CALENDAR_EVENT_SYNC_TRIGGER`, full event data on created, changed and
+    deleted): what changed since the event was last seen, in words ("moved from Thu, 5 Nov 2026, 14:00-15:00; place
+    added", "Zia declined", "cancelled"); a report where nothing that matters changed is left out. The calendar is
+    another system's state, so what is kept is the change, as something that happened on a date. Someone else's event
+    (an invitation, their move or cancellation) and others answering the owner's event are read; the owner's own entry
+    or change is kept as is; Sunshine's own is kept as Sunshine's.
+- The intake (`intake.ts`): per-source wording (`SOURCES`: `record`, `noun`), so an email is read and handed over as
+  an email, not "a conversation"; Hindsight's context line likewise ("An email Torstein received; people in it: ...").
+  **The gate**: what the owner sent on purpose (`onPurpose`: a recording) always goes to the agent, in the form it
+  always had; anything that arrives by itself (email, calendar, the band) is read with one more field, `needs` (what
+  may call for the assistant to do something or tell the owner now), and goes to the agent only when that is not empty;
+  otherwise it is kept, summarized and journaled ("kept, nothing to act on"). Short sources (`small`) are read by
+  `INTAKE_SMALL_MODEL` (default Claude Haiku 5.5, low thinking; "off" = `INTAKE_MODEL` reads them), as the 29 Oct
+  design said. `receive(item, { keepOnly })` keeps and journals with a note, no reading and no hand-off.
+
+**Tested** (free). `flowing-in.test.ts` (12): an email kept with its header and words; promotions, social, spam and
+the owner's own left out, Updates kept; a long recipient list shortened, people without the owner; each email once,
+nothing from before the start, a late delivery after it kept; a sent email read, one Sunshine sent kept as
+Sunshine's; the owner's own calendar entry kept as is, a report with nothing changed left out, a move said as a move;
+someone else's invitation read with organizer, attendees and answers, others answering read; Sunshine's own event
+coming back, a cancellation by the organizer; all-day events; a trigger with no rule left out and audited; HTML,
+quoted threads in English and Norwegian, Outlook blocks, forwarded messages kept whole, "I wrote:" not cut, long links,
+long text; addresses and times as the connector gives them. `intake.test.ts` +4 (a recording handed over with the old
+form and prompt; nothing for the assistant = kept, no hand-off; an email read by the small model, named as an email;
+keepOnly). `http.test.ts` +1, core `envelope.test.ts` +1. All tests (about 1,577), type check and smoke pass. **On his
+real data** (free, code only, his 112 exported emails through the received rule): 111 taken in, 1 left out (his own,
+comes as sent); kept text 29% of the raw 584,000 characters (links were 41% of what was kept before the link rule);
+median 917 characters, longest 7,206; no HTML left, no empty bodies; the invitation's 171 recipients shown as six and
+"and 165 more".
+
+**Open.** The gateway route (signature check, durable inbox, Composio's `user_id` = the agent's handle -> the agent)
+and switching the triggers on for his account are the next step. The reading with `needs` is untested with a real
+model (paid, his OK). Whether Composio's managed connections can check more often than every 15 minutes (the trigger
+default says 2; one page says 15 at least). A tapback quoting Sunshine's reply still enters his spells (input policy).
+
+**To remove.** Revert the commit (`git log --grep "sunshine:flowing-in"`), or delete `flowing-in.ts` and its test and
+the tagged lines in `intake.ts`, `hindsight.ts`, `http.ts`, `boot.ts` and core `envelope.ts`.
+
+### `[sunshine:action-log]`: what Sunshine changes in the owner's apps is written down by code
+
+**Why** (2026-10-30). Agreed with Torstein that morning as its own record, connected to memory ("ACTION LOG" in NOTES);
+needed now because what Sunshine adds to the calendar comes back through the calendar's trigger, and Google cannot
+tell it from the owner's own change: Sunshine acts through the owner's account.
+
+**What the fork adds.** Core `actions.ts`: `ActionLog`, append-only `history/actions.jsonl`, one line per tool call
+that changes something in an app: when, the conversation, the tool, the app actions in it, whether it worked, the ids
+the app answered with (`idsIn`: every `id`, `...Id`, `..._id` value at any depth, JSON text parsed, since Composio
+nests each action's answer differently), the audit line's summary. `runtime.ts` writes it in `recordToolCall` (after
+every tool call, failed ones too, never stopping the run) when `deps.actions` is set; which actions change something
+is the apps package's `appChangesOf` (a direct `app_` tool, or each action the multi-executor runs; reads by their verb,
+`isReadSlug`; Composio's own tools never). `did(id, since)` finds Sunshine's own change by an id. Kept as long as the
+history (365 days). On with the history, in `boot.ts`. Why it was done, the read-back and undo come later on these lines.
+
+**Tested** (free). Core `actions.test.ts` (append, read back from a time, a torn line skipped, the age limit, `did`;
+ids at any depth and in JSON text, short values left out), `runtime.test.ts` +1 (an app change written with its id,
+another tool not), apps `changes.test.ts` (direct and multi-executor calls, reads, Composio's own tools, other tools).
+
+**To remove.** Revert the commit, or delete `actions.ts`, its test and `changes.test.ts`, and the tagged lines in core
+`runtime.ts` and `index.ts`, apps `wrap.ts`, `capabilities.ts` and `index.ts`, and server `boot.ts`.
+
 ### `[sunshine:intake]`: what reaches the owner from elsewhere is kept, summarized once and acted on
 
 **Why** (2026-10-24). Sunshine should know what its person knows without being told (NOTES "PRINCIPLE: the one AI

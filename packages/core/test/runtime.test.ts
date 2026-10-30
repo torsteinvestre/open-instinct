@@ -14,6 +14,7 @@ import { A2AStore } from "../src/a2a-state.js";
 import { A2A_TOPIC_CHARS, AgentRuntime, FOLD_HIGH_MESSAGES, FOLD_LOW_CHARS, FOLD_LOW_MESSAGES, InboundUncertainError, PROMPT_CACHE_MS, PRUNED_RESULT, SESSION_KEEP_MESSAGES, cacheLapsed, foldInSteps, hashArgs, pruneToolResults, readSession, restoreMessages, runtimeKey, stableJson, type GroundInput, type Outbox, type RuntimeDeps } from "../src/runtime.js";
 import { Scheduler } from "../src/scheduler.js";
 import { HistoryArchive } from "../src/history.js"; // [sunshine:history]
+import { ActionLog } from "../src/actions.js"; // [sunshine:action-log]
 import { ToolRegistry, defineTool, textResult, type RegisteredTool } from "../src/tools.js";
 import type { InboundMessage, OutboundMessage, Policy, Principal } from "../src/types.js";
 import { inbound, tempState, testConfig } from "./helpers.js";
@@ -1262,6 +1263,26 @@ describe("policy guard", () => {
     expect(spend).toHaveLength(1);
     expect(spend[0]!.detail.amountUsd).toBe(12);
     expect(h.deps.audit.spentTodayUsd("America/New_York")).toBe(12);
+  });
+
+  // [sunshine:action-log]
+  it("writes down an app change with the ids the app answered with; other tools are not written", async () => {
+    const log = new ActionLog(tempState());
+    const create = defineTool({
+      name: "app_googlecalendar_create_event",
+      label: "Create event",
+      description: "creates a calendar event",
+      parameters: Type.Object({ title: Type.String() }),
+      meta: { capabilities: ["calendar.write"], group: "apps" },
+      execute: async ({ title }) => textResult(JSON.stringify({ successful: true, data: { response_data: { id: "ev123", summary: title } } })),
+    });
+    const h = harness({ extraTools: [create], deps: { actions: { log, changesOf: (tool) => (tool.startsWith("app_") ? [tool.slice(4).toUpperCase()] : []) } } });
+    h.faux.setResponses([toolTurn("app_googlecalendar_create_event", { title: "Founders Story" }), toolTurn("echo", { text: "x" }), textTurn("Added.")]);
+    await h.runtime.handleInbound(inbound({ channel: "chat", from: "owner", conversationKey: "chat:main", text: "add it" }));
+    const entries = log.since(0);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ tool: "app_googlecalendar_create_event", actions: ["GOOGLECALENDAR_CREATE_EVENT"], ok: true, ids: ["ev123"] });
+    expect(log.did("ev123", 0)).toBeDefined();
   });
 
   it("leaves spend to tools that record their own, so a request is not counted before it completes", async () => {

@@ -13,7 +13,8 @@
  */
 import http from "node:http";
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import { decodeEvent, intakeItemOf, systemTaskOf } from "@open-instinct/core"; // [sunshine:intake] intakeItemOf
+import { appEventOf, decodeEvent, intakeItemOf, systemTaskOf } from "@open-instinct/core"; // [sunshine:intake] intakeItemOf [sunshine:flowing-in] appEventOf
+import type { AppEvent } from "@open-instinct/core"; // [sunshine:flowing-in]
 import type { AgentRuntime, HandleResult, InboundMessage, InstinctConfig, OutboundMessage, ScheduleEntry, Scheduler, StateDir } from "@open-instinct/core";
 import { DurableInbox, parseCallEnded, parseInkboxEvent, verifyInkboxSignature } from "@open-instinct/inkbox";
 import type { CallEndedEvent } from "@open-instinct/inkbox";
@@ -54,6 +55,8 @@ export interface HttpApp {
   onCallEnded?(event: CallEndedEvent): Promise<void>;
   /** [sunshine:intake] Takes in an `intake.item` event. Unset: such events are refused. */
   intake?: { receive(item: IntakeItem): Promise<unknown> };
+  /** [sunshine:flowing-in] Takes in an `app.event` (an email, a calendar change). Unset: such events are refused. */
+  flowIn?: { receive(event: AppEvent): Promise<unknown> };
 }
 
 export interface HttpServerOptions {
@@ -223,6 +226,13 @@ export async function handleChat(app: HttpApp, body: ChatRequest, now: Date = ne
       const { type: _type, startedAt, endedAt, ...rest } = item;
       void app.intake.receive({ ...rest, startedAt: Date.parse(startedAt), ...(endedAt ? { endedAt: Date.parse(endedAt) } : {}) }).catch(() => undefined);
       return { response: "", acked: true, conversationKey: `system:intake-${item.id}` };
+    }
+    // [sunshine:flowing-in] Something that happened in one of the owner's apps: taken in past the HTTP budget, like an item.
+    const appEvent = appEventOf(event);
+    if (appEvent) {
+      if (!app.flowIn) return { response: "", acked: true, blocked: "flowing in is off" };
+      void app.flowIn.receive(appEvent).catch(() => undefined);
+      return { response: "", acked: true, conversationKey: "system:flow-in" };
     }
     const inbound = parseInkboxEvent(event);
     if (!inbound) return { response: "", acked: true };

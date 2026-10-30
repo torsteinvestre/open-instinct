@@ -33,6 +33,12 @@ import { weeksLine, type LookUp, type LookUpAsk } from "./lookup.js";
 export const DEFAULT_INTAKE_MODEL = "anthropic/claude-sonnet-5-5";
 /** Telling settled from open in a long conversation is judgment; a few seconds of thought per item. */
 export const INTAKE_REASONING = "medium" as const;
+/**
+ * [sunshine:flowing-in] The model for short sources that come many a day (an email, a calendar change; env
+ * INTAKE_SMALL_MODEL; "off" reads them with INTAKE_MODEL). The 29 Oct design: Haiku in a fixed form per email.
+ */
+export const DEFAULT_INTAKE_SMALL_MODEL = "anthropic/claude-haiku-5-5";
+export const INTAKE_SMALL_REASONING = "low" as const;
 const LIST_MAX = 20;
 const LINE_MAX = 400;
 const SUMMARY_MAX = 1200;
@@ -41,11 +47,34 @@ const JOURNAL_GIST_MAX = 240;
  * How each source reads in the journal and the hand-off, and what may be wrong in what it sends. [sunshine:hindsight] Also
  * each item's context line in Hindsight.
  */
-export const SOURCES:Record<string, { words: string; caveat?: string }> = {
+export const SOURCES: Record<string, SourceInfo> = {
   band: { words: "heard by the band", caveat: "Speaker names come from voice recognition and the words from speech recognition; both can be wrong." },
-  // [sunshine:recordings] A recording the owner made on their phone and sent.
-  recording: { words: "recorded on their phone", caveat: "Speaker names come from voice recognition and the words from speech recognition; both can be wrong. Voices without a known print show as \"Speaker 1\", \"Speaker 2\"." },
+  // [sunshine:recordings] A recording the owner made on their phone and sent. [sunshine:flowing-in] onPurpose
+  recording: { words: "recorded on their phone", caveat: "Speaker names come from voice recognition and the words from speech recognition; both can be wrong. Voices without a known print show as \"Speaker 1\", \"Speaker 2\".", onPurpose: true },
+  // [sunshine:flowing-in] The owner's apps (flowing-in.ts), each item one email or one calendar change.
+  email: { words: "received by email", noun: "email", record: (owner) => `an email ${owner} received`, small: true },
+  "email-sent": { words: "sent from their email", noun: "email", record: (owner) => `an email ${owner} sent`, small: true },
+  calendar: { words: "from their calendar", noun: "calendar change", record: (owner) => `a change in ${owner}'s calendar`, small: true },
 };
+
+export interface SourceInfo {
+  /** How it reads in the journal and the hand-off: "recorded on their phone". */
+  words: string;
+  /** What may be wrong in what it sends. */
+  caveat?: string;
+  /** [sunshine:flowing-in] What one item is, for the reading and Hindsight ("an email Torstein received"); unset: a conversation. */
+  record?: (owner: string) => string;
+  /** [sunshine:flowing-in] Its name in the hand-off ("email"); unset: conversation. */
+  noun?: string;
+  /**
+   * [sunshine:flowing-in] The owner sent it on purpose (a voice note is a request, like a text): always handed over.
+   * Anything else arrives by itself and is handed over only when the reading finds something for the assistant
+   * (`needs`); most email is only worth remembering, and an agent turn costs cents each.
+   */
+  onPurpose?: boolean;
+  /** [sunshine:flowing-in] Short and many a day: read by the small model. */
+  small?: boolean;
+}
 
 export interface IntakeItem {
   id: string;
@@ -57,7 +86,8 @@ export interface IntakeItem {
   text: string;
 }
 
-export type IntakeOutcome = "handed over" | "kept, not summarized" | "summary unreadable" | "failed";
+// [sunshine:flowing-in] "kept, nothing to act on": read, nothing for the assistant; "kept as is": not read (keepOnly).
+export type IntakeOutcome = "handed over" | "kept, not summarized" | "kept, nothing to act on" | "kept as is" | "summary unreadable" | "failed";
 
 export interface IntakeResult {
   outcome: IntakeOutcome;
@@ -74,6 +104,8 @@ export interface IntakeDeps {
   audit: AuditLog;
   /** Undefined: items are kept and journaled, not summarized or handed over (INTAKE_MODEL=off). */
   call?: ModelCall;
+  /** [sunshine:flowing-in] Reads the sources marked `small`; unset: `call` reads them. */
+  smallCall?: ModelCall;
   /** The agent's turn on the summary: runtime.runSystemTask. */
   runTask: (task: { id: string; name?: string; prompt: string; load?: string[] }) => Promise<string>;
   /** [sunshine:in-the-flow] What is already known about the item's subjects (needs meaning search). */
@@ -85,7 +117,11 @@ export interface IntakeDeps {
 }
 
 export interface Intake {
-  receive(item: IntakeItem): Promise<IntakeResult>;
+  /**
+   * [sunshine:flowing-in] `keepOnly`: keep and journal it with this note ("added by Sunshine"), without reading it or
+   * handing it over: the owner's own calendar entry, or Sunshine's own change coming back.
+   */
+  receive(item: IntakeItem, opts?: { keepOnly?: string }): Promise<IntakeResult>;
 }
 
 const LINES = { type: "array", items: { type: "string" } };
@@ -96,15 +132,29 @@ export const SUMMARY_SCHEMA = {
   required: ["title", "summary", "decisions", "owner_tasks", "others_tasks", "open", "to_settle", "searches", "days"],
   additionalProperties: false,
 };
+/** [sunshine:flowing-in] The form for what arrives by itself: the same, and what in it may need the assistant now. */
+export const GATED_SUMMARY_SCHEMA = {
+  ...SUMMARY_SCHEMA,
+  properties: { ...SUMMARY_SCHEMA.properties, needs: LINES },
+  required: [...SUMMARY_SCHEMA.required, "needs"],
+};
+
+/** [sunshine:flowing-in] Whether every item of this source goes to the agent, or only one the reading finds work in. */
+export function gated(source: string): boolean {
+  return SOURCES[source]?.onPurpose !== true;
+}
 
 export function intakeSystem(owner: string, source: string): string {
   const caveat = SOURCES[source]?.caveat;
+  const record = SOURCES[source]?.record; // [sunshine:flowing-in]
   return [
-    `You read a record of something ${owner} took part in, such as a conversation their wearable recorded, and write down what ${owner}'s personal assistant needs from it.`,
+    record
+      ? `You read ${record(owner)} and write down what ${owner}'s personal assistant needs from it.`
+      : `You read a record of something ${owner} took part in, such as a conversation their wearable recorded, and write down what ${owner}'s personal assistant needs from it.`,
     ...(caveat ? [`${caveat} Go by what the conversation as a whole makes clear.`] : []),
     "",
     "Answer with JSON:",
-    `{"title": "a few words naming it", "summary": "two or three sentences: what it was about and where it ended", "decisions": [], "owner_tasks": [], "others_tasks": [], "open": [], "to_settle": [], "searches": [], "days": []}`,
+    `{"title": "a few words naming it", "summary": "two or three sentences: what it was about and where it ended", "decisions": [], "owner_tasks": [], "others_tasks": [], "open": [], "to_settle": [], "searches": [], "days": []${gated(source) ? `, "needs": []` : ""}}`,
     `- decisions: what was agreed or settled, as the conversation left it. A point counts as settled when the group went with it, even if nobody said "decide".`,
     `- owner_tasks: what ${owner} took on, was asked to do, or offered, with any time or deadline that was said.`,
     `- others_tasks: "Name: what they took on".`,
@@ -115,6 +165,10 @@ export function intakeSystem(owner: string, source: string): string {
     // [sunshine:in-the-flow] Code runs these before the hand-off (lookup.ts): the 2026-10-27 live check asked instead of searching.
     `- searches: for each to_settle point ${owner}'s email may answer, what to search their email for, in Gmail's search words: quote exact phrases and put OR between the ways the same thing may be written (for example "12 May" OR "May 12").`,
     `- days: the dates ${owner}'s tasks and open points are about, worked out from the day the record was made, as YYYY-MM-DD, or YYYY-MM-DD/YYYY-MM-DD for a span such as "next week". Their calendar is read for these days.`,
+    // [sunshine:flowing-in] What decides whether the agent gets it at all (gated sources only).
+    ...(gated(source)
+      ? [`- needs: what in it may call for the assistant to do something or tell ${owner} now: an event ${owner} is going to or is invited to, a request or a deadline for ${owner}, a change to ${owner}'s plans, something ${owner} promised. Each short. Empty when it is only worth remembering.`]
+      : []),
     "Each line short and complete on its own, in the plain words someone would later search for. Only what the record supports; empty lists are fine.",
     // [sunshine:in-the-flow] 2026-10-27: a summary's guess that a concert was "not in the calendar yet" was kept, and the agent offered to add one already there.
     "The record tells what was said and asked for, not what is in a calendar, an inbox or another app now: the assistant reads those live, so leave their state out.",
@@ -158,6 +212,16 @@ export function parseAsk(text: string): LookUpAsk {
   }
 }
 
+/** [sunshine:flowing-in] What the reading says may need the assistant now; for this hand-off only, like the ask. */
+export function parseNeeds(text: string): string[] {
+  try {
+    const v = (JSON.parse(text) as Record<string, unknown>).needs;
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.trim().length > 0).map((x) => clip(x.trim(), LINE_MAX)).slice(0, LIST_MAX) : [];
+  } catch {
+    return [];
+  }
+}
+
 /** The named speakers of "[12:34] Name: ..." lines, in order of first turn, without the owner or unknown voices. */
 export function speakersOf(text: string, owner: string): string[] {
   const seen = new Set<string>();
@@ -198,17 +262,18 @@ export function createIntake(deps: IntakeDeps): Intake {
   // [sunshine:in-the-flow] The record's date with its year, for the summary's days.
   const isoDay = (ms: number) => new Intl.DateTimeFormat("en-CA", { timeZone: tz(), year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(ms));
 
-  async function summarize(it: ArchiveItem, call: ModelCall): Promise<{ summary?: ItemSummary; ask?: LookUpAsk; costUsd: number }> {
+  async function summarize(it: ArchiveItem, call: ModelCall): Promise<{ summary?: ItemSummary; ask?: LookUpAsk; needs?: string[]; costUsd: number }> {
     const notes = deps.memory.readDurable().trim();
+    const record = SOURCES[it.source]?.record; // [sunshine:flowing-in]
     const user = [
       ...(notes ? [`What you know about ${owner} (their notes):`, "<notes>", notes, "</notes>", ""] : []),
       `The record: ${it.title ? `"${it.title}", ` : ""}${from(it)}, ${when(it)}${withWhom(it)}.`,
       `It was made on ${isoDay(it.startedAt)}. From that day: ${weeksLine(new Date(it.startedAt), tz())}`, // [sunshine:in-the-flow] [sunshine:grounding] the weeks
-      wrapUntrusted(it.text, `a recording of ${owner}'s conversation`),
+      wrapUntrusted(it.text, record ? record(owner) : `a recording of ${owner}'s conversation`),
     ].join("\n");
-    const reply = await call({ system: intakeSystem(owner, it.source), user, schema: SUMMARY_SCHEMA });
+    const reply = await call({ system: intakeSystem(owner, it.source), user, schema: gated(it.source) ? GATED_SUMMARY_SCHEMA : SUMMARY_SCHEMA });
     const summary = parseSummary(reply.text);
-    return summary ? { summary, ask: parseAsk(reply.text), costUsd: reply.costUsd } : { costUsd: reply.costUsd };
+    return summary ? { summary, ask: parseAsk(reply.text), needs: parseNeeds(reply.text), costUsd: reply.costUsd } : { costUsd: reply.costUsd };
   }
 
   /**
@@ -216,9 +281,10 @@ export function createIntake(deps: IntakeDeps): Intake {
    * found; null when it found nothing; undefined when nothing was looked up (no meaning search, or it failed). `live`:
    * what the email and calendar showed just now, when anything was looked up there.
    */
-  function handOff(it: ArchiveItem, s: ItemSummary, known: string | null | undefined, live?: string): string {
+  function handOff(it: ArchiveItem, s: ItemSummary, known: string | null | undefined, live?: string, needs: string[] = []): string {
     const what = it.title ?? s.title ?? "a conversation";
     const caveat = SOURCES[it.source]?.caveat;
+    const noun = SOURCES[it.source]?.noun; // [sunshine:flowing-in]
     const body = [
       `Summary: ${s.summary}`,
       ...bullets("Decided", s.decisions),
@@ -226,11 +292,12 @@ export function createIntake(deps: IntakeDeps): Intake {
       ...bullets("Others' tasks", s.othersTasks),
       ...bullets("Open", s.open),
       ...bullets("Still unclear", s.toSettle ?? []), // [sunshine:in-the-flow]
+      ...bullets("May need you now", needs), // [sunshine:flowing-in]
     ].join("\n");
     return [
-      `${owner}'s conversation "${what}" (${from(it)}, ${when(it)}${withWhom(it)}) is now kept in full; history_search finds what was said and by whom.${caveat ? ` ${caveat}` : ""}`,
+      `${owner}'s ${noun ?? "conversation"} "${what}" (${from(it)}, ${when(it)}${withWhom(it)}) is now kept in full; history_search finds what was said and by whom.${caveat ? ` ${caveat}` : ""}`,
       "",
-      wrapUntrusted(body, "summary of the recording"),
+      wrapUntrusted(body, noun ? `summary of the ${noun}` : "summary of the recording"),
       "",
       // [sunshine:in-the-flow] What is already known comes with it, so it is part of the decision, not a search to remember.
       ...(known
@@ -274,17 +341,25 @@ export function createIntake(deps: IntakeDeps): Intake {
   }
 
   return {
-    async receive(input) {
+    async receive(input, opts = {}) {
       const people = input.people?.length ? input.people : speakersOf(input.text, owner);
       const it = deps.items.add({ ...input, ...(people.length ? { people } : {}) });
-      if (!deps.call) {
+      // [sunshine:flowing-in] The owner's own change, or Sunshine's coming back: kept with its note, nothing to read or tell.
+      if (opts.keepOnly) {
+        journal(it, opts.keepOnly);
+        record(it, "kept as is", { note: opts.keepOnly });
+        return { outcome: "kept as is", costUsd: 0 };
+      }
+      // [sunshine:flowing-in] Short sources by the small model when there is one.
+      const call = SOURCES[it.source]?.small && deps.smallCall ? deps.smallCall : deps.call;
+      if (!call) {
         journal(it, undefined);
         record(it, "kept, not summarized");
         return { outcome: "kept, not summarized", costUsd: 0 };
       }
       let cost = 0;
       try {
-        const { summary, ask, costUsd } = await summarize(it, deps.call);
+        const { summary, ask, needs = [], costUsd } = await summarize(it, call);
         cost = costUsd;
         if (!summary) {
           journal(it, undefined);
@@ -295,8 +370,13 @@ export function createIntake(deps: IntakeDeps): Intake {
         const kept = deps.items.get(it.id) ?? { ...it, summary };
         journal(kept, summary.summary);
         const s = kept.summary ?? summary;
+        // [sunshine:flowing-in] What arrived by itself goes to the agent only when the reading found something for it.
+        if (gated(it.source) && needs.length === 0) {
+          record(kept, "kept, nothing to act on", { costUsd: cost });
+          return { outcome: "kept, nothing to act on", summary, costUsd: cost };
+        }
         const [known, live] = await Promise.all([knownAbout(kept, s, ask?.days), liveAbout(kept, ask)]); // [sunshine:in-the-flow] [sunshine:hindsight] days
-        const reply = await deps.runTask({ id: `intake-${it.id}`, name: kept.title ?? summary.title ?? "conversation", prompt: handOff(kept, s, known, live), ...(deps.load?.length ? { load: deps.load } : {}) });
+        const reply = await deps.runTask({ id: `intake-${it.id}`, name: kept.title ?? summary.title ?? "conversation", prompt: handOff(kept, s, known, live, needs), ...(deps.load?.length ? { load: deps.load } : {}) });
         record(kept, "handed over", { costUsd: cost, ownerTasks: summary.ownerTasks.length, decisions: summary.decisions.length });
         return { outcome: "handed over", summary, costUsd: cost, reply };
       } catch (err) {

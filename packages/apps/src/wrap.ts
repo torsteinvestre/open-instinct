@@ -1,7 +1,7 @@
 import type { Capability, RegisteredTool, ToolContext, ToolMeta, ToolResultLike, ToolSpec } from "@open-instinct/core";
 import { toLlmContent, type CallToolResult, type Tool as McpTool } from "@earendil-works/pi-mcp";
 import { Type, type TSchema } from "typebox";
-import { capabilitiesForMultiExecute, capabilitiesForSlug } from "./capabilities.js";
+import { capabilitiesForMultiExecute, capabilitiesForSlug, isReadSlug } from "./capabilities.js"; // [sunshine:action-log] isReadSlug
 
 /** The slice of pi-mcp's McpClient this package needs. Narrow so tests can stub it. */
 export interface McpToolSource {
@@ -59,6 +59,20 @@ function describeMultiExecute(args: unknown): string {
   const tools = (args as { tools?: unknown } | null | undefined)?.tools;
   if (!Array.isArray(tools) || tools.length === 0) return describeCall(MULTI_EXECUTE, args);
   return tools.map((t) => describeCall(String((t as { tool_slug?: unknown } | null)?.tool_slug ?? "?"), (t as { arguments?: unknown } | null)?.arguments ?? {})).join("; ");
+}
+
+/**
+ * [sunshine:action-log] The app actions a tool call runs that change something (not reads, not Composio's own tools),
+ * as Composio slugs: one for a direct tool, each listed one for the multi-executor. Empty for every other tool.
+ */
+export function appChangesOf(toolName: string, args: unknown): string[] {
+  if (!toolName.startsWith(TOOL_NAME_PREFIX)) return [];
+  const slug = toolName.slice(TOOL_NAME_PREFIX.length).toUpperCase();
+  const tools = slug === MULTI_EXECUTE ? (args as { tools?: unknown } | null | undefined)?.tools : [{ tool_slug: slug }];
+  if (!Array.isArray(tools)) return [];
+  return tools
+    .map((t) => String((t as { tool_slug?: unknown } | null)?.tool_slug ?? "").trim().toUpperCase())
+    .filter((s) => s && !s.startsWith("COMPOSIO_") && !isReadSlug(s));
 }
 
 // [sunshine:app-permissions] Upstream's note said the guard could not check the tools one by one.

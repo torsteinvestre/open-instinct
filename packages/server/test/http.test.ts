@@ -325,6 +325,23 @@ describe("http server", () => {
     expect(app.inbound).toHaveLength(0);
   });
 
+  // [sunshine:flowing-in]
+  it("app event envelope: goes to the flow, never to owner chat; refused when the flow is off", async () => {
+    const received: unknown[] = [];
+    app.flowIn = { receive: async (ev) => void received.push(ev) };
+    const event = { type: "app.event", id: "trg_evt_1", trigger: "GMAIL_NEW_GMAIL_MESSAGE", data: { id: "1a18", subject: "Hi" } };
+    const res = await post("/chat", { message: `@@instinct-event@@${JSON.stringify(event)}` });
+    expect(await res.json()).toMatchObject({ response: "", acked: true, conversationKey: "system:flow-in" });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(received).toEqual([event]);
+    expect(app.inbound).toHaveLength(0);
+
+    delete app.flowIn;
+    const off = await post("/chat", { message: `@@instinct-event@@${JSON.stringify(event)}` });
+    expect(await off.json()).toMatchObject({ acked: true, blocked: "flowing in is off" });
+    expect(app.inbound).toHaveLength(0);
+  });
+
   it("scheduled wake: runs the matching entry once on scheduled:<id> and never as owner chat", async () => {
     const res = await post("/chat", { message: "Send the morning brief", source: "scheduled" });
     expect(res.status).toBe(200);

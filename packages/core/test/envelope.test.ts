@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decodeEvent, encodeEvent, intakeItemOf, isEnvelope, systemTaskOf } from "../src/envelope.js";
+import { appEventOf, decodeEvent, encodeEvent, intakeItemOf, isEnvelope, systemTaskOf } from "../src/envelope.js"; // [sunshine:flowing-in] appEventOf
 import { EVENT_ENVELOPE_PREFIX } from "../src/types.js";
 
 describe("envelope", () => {
@@ -66,5 +66,19 @@ describe("intakeItemOf", () => {
     expect(intakeItemOf({ ...ok, startedAt: "yesterday" })).toBeUndefined();
     expect(intakeItemOf({ ...ok, text: "  " })).toBeUndefined();
     expect(intakeItemOf({ ...ok, type: "system.task" })).toBeUndefined();
+  });
+});
+
+// [sunshine:flowing-in]
+describe("appEventOf", () => {
+  const ok = { type: "app.event", id: "trg_evt_01.x:1", trigger: "GMAIL_NEW_GMAIL_MESSAGE", data: { id: "1a18c46d9465ea0f" } };
+  it("accepts an app event with its fields and rejects anything else", () => {
+    expect(appEventOf({ ...ok, at: "2026-10-30T09:00:00Z" })).toEqual({ ...ok, at: "2026-10-30T09:00:00Z" });
+    expect(appEventOf({ ...ok, trigger: "gmail_new_gmail_message", at: "soon" })).toEqual(ok);
+    expect(appEventOf({ ...ok, id: "bad id!" })).toBeUndefined();
+    expect(appEventOf({ ...ok, trigger: "GMAIL NEW" })).toBeUndefined();
+    expect(appEventOf({ ...ok, data: [1] })).toBeUndefined();
+    expect(appEventOf({ ...ok, data: undefined })).toBeUndefined();
+    expect(appEventOf({ ...ok, type: "intake.item" })).toBeUndefined();
   });
 });

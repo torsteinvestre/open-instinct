@@ -21,6 +21,7 @@ import {
   ToolRegistry,
   HistoryArchive,
   ItemArchive, // [sunshine:intake]
+  ActionLog, // [sunshine:action-log]
   MeaningSearch, // [sunshine:meaning-search]
   coreTools,
   ensurePersona,
@@ -43,6 +44,7 @@ import { computerGuidance, detectComputer } from "@open-instinct/computer";
 import type { ComputerBackend } from "@open-instinct/computer";
 import { ComposioApps, DEFAULT_TOOLKITS, OPENAI_COMPLETIONS_TOOL_LIMIT, appsGuidance, appsTools, composioModeFor } from "@open-instinct/apps";
 import { actionsAllowed, appsForOthersGuidance } from "@open-instinct/apps"; // [sunshine:app-permissions]
+import { appChangesOf } from "@open-instinct/apps"; // [sunshine:action-log]
 import { ampleTools, type AmpleCredentials } from "@open-instinct/ample";
 import { AtomicMailBackend, atomicMailGuidance } from "@open-instinct/atomicmail";
 import { contextTools } from "@open-instinct/context";
@@ -53,6 +55,8 @@ import { DEFAULT_DECIDE_MODEL, DEFAULT_SCREEN_MODEL, DEFAULT_WRITE_MODEL, NEWS_P
 import { researchWith, writerContextFor } from "./watcher-writer.js";
 import { DEFAULT_MEMORY_MODEL, MEMORY_GATE, MEMORY_REASONING, createMemoryPass } from "./memory-pass.js"; // [sunshine:memory]
 import { DEFAULT_INTAKE_MODEL, INTAKE_REASONING, createIntake, type Intake } from "./intake.js"; // [sunshine:intake]
+import { DEFAULT_INTAKE_SMALL_MODEL, INTAKE_SMALL_REASONING } from "./intake.js"; // [sunshine:flowing-in]
+import { createFlowIn, type FlowIn } from "./flowing-in.js"; // [sunshine:flowing-in]
 import { actingPromptFor, proactivityTool, readProactivity } from "./acting.js"; // [sunshine:acting]
 import { createRecall } from "./recall.js"; // [sunshine:in-the-flow]
 import { composioSources, createLookUp, type LiveSources } from "./lookup.js"; // [sunshine:in-the-flow]
@@ -117,6 +121,8 @@ export interface BootResult {
   onCallEnded?: (event: CallEndedEvent) => Promise<void>;
   /** [sunshine:intake] Takes in what reached the owner from elsewhere (an `intake.item` event). */
   intake?: Intake;
+  /** [sunshine:flowing-in] Takes in what happened in the owner's apps (an `app.event`). */
+  flowIn?: FlowIn;
 }
 
 export const DEFAULT_MARITIME_MCP_URL = "https://mcp.maritime.sh";
@@ -160,6 +166,8 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
   const history = config.features?.history === false ? undefined : new HistoryArchive(state, { onChange: changed });
   // [sunshine:intake] What reached the owner from elsewhere: the same archive, the same switch.
   const items = history ? new ItemArchive(state, { onChange: changed }) : undefined;
+  // [sunshine:action-log] What Sunshine changes in the owner's apps, written by code; the same switch.
+  const actions = history ? new ActionLog(state) : undefined;
   // [sunshine:hindsight] The memory engine, on with HINDSIGHT_URL (HINDSIGHT_API_KEY when the server asks for one; the bank is
   // HINDSIGHT_BANK or the agent's handle, what Sunshine said in "<bank>-said"). It is then the one search: no search model in
   // the agent, word search over the archive only as the backup when Hindsight is down.
@@ -673,6 +681,7 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
     firstContactGuide: () => skillGuide(skillCatalog.list(), "onboarding"),
     ...(groundMessage ? { groundMessage } : {}), // [sunshine:grounding]
     ...(history ? { history } : {}), // [sunshine:history]
+    ...(actions ? { actions: { log: actions, changesOf: appChangesOf } } : {}), // [sunshine:action-log]
     // [sunshine:prune] Pi keeps the prompt cache an hour with PI_CACHE_RETENTION=long; pruning waits that long then.
     ...(env.PI_CACHE_RETENTION?.trim() === "long" ? { promptCacheMs: 60 * 60 * 1000 } : {}),
     ...(loadOnDemand ? { toolLoader: { guidance: groupGuidance } } : {}), // [sunshine:tool-loader]
@@ -689,12 +698,18 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
         const apiKey = m ? apiKeyFor(m.provider, env) : undefined;
         const call = m && apiKey ? modelCall(m, { reasoning: INTAKE_REASONING, apiKey }) : undefined;
         log(`intake: ${call ? `summaries by ${spec}` : "items kept without summaries"}`);
+        // [sunshine:flowing-in] INTAKE_SMALL_MODEL reads the short sources (an email, a calendar change); "off": INTAKE_MODEL does.
+        const smallSpec = call ? stepModelSpec(env.INTAKE_SMALL_MODEL, DEFAULT_INTAKE_SMALL_MODEL) : undefined;
+        const sm = smallSpec ? resolveWatcherModel(smallSpec, env) : undefined;
+        const smallKey = sm ? apiKeyFor(sm.provider, env) : undefined;
+        const smallCall = sm && smallKey ? modelCall(sm, { reasoning: INTAKE_SMALL_REASONING, apiKey: smallKey }) : undefined;
         return createIntake({
           items,
           memory,
           config,
           audit,
           ...(call ? { call } : {}),
+          ...(smallCall ? { smallCall } : {}), // [sunshine:flowing-in]
           runTask: (task) => runtime.runSystemTask(task),
           // [sunshine:in-the-flow] What is already known comes with each hand-off (with meaning search), and email and
           // calendar are loaded for looking things up before asking. Where doing ends: [sunshine:acting], in the prompt.
@@ -704,6 +719,8 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
         });
       })
     : undefined;
+  // [sunshine:flowing-in] What happens in the owner's apps, through the same intake; on wherever the intake is.
+  const flowIn = intake && items ? createFlowIn({ intake, items, state, config, audit, ...(actions ? { actions } : {}) }) : undefined;
   // [sunshine:delivery-mirror] Every text goes out through the channel; the runtime copies the ones
   // that reached the owner from elsewhere (reminders, news, relays) into the owner's thread.
   if (channel) channel.afterSend = (msg, ctx) => runtime.mirrorToOwner(msg, ctx);
@@ -764,6 +781,7 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
     ...(hydrator ? { hydrateInbound: (message: InboundMessage) => hydrator.hydrate(message) } : {}),
     ...(channel ? { onCallEnded: callReporter(channel, (text, key) => runtime.relayToOwner(text, key), log) } : {}),
     ...(intake ? { intake } : {}), // [sunshine:intake]
+    ...(flowIn ? { flowIn } : {}), // [sunshine:flowing-in]
     async close() {
       stopScheduler();
       await safely(log, "whatsapp close", async () => {

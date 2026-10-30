@@ -32,6 +32,8 @@ export {
 export { appsGuidance, appsForOthersGuidance, type AppsGuidanceOptions } from "./guidance.js"; // [sunshine:app-permissions] appsForOthersGuidance
 export { appsTools, describeStatus, type AppsLike, type AppsToolDeps } from "./tools.js";
 export { wrapMcpTool, wrapMcpTools, toolNameFor, describeCall, parametersFor, metaFor, TOOL_NAME_PREFIX, type McpToolSource } from "./wrap.js";
+export { appChangesOf } from "./wrap.js"; // [sunshine:action-log]
+export { isReadSlug } from "./capabilities.js"; // [sunshine:action-log]
 
 /** Toolkits a new agent starts with. */
 export const DEFAULT_TOOLKITS: string[] = ["gmail", "googlecalendar", "googlecontacts"];

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { AuditLog, ItemArchive, MemoryStore, StateDir, defaultConfig } from "@open-instinct/core";
 import type { ModelCall } from "@open-instinct/watcher";
-import { SUMMARY_SCHEMA, createIntake, parseAsk, parseSummary, speakersOf, type IntakeDeps } from "../src/intake.js";
+import { GATED_SUMMARY_SCHEMA, SUMMARY_SCHEMA, createIntake, parseAsk, parseNeeds, parseSummary, speakersOf, type IntakeDeps } from "../src/intake.js";
 import type { LookUpAsk } from "../src/lookup.js";
 
 const dirs: string[] = [];
@@ -31,6 +31,8 @@ const SUMMARY_JSON = {
   owner_tasks: ["Research what consumers think of instruction manuals before the next meeting"],
   others_tasks: ["Una: work the company logo into the design"],
   open: ["Repetitive strain injury"],
+  // [sunshine:flowing-in] The band's conversations arrive by themselves: handed over only with something here.
+  needs: ["Maya's research on instruction manuals is due before the next meeting"],
 };
 const answer = (j: unknown) => JSON.stringify(j);
 
@@ -47,7 +49,7 @@ function fakeModel(replies: Array<string | Error>): ModelCall & { asked: Array<{
   return call;
 }
 
-function setup(call?: ModelCall, extra: Partial<Pick<IntakeDeps, "recall" | "load" | "lookUp">> = {}) {
+function setup(call?: ModelCall, extra: Partial<Pick<IntakeDeps, "recall" | "load" | "lookUp" | "smallCall">> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "intake-"));
   dirs.push(dir);
   const state = new StateDir(dir);
@@ -75,7 +77,8 @@ describe("intake", () => {
 
     // The summary model saw the whole record as data, with the owner's notes and what may be wrong in it.
     expect(model.asked).toHaveLength(1);
-    expect(model.asked[0]!.schema).toBe(SUMMARY_SCHEMA); // [sunshine:fixed-form]
+    expect(model.asked[0]!.schema).toBe(GATED_SUMMARY_SCHEMA); // [sunshine:fixed-form] [sunshine:flowing-in] the band is gated
+    expect(model.asked[0]!.system).toContain("- needs: what in it may call for the assistant to do something or tell Maya now");
     expect(model.asked[0]!.system).toContain("Speaker names come from voice recognition");
     expect(model.asked[0]!.system).toContain('even if nobody said "decide"');
     expect(model.asked[0]!.system).toContain("where it was left: the last view stated, and by whom");
@@ -105,6 +108,7 @@ describe("intake", () => {
     expect(prompt).toContain('<untrusted source="summary of the recording">');
     expect(prompt).toContain("Maya's tasks:\n- Research what consumers think of instruction manuals before the next meeting");
     expect(prompt).toContain("Decided:\n- Target buyer: young, business-class people, mid-range price");
+    expect(prompt).toContain("May need you now:\n- Maya's research on instruction manuals is due before the next meeting"); // [sunshine:flowing-in]
     // [sunshine:acting] How to act is the owner's one rule in the system prompt; the hand-off points to it.
     expect(prompt).toContain("Handle it as you handle everything for Maya (How you act for Maya), starting from what is above.");
     expect(prompt).not.toContain("easy to undo");
@@ -222,7 +226,62 @@ describe("intake", () => {
     expect(p).toContain("starting from what is above."); // [sunshine:acting]
   });
 
+  // [sunshine:flowing-in] What the owner sent on purpose always reaches the agent, in the form it always had.
+  it("[sunshine:flowing-in] hands over a recording the owner sent whatever the reading says, with the old form", async () => {
+    const { needs: _needs, ...withoutNeeds } = SUMMARY_JSON;
+    const model = fakeModel([answer(withoutNeeds)]);
+    const { intake, tasks } = setup(model);
+    expect(await intake.receive({ ...meeting, source: "recording" })).toMatchObject({ outcome: "handed over" });
+    expect(model.asked[0]!.schema).toBe(SUMMARY_SCHEMA);
+    expect(model.asked[0]!.system).not.toContain("- needs:");
+    expect(model.asked[0]!.system).toMatch(/^You read a record of something Maya took part in, such as a conversation their wearable recorded/);
+    expect(model.asked[0]!.user).toContain('<untrusted source="a recording of Maya\'s conversation">');
+    expect(tasks[0]!.prompt).toMatch(/^Maya's conversation "Remote control design meeting" \(recorded on their phone/);
+    expect(tasks[0]!.prompt).toContain('<untrusted source="summary of the recording">');
+    expect(tasks[0]!.prompt).not.toContain("May need you now");
+  });
+
+  it("[sunshine:flowing-in] keeps what arrived by itself without waking the agent when the reading finds nothing for it", async () => {
+    const { items, memory, intake, tasks, audits } = setup(fakeModel([answer({ ...SUMMARY_JSON, needs: [] })]));
+    expect(await intake.receive(meeting)).toMatchObject({ outcome: "kept, nothing to act on", costUsd: 0.03 });
+    expect(items.get("es2004b")!.summary!.summary).toContain("Second design meeting");
+    expect(memory.readJournal(new Date(T))).toContain("Remote control design meeting (heard by the band");
+    expect(tasks).toHaveLength(0);
+    expect(audits()[0]).toMatchObject({ intake: "kept, nothing to act on", costUsd: 0.03 });
+  });
+
+  it("[sunshine:flowing-in] reads an email with the small model, named as an email throughout", async () => {
+    const big = fakeModel([]);
+    const small = fakeModel([answer({ title: "Founders Story", summary: "Maya is on the guest list for Founders Story on 3 Nov, 17:00.", decisions: [], owner_tasks: [], others_tasks: [], open: [], to_settle: [], searches: [], days: ["2026-11-03"], needs: ["An event Maya signed up for: Founders Story, Tue 3 Nov 17:00-20:00"] })]);
+    const { intake, tasks } = setup(big, { smallCall: small });
+    const email = { id: "email-abc", source: "email", title: "You're on the guest list", startedAt: T, people: ["Oslo Startup Lab"], text: "From: Oslo Startup Lab <hi@startuplab.no>\nTo: Maya\n\nSee you on 3 Nov at 17:00." };
+    expect(await intake.receive(email)).toMatchObject({ outcome: "handed over" });
+    expect(big.asked).toHaveLength(0);
+    expect(small.asked[0]!.schema).toBe(GATED_SUMMARY_SCHEMA);
+    expect(small.asked[0]!.system).toMatch(/^You read an email Maya received and write down what Maya's personal assistant needs from it\./);
+    expect(small.asked[0]!.system).not.toContain("Go by what the conversation as a whole makes clear");
+    expect(small.asked[0]!.user).toContain('<untrusted source="an email Maya received">');
+    const p = tasks[0]!.prompt;
+    expect(p).toMatch(/^Maya's email "You're on the guest list" \(received by email, Sat 24 Oct, 10:14 Europe\/Oslo, with Oslo Startup Lab\) is now kept in full/);
+    expect(p).toContain('<untrusted source="summary of the email">');
+    expect(p).toContain("May need you now:\n- An event Maya signed up for: Founders Story, Tue 3 Nov 17:00-20:00");
+  });
+
+  it("[sunshine:flowing-in] keeps the owner's own change as it is: no reading, no hand-off, the note in the journal", async () => {
+    const model = fakeModel([]);
+    const { items, memory, intake, tasks, audits } = setup(model);
+    const change = { id: "cal-1", source: "calendar", title: "Dentist", startedAt: T, text: "Calendar event: Dentist\nChange: new in the calendar" };
+    expect(await intake.receive(change, { keepOnly: "Maya's own entry" })).toEqual({ outcome: "kept as is", costUsd: 0 });
+    expect(model.asked).toHaveLength(0);
+    expect(tasks).toHaveLength(0);
+    expect(items.get("cal-1")!.text).toContain("Calendar event: Dentist");
+    expect(memory.readJournal(new Date(T))).toContain("Dentist (from their calendar, 10:14 Europe/Oslo): Maya's own entry (kept in full)");
+    expect(audits()[0]).toMatchObject({ intake: "kept as is", note: "Maya's own entry" });
+  });
+
   it("reads the summary leniently and finds the named speakers", () => {
+    expect(parseNeeds(answer({ summary: "S.", needs: [" Reply to Morten by Friday ", 2, ""] }))).toEqual(["Reply to Morten by Friday"]); // [sunshine:flowing-in]
+    expect(parseNeeds("{not json")).toEqual([]);
     expect(parseSummary(answer({ summary: " Short. ", decisions: ["a", 3, " ", "b"], owner_tasks: "none" }))).toEqual({ summary: "Short.", decisions: ["a", "b"], ownerTasks: [], othersTasks: [], open: [] });
     expect(parseSummary(answer({ summary: "S.", to_settle: ["When is it?", 4] }))!.toSettle).toEqual(["When is it?"]); // [sunshine:in-the-flow]
     // [sunshine:in-the-flow] What to look up, read as leniently; missing or unreadable asks nothing.

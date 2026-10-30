@@ -19,6 +19,7 @@ import type { AuditLog } from "./audit.js";
 import type { ContactStore } from "./contacts.js";
 import type { MemoryStore } from "./memory.js";
 import type { HistoryArchive } from "./history.js"; // [sunshine:history]
+import { idsIn, type ActionLog } from "./actions.js"; // [sunshine:action-log]
 import { OwnerNotifier } from "./notifier.js";
 import { DEFAULT_TIER_TABLE, SPEND_CAPABILITIES, callCapabilities, type PolicyEngine } from "./policy.js";
 import { looksLikePhone, normalizePhone, phoneCountryOf, resolvePrincipal } from "./principal.js";
@@ -122,6 +123,11 @@ export interface RuntimeDeps {
    * owner's text, and is never saved in the thread. Unset: nothing is gathered.
    */
   groundMessage?: (input: GroundInput) => Promise<string | undefined>;
+  /**
+   * [sunshine:action-log] Where what Sunshine changes in the owner's apps is written down (actions.ts), and which app
+   * actions a call runs that change something (the apps package knows the slugs). Unset: nothing is written.
+   */
+  actions?: { log: ActionLog; changesOf: (tool: string, args: unknown) => string[] };
 }
 
 /** [sunshine:grounding] What the grounding step gets: the owner's new text and the latest texts before it. */
@@ -624,7 +630,7 @@ export class AgentRuntime {
       transformContext: async (messages) => withGrounding(stable ? foldInSteps(messages, this.now(), false) : trimContext(messages, this.now()), conv.grounding), // [sunshine:grounding]
       beforeToolCall: async ({ toolCall, args }) => this.guard(conv, toolCall.name, args),
       afterToolCall: async ({ toolCall, args, isError, result }) => {
-        this.recordToolCall(conv, toolCall.name, args, isError, result?.content);
+        this.recordToolCall(conv, toolCall.name, args, isError, result?.content, result?.details); // [sunshine:action-log] details
         return undefined;
       },
       // [sunshine:tool-loader] After a load the next model call gets the new list; Pi announces the
@@ -1224,13 +1230,14 @@ export class AgentRuntime {
     };
   }
 
-  private recordToolCall(conv: Conversation, toolName: string, args: unknown, isError: boolean, content: unknown): void {
+  private recordToolCall(conv: Conversation, toolName: string, args: unknown, isError: boolean, content: unknown, details?: unknown): void {
     const { registry, audit } = this.deps;
     const meta = registry.meta(toolName);
     const detail: Record<string, unknown> = { tool: toolName, isError, summary: safeDescribe(meta, args) };
     const preview = contentPreview(content);
     if (preview) detail.result = preview;
     audit.append({ kind: "tool_call", conversationKey: conv.key, principal: conv.principal.id, detail });
+    this.recordAction(conv, toolName, args, isError, content, details, detail.summary as string); // [sunshine:action-log]
     if (toolName === REPLY_TOOL && !isError) conv.repliedViaTool = true;
     // [sunshine:reply-guard] Upstream sets this only for A2A. A text sent with a tool to the run's
     // own audience (this thread, or the owner from a scheduled job) is the reply just the same.
@@ -1248,6 +1255,23 @@ export class AgentRuntime {
     if ((amountUsd !== undefined && amountUsd > 0) || spends) {
       // Spend entries feed the daily total; a purchase with no amount is still recorded so it is visible.
       audit.append({ kind: "spend", conversationKey: conv.key, principal: conv.principal.id, detail: { tool: toolName, ...(amountUsd !== undefined ? { amountUsd } : {}), summary: safeDescribe(meta, args) } });
+    }
+  }
+
+  /**
+   * [sunshine:action-log] A call that changes something in the owner's apps, written down with the ids the app answered
+   * with. Failed calls too (ok false): what was tried is part of what Sunshine did. Never stops the run.
+   */
+  private recordAction(conv: Conversation, toolName: string, args: unknown, isError: boolean, content: unknown, details: unknown, summary: string): void {
+    const actions = this.deps.actions;
+    if (!actions) return;
+    try {
+      const changes = actions.changesOf(toolName, args);
+      if (changes.length === 0) return;
+      const ids = isError ? [] : idsIn([details, content]);
+      actions.log.append({ conversationKey: conv.key, tool: toolName, actions: changes, ok: !isError, ids, summary });
+    } catch (error) {
+      this.deps.audit.append({ kind: "error", conversationKey: conv.key, principal: conv.principal.id, detail: { message: `action not written down: ${errorMessage(error)}` } });
     }
   }
 

@@ -37,8 +37,11 @@ const LIST_MAX = 20;
 const LINE_MAX = 400;
 const SUMMARY_MAX = 1200;
 const JOURNAL_GIST_MAX = 240;
-/** How each source reads in the journal and the hand-off, and what may be wrong in what it sends. */
-const SOURCES: Record<string, { words: string; caveat?: string }> = {
+/**
+ * How each source reads in the journal and the hand-off, and what may be wrong in what it sends. [sunshine:hindsight] Also
+ * each item's context line in Hindsight.
+ */
+export const SOURCES:Record<string, { words: string; caveat?: string }> = {
   band: { words: "heard by the band", caveat: "Speaker names come from voice recognition and the words from speech recognition; both can be wrong." },
   // [sunshine:recordings] A recording the owner made on their phone and sent.
   recording: { words: "recorded on their phone", caveat: "Speaker names come from voice recognition and the words from speech recognition; both can be wrong. Voices without a known print show as \"Speaker 1\", \"Speaker 2\"." },
@@ -244,12 +247,15 @@ export function createIntake(deps: IntakeDeps): Intake {
     ].join("\n");
   }
 
-  /** [sunshine:in-the-flow] What is known about what the item is about (null: nothing); never stops the hand-off. */
-  async function knownAbout(it: ArchiveItem, s: ItemSummary): Promise<string | null | undefined> {
+  /**
+   * [sunshine:in-the-flow] What is known about what the item is about (null: nothing); never stops the hand-off.
+   * [sunshine:hindsight] With the days the summary asked about, for recall by when things happen.
+   */
+  async function knownAbout(it: ArchiveItem, s: ItemSummary, days: string[] = []): Promise<string | null | undefined> {
     if (!deps.recall) return undefined;
     const queries = [it.title ?? s.title ?? "", ...s.ownerTasks, ...(s.toSettle ?? []), ...s.open];
     try {
-      return (await deps.recall(queries, { exclude: it.id })) ?? null;
+      return (await deps.recall(queries, { exclude: it.id, ...(days.length > 0 ? { days } : {}) })) ?? null;
     } catch (err) {
       deps.audit.append({ kind: "error", detail: { recall: "failed", id: it.id, message: String(err instanceof Error ? err.message : err).slice(0, 300) } });
       return undefined;
@@ -289,7 +295,7 @@ export function createIntake(deps: IntakeDeps): Intake {
         const kept = deps.items.get(it.id) ?? { ...it, summary };
         journal(kept, summary.summary);
         const s = kept.summary ?? summary;
-        const [known, live] = await Promise.all([knownAbout(kept, s), liveAbout(kept, ask)]); // [sunshine:in-the-flow]
+        const [known, live] = await Promise.all([knownAbout(kept, s, ask?.days), liveAbout(kept, ask)]); // [sunshine:in-the-flow] [sunshine:hindsight] days
         const reply = await deps.runTask({ id: `intake-${it.id}`, name: kept.title ?? summary.title ?? "conversation", prompt: handOff(kept, s, known, live), ...(deps.load?.length ? { load: deps.load } : {}) });
         record(kept, "handed over", { costUsd: cost, ownerTasks: summary.ownerTasks.length, decisions: summary.decisions.length });
         return { outcome: "handed over", summary, costUsd: cost, reply };

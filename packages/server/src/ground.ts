@@ -128,7 +128,7 @@ export function createGround(deps: GroundDeps): (input: GroundInput) => Promise<
     }
     const [known, live] = await Promise.all([
       deps.recall
-        ? deps.recall([input.text, ...ask.about, ...ask.days], { chatsBefore }).then((k) => k ?? null).catch(() => undefined)
+        ? deps.recall([input.text, ...ask.about, ...ask.days], { chatsBefore, ...(ask.days.length > 0 ? { days: ask.days } : {}) }).then((k) => k ?? null).catch(() => undefined) // [sunshine:hindsight] days
         : Promise.resolve(undefined),
       deps.lookUp && (ask.searches.length > 0 || ask.days.length > 0) ? deps.lookUp({ searches: ask.searches, days: ask.days }).catch(() => undefined) : Promise.resolve(undefined),
     ]);

@@ -87,7 +87,8 @@ function realDay(s: string | undefined): string | undefined {
   return Number.isNaN(ms) || new Date(ms).toISOString().slice(0, 10) !== s ? undefined : s;
 }
 
-function addDays(day: string, n: number): string {
+/** [sunshine:hindsight] exported for recall by date. */
+export function addDays(day: string, n: number): string {
   return new Date(Date.parse(`${day}T00:00:00Z`) + n * DAY_MS).toISOString().slice(0, 10);
 }
 
@@ -129,8 +130,8 @@ export function plainText(s: string): string {
     .replace(/[­͏؜ᅟᅠ឴឵᠋-᠏​-‏‪-‮⁠-⁤⁪-⁯ㅤ﻿ﾠ]/g, "");
 }
 
-/** "+01:00" for `tz` at the instant `ms`. */
-function offsetAt(ms: number, tz: string): string {
+/** "+01:00" for `tz` at the instant `ms`. [sunshine:hindsight] exported for each document's local time. */
+export function offsetAt(ms: number, tz: string): string {
   const name = new Intl.DateTimeFormat("en-US", { timeZone: tz, timeZoneName: "longOffset" }).formatToParts(new Date(ms)).find((p) => p.type === "timeZoneName")?.value ?? "";
   return /GMT([+-]\d{2}:\d{2})/.exec(name)?.[1] ?? "+00:00";
 }

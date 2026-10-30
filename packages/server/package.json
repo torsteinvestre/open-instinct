@@ -42,7 +42,8 @@
     "@open-instinct/inkbox": "workspace:*",
     "@open-instinct/network": "workspace:*",
     "@open-instinct/payments": "workspace:*",
-    "@open-instinct/watcher": "workspace:*"
+    "@open-instinct/watcher": "workspace:*",
+    "@vectorize-io/hindsight-client": "1.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

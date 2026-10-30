@@ -44,9 +44,11 @@ export interface RecallDeps {
 
 /**
  * Lines about `queries`, best first, without the item `exclude` and ([sunshine:grounding]) without chat stretches from
- * `chatsBefore` on (they are in the thread already); undefined when nothing related is kept.
+ * `chatsBefore` on (they are in the thread already); undefined when nothing related is kept. [sunshine:hindsight] `days`:
+ * the days it concerns (YYYY-MM-DD or a span), for recall by when things happen; this meaning search leaves them to the
+ * queries.
  */
-export type Recall = (queries: string[], opts?: { exclude?: string; chatsBefore?: number }) => Promise<string | undefined>;
+export type Recall = (queries: string[], opts?: { exclude?: string; chatsBefore?: number; days?: string[] }) => Promise<string | undefined>;
 
 function clip(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max - 1)}…`;

@@ -55,6 +55,8 @@ import { actingPromptFor, proactivityTool, readProactivity } from "./acting.js";
 import { createRecall } from "./recall.js"; // [sunshine:in-the-flow]
 import { composioSources, createLookUp, type LiveSources } from "./lookup.js"; // [sunshine:in-the-flow]
 import { DEFAULT_GROUND_MODEL, createGround } from "./ground.js"; // [sunshine:grounding]
+import { HindsightClient } from "@vectorize-io/hindsight-client"; // [sunshine:hindsight]
+import { HindsightMemory, createHindsightRecall } from "./hindsight.js"; // [sunshine:hindsight]
 import { createLocalEmbedder } from "./embedder.js"; // [sunshine:meaning-search]
 import { MAX_SENT_RECORDING_BYTES, RECORDINGS_GATE, createRecordings, type Recordings } from "./recordings.js"; // [sunshine:recordings]
 import { ChatAwareOutbox, ConsoleOutbox, type ChatReplyBuffer } from "./console-outbox.js";
@@ -144,9 +146,13 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
   const scheduler = new Scheduler(state);
   const contacts = new ContactStore(state, { phoneCountry: phoneCountryOf(config), warn: log }); // [sunshine:phone] phoneCountry
   const memory = new MemoryStore(state);
-  // [sunshine:meaning-search] Set below; the archives tell it when they change.
+  // [sunshine:meaning-search] Set below; the archives tell it when they change. [sunshine:hindsight] Hindsight too.
   let meaning: MeaningSearch | undefined;
-  const changed = () => meaning?.schedule();
+  let hindsight: HindsightMemory | undefined;
+  const changed = () => {
+    meaning?.schedule();
+    hindsight?.schedule();
+  };
   // [sunshine:history] The owner's conversations, kept for searching; off with features.history = false.
   const history = config.features?.history === false ? undefined : new HistoryArchive(state, { onChange: changed });
   // [sunshine:intake] What reached the owner from elsewhere: the same archive, the same switch.
@@ -160,6 +166,16 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
     const { pieces, stored } = meaning.status();
     log(`meaning search: on (${stored} of ${pieces} pieces stored)`);
     if (stored < pieces) meaning.schedule(MEANING_BACKFILL_DELAY_MS);
+  }
+  // [sunshine:hindsight] The memory engine, on with HINDSIGHT_URL (HINDSIGHT_API_KEY when the server asks for one; the bank is
+  // HINDSIGHT_BANK or the agent's handle). It follows the archives; recall then goes through it, the meaning search behind it.
+  const hindsightUrl = env.HINDSIGHT_URL?.trim();
+  if (hindsightUrl && history) {
+    const api = new HindsightClient({ baseUrl: hindsightUrl, userAgent: "sunshine", ...(env.HINDSIGHT_API_KEY?.trim() ? { apiKey: env.HINDSIGHT_API_KEY.trim() } : {}) });
+    const bank = env.HINDSIGHT_BANK?.trim() || config.agent.handle || "owner";
+    hindsight = new HindsightMemory({ api, bank, state, config, history, ...(items ? { items } : {}), audit });
+    log(`hindsight: on (bank ${bank})`);
+    hindsight.schedule(MEANING_BACKFILL_DELAY_MS);
   }
   const a2aStore = new A2AStore(state);
 
@@ -556,8 +572,13 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
 
   // [sunshine:in-the-flow] What is kept, brought to what is new (with meaning search), and the email and calendar read
   // by code (Composio's, or a scenario's stand-ins): for each recording's hand-off and ([sunshine:grounding]) each of
-  // the owner's messages.
-  const recall = meaning ? createRecall({ meaning, config, audit }) : undefined;
+  // the owner's messages. [sunshine:hindsight] Through Hindsight when it is on, the meaning search answering when it fails.
+  const recallWith = (waitMs?: number) => {
+    const byMeaning = meaning ? createRecall({ meaning, config, audit, ...(waitMs ? { waitMs } : {}) }) : undefined;
+    if (!hindsight) return byMeaning;
+    return createHindsightRecall({ memory: hindsight, config, audit, ...(items ? { items } : {}), ...(byMeaning ? { fallback: byMeaning } : {}), ...(waitMs ? { waitMs } : {}) });
+  };
+  const recall = recallWith();
   const live = opts.liveSources ?? (apps ? composioSources(apps, () => config.owner.timezone || "UTC") : undefined);
   const lookUp = live ? createLookUp({ sources: live, config, audit }) : undefined;
   // [sunshine:grounding] GROUND_MODEL picks the grounding step's model; "off" (or no key for it) grounds nothing.
@@ -567,7 +588,7 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
     const apiKey = m ? apiKeyFor(m.provider, env) : undefined;
     log(`grounding: ${m && apiKey ? `by ${spec}` : "off"}`);
     // A reply waits on it: after an idle spell the search model takes a few seconds to load; past 8 s word search answers.
-    const groundRecall = meaning ? createRecall({ meaning, config, audit, waitMs: 8_000 }) : undefined;
+    const groundRecall = recallWith(8_000); // [sunshine:hindsight] through Hindsight when it is on
     return m && apiKey ? createGround({ call: modelCall(m, { reasoning: "low", apiKey }), config, memory, audit, ...(groundRecall ? { recall: groundRecall } : {}), ...(lookUp ? { lookUp } : {}) }) : undefined;
   });
 

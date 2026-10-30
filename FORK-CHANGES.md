@@ -948,6 +948,61 @@ of 5 times here). Wording changes for this case stop here.
 **To remove.** Revert the commit (`git log --grep "sunshine:acting"`): the hand-off gets its own lines back and texts
 lose the rule.
 
+### `[sunshine:hindsight]`: Hindsight is the memory engine; a thin layer of ours decides what goes in and brings it back
+
+**Why** (2026-10-30). Sunshine's own recall (chunks by meaning and words) failed the date questions on his real data;
+Hindsight 1.1.0 (open source, MIT, vectorize-io), used as its makers intend, answered 17 of 20 fully and 3 in part: its
+facts carry the date an event happens, so "next week" is a list by date, not a guess at search words; the newest version
+wins when something changes; deleting a source removes what it taught. Torstein decided: Hindsight is the engine, a thin
+layer of ours, no records of our own; no catch-up when a source is connected. Design: `~/sunshine-ops/
+DESIGN-memory-in-the-flow.md`, "Hindsight as the engine". This is step 1(a) (free, on the laptop).
+
+**What the fork adds**
+- `packages/server/src/hindsight.ts`, `HindsightMemory`: Hindsight follows the archive, as the meaning search's vectors
+  do. What goes in (the input policy): every kept item (recordings now; email next) and the owner's own messages, a
+  spell at a time (a new spell after an hour's pause), once the spell has been quiet 30 minutes. Not Sunshine's replies
+  or the runtime's notes (30 Oct: the reply "the calendar has no events 2-8 Nov" became a fact and ranked first; another
+  system's state is read live). The makers' OpenClaw plugin offers the same as a setting (`retainRoles`); it keeps one
+  document per session and appends, but an iMessage thread never ends and an append re-reads the whole document. Each
+  document has its own id (`item:<id>`, `chat:<thread>:<first message>`), the owner's wall-clock time with its offset,
+  and a context line naming their timezone (and, for recordings, that "[12:34]" is the time into the conversation).
+  A changed document (a line forgotten) is stored again under its id; one that is gone (forgotten, past the age limit)
+  is deleted there; a failed store is tried again after 10 minutes. `history/hindsight.json` says what was stored (id
+  and a hash), so a restart stores nothing twice. The bank is set up on first use, as the makers' integrations do: the
+  30 Oct retain mission with the owner's name, concise extraction, observations on.
+- Local times: Hindsight reads a time without a zone as UTC (its `stored_dates.py`); the 30 Oct documents went in as
+  UTC, so "19:00" in the J. Cole ticket email was kept as 19:00 UTC (20:00 in Oslo) and "Thursday at 14:00" as 14:00
+  UTC; the invitation that said "(CET)" came out right. The makers' own plugins also send UTC. Fix here: local time with
+  the offset, the zone named. Not yet checked with a real store (paid).
+- `createHindsightRecall`, the same `Recall` seam (recall.ts) the hand-offs and grounding use: for the days asked
+  (`opts.days`, new; the grounding step's and the summary's days), every fact whose event falls on them, by the owner's
+  days (widened for dates kept as midnight UTC), in time order, one per source and event time, observations (Hindsight's
+  consolidated view) instead of the facts they were built from; then the queries as one search by meaning (Hindsight's
+  own: meaning, words, time, links, re-ranked) with now as the query time. Lines read "[happens Tue, 3 Nov 2026, 17:00;
+  noted 30 Oct 2026] ... (from email: ...)". The item itself and chats of the last day are left out, as before. When
+  Hindsight fails or is slower than the wait (8 s for grounding, 30 s for hand-offs), the meaning search answers.
+- `boot.ts`: on with `HINDSIGHT_URL` (`HINDSIGHT_API_KEY` when the server asks for one; bank `HINDSIGHT_BANK` or the
+  agent's handle), using the makers' TypeScript client (`@vectorize-io/hindsight-client` 1.1.0, no dependencies of its
+  own). Without it nothing changes. `ground.ts` and `intake.ts` pass their days; `lookup.ts` exports `addDays` and
+  `offsetAt`; `intake.ts` exports `SOURCES` (each item's context line).
+
+**Tested** (free): `test/hindsight.test.ts` (5, a stand-in server): only the owner's lines go in, quiet spells only,
+local times across the clock change (CEST and CET), the zone in every context, the bank set up once; stored once,
+stored again when a line is forgotten, a spell whose first message is forgotten deleted and stored anew, a failed store
+tried again; recall by date (the owner's days, dates without a time, a fact just past midnight left out, one per source,
+observations instead of their facts), by meaning with now in local time, the item itself and today's chats left out,
+nothing kept = nothing said, slow = meaning search answers. All tests (1,493), typecheck and smoke pass. Free check on
+the real local server's 30 Oct bank (recall and listing only, no model call; scratchpad hs_recall_real.mjs): "next week"
+lists the 3 Nov facts (13 lines before the per-source and observation rules, 3 after), "December" Firi's fee change and
+Dune on the 18th, "what did me and Morten decide about the server?" the right answer; 3-4 s each on the laptop CPU.
+
+**Open.** A real store with the local-time fix (paid, about 2-3 cents). Whether Hindsight's search can replace the agent's
+own meaning search (history_search) or should sit beside it. Hindsight's output language is a server setting
+(`HINDSIGHT_API_LLM_OUTPUT_LANGUAGE`), not per bank. Where it runs live (about 3 GB with its search models).
+
+**To remove.** Revert the commit (`git log --grep "sunshine:hindsight"`), or delete `hindsight.ts` and its test, the
+dependency, and the tagged lines in `boot.ts`, `ground.ts`, `intake.ts`, `lookup.ts` and `recall.ts`.
+
 ### `[sunshine:intake]`: what reaches the owner from elsewhere is kept, summarized once and acted on
 
 **Why** (2026-10-24). Sunshine should know what its person knows without being told (NOTES "PRINCIPLE: the one AI

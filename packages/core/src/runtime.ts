@@ -192,11 +192,16 @@ const STRANGERS_FILE = "strangers.json";
 const CONVERSATIONS_FILE = "conversations.json";
 const APPROVED_FILE = "approved.json";
 const PENDING_REPLIES_FILE = "pending-replies.json";
-const DELIVERABLE: ReadonlySet<Channel> = new Set(["imessage", "sms", "email", "a2a"]);
+const DELIVERABLE: ReadonlySet<Channel> = new Set(["imessage", "sms", "whatsapp", "email", "a2a"]);
 /** Channels where the sender's identity is bound to the carrier or the process, so an owner reply can settle an approval. */
-const APPROVAL_CHANNELS: ReadonlySet<Channel> = new Set(["imessage", "sms", "chat"]);
-/** [sunshine:grounding] The owner's own conversation channels, where each message is grounded first. */
-const GROUNDED: ReadonlySet<Channel> = new Set(["imessage", "sms", "chat"]);
+const APPROVAL_CHANNELS: ReadonlySet<Channel> = new Set(["imessage", "sms", "whatsapp", "chat"]);
+/** Phone text threads: where owner notices go when the owner last wrote from one. */
+const TEXT_THREADS: ReadonlySet<Channel> = new Set(["imessage", "sms", "whatsapp"]);
+/**
+ * [sunshine:grounding] [sunshine:history] The owner's own conversation channels: each message is grounded first and
+ * the thread is kept for searching. One list, so a new channel (upstream's WhatsApp) gets both or neither.
+ */
+const OWNER_THREADS: ReadonlySet<Channel> = new Set([...TEXT_THREADS, "chat"]);
 /**
  * [sunshine:grounding] A reply waits for the grounding; past this it goes on without it. Room for a cold search model
  * (8 s, then word search), the small model (2-4 s seen) and the look-ups (about 1 s each, side by side).
@@ -205,7 +210,7 @@ const GROUND_WAIT_MS = 20_000;
 /** [sunshine:grounding] Texts before the new one that the grounding step sees, each clipped (what the message refers to). */
 const GROUND_RECENT = 8;
 const GROUND_RECENT_MAX = 500;
-const CHANNELS: ReadonlySet<string> = new Set(["imessage", "sms", "email", "a2a", "chat", "scheduled", "system"]);
+const CHANNELS: ReadonlySet<string> = new Set(["imessage", "sms", "whatsapp", "email", "a2a", "chat", "scheduled", "system"]);
 const REPLY_TOOL = "reply_instinct";
 const PROCESSING_FILE = "processing-events.json";
 const CLAIM_ATTEMPTS_FILE = "owner-claim-attempts.json";
@@ -491,7 +496,7 @@ export class AgentRuntime {
     deps.state.ensure();
     this.a2aStore = deps.a2aStore ?? new A2AStore(deps.state);
     const savedRoute = deps.state.readJson<{ conversationKey?: unknown; channel?: unknown }>("owner-route.json", {});
-    if (typeof savedRoute.conversationKey === "string" && ["imessage", "sms"].includes(String(savedRoute.channel))) {
+    if (typeof savedRoute.conversationKey === "string" && TEXT_THREADS.has(savedRoute.channel as Channel)) {
       this.ownerLast = { conversationKey: savedRoute.conversationKey, channel: savedRoute.channel as Channel };
     }
     this.notifier = new OwnerNotifier({
@@ -650,7 +655,7 @@ export class AgentRuntime {
           }
         : {}),
       // [sunshine:history] The owner's own threads are kept for searching; a failure never fails a save.
-      ...(this.deps.history && principal.kind === "owner" && (channel === "imessage" || channel === "sms" || channel === "chat")
+      ...(this.deps.history && principal.kind === "owner" && OWNER_THREADS.has(channel)
         ? {
             onPersist: (messages: AgentMessage[]) => {
               try {
@@ -880,7 +885,7 @@ export class AgentRuntime {
     // [sunshine:grounding] What is known and what the owner's email and calendar show, gathered before the model
     // answers (2026-10-29: "anything happening next week?" was answered from the calendar alone, and the details of an
     // event it knew about were asked for although they were in his email).
-    if (principal.kind === "owner" && !group && !msg.meta?.delegatedResult && GROUNDED.has(conv.channel)) conv.grounding = await this.groundFor(conv, text);
+    if (principal.kind === "owner" && !group && !msg.meta?.delegatedResult && OWNER_THREADS.has(conv.channel)) conv.grounding = await this.groundFor(conv, text);
     const run = conv.run(prompt).finally(() => {
       conv.ownerTurn = false;
       conv.grounding = undefined; // [sunshine:grounding]
@@ -1438,8 +1443,8 @@ export class AgentRuntime {
     const last = this.ownerLast;
     const phone = this.deps.config.owner.phones[0];
     let out: OutboundMessage;
-    if (last && (last.channel === "imessage" || last.channel === "sms")) {
-      out = { channel: last.channel, conversationKey: last.conversationKey, text };
+    if (last && TEXT_THREADS.has(last.channel)) {
+      out = { channel: last.channel as OutboundChannel, conversationKey: last.conversationKey, text };
     } else if (phone) {
       out = { channel: "imessage", to: phone, text };
     } else if (last && DELIVERABLE.has(last.channel) && last.channel !== "a2a") {
@@ -1852,7 +1857,9 @@ export function writeSession(file: string, messages: AgentMessage[]): void {
  * summary message. Idempotent on an already folded transcript.
  */
 export function restoreMessages(stored: AgentMessage[], now: Date, keep = SESSION_KEEP_MESSAGES, maxChars = SESSION_KEEP_CHARS, keepImages = KEEP_RECENT_IMAGES): AgentMessage[] {
-  const messages = dropOldImages(dropOrphanToolCalls(stored.filter((m) => m.role !== "system")), keepImages);
+  // Results first: a call is judged only against results that survive, so an orphan result
+  // about to be dropped cannot leave its same-id call standing without an answer.
+  const messages = dropOldImages(dropOrphanToolCalls(dropOrphanToolResults(stored.filter((m) => m.role !== "system"))), keepImages);
   let start = messages.length <= keep ? 0 : nextUserTurn(messages, messages.length - keep);
   // Large tool results can blow the context long before the message count does. The slice
   // only ever moves to a user or assistant turn; when none is left it stays where it is,
@@ -2014,6 +2021,22 @@ function charSize(messages: AgentMessage[]): number {
     }
   }
   return total;
+}
+
+/**
+ * Drop tool results whose call is not earlier in the transcript. A session saved by a fold
+ * that cut inside a turn (before the fold learned to land only on a turn) starts like that,
+ * and every later run of that conversation is rejected until it is repaired.
+ */
+function dropOrphanToolResults(messages: AgentMessage[]): AgentMessage[] {
+  const calls = new Set<string>();
+  const out: AgentMessage[] = [];
+  for (const m of messages) {
+    if (m.role === "assistant") for (const c of m.content) if (c.type === "toolCall") calls.add(c.id);
+    if (m.role === "toolResult" && !calls.has(m.toolCallId)) continue;
+    out.push(m);
+  }
+  return out;
 }
 
 function dropOrphanToolCalls(messages: AgentMessage[]): AgentMessage[] {
@@ -2202,7 +2225,7 @@ function reachesOwnAudience(conv: Conversation, target: ReplyTarget | undefined)
   if (target !== "owner") return false;
   // [sunshine:reply-guard] A system task (upstream's `system.task`) also runs as the owner with no thread of its own.
   if (conv.channel === "scheduled" || conv.channel === "system") return true;
-  const privateOwnerText = conv.principal.kind === "owner" && (conv.channel === "imessage" || conv.channel === "sms") && conv.deliveryKey === conv.key;
+  const privateOwnerText = conv.principal.kind === "owner" && TEXT_THREADS.has(conv.channel) && conv.deliveryKey === conv.key;
   return privateOwnerText;
 }
 

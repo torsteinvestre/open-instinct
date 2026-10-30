@@ -36,8 +36,9 @@ import {
 import type { InboundMessage, InstinctConfig, Outbox, Principal, RegisteredTool } from "@open-instinct/core";
 import type { LoadableGroup } from "@open-instinct/core"; // [sunshine:tool-loader]
 import type { Embedder } from "@open-instinct/core"; // [sunshine:meaning-search]
-import { CALL_ORIGINATIONS, InkboxA2A, InkboxChannel, InkboxInboundHydrator, InkboxProvisioner, handleCallEnded, messagingTools, sendFileTool, voiceInstructions } from "@open-instinct/inkbox";
+import { CALL_ORIGINATIONS, DurableInbox, InkboxA2A, InkboxChannel, InkboxInboundHydrator, InkboxProvisioner, handleCallEnded, messagingTools, sendFileTool, voiceInstructions } from "@open-instinct/inkbox";
 import type { CallEndedEvent, CallOrigination } from "@open-instinct/inkbox";
+import { WhatsAppChannel } from "@open-instinct/whatsapp";
 import { computerGuidance, detectComputer } from "@open-instinct/computer";
 import type { ComputerBackend } from "@open-instinct/computer";
 import { ComposioApps, DEFAULT_TOOLKITS, OPENAI_COMPLETIONS_TOOL_LIMIT, appsGuidance, appsTools, composioModeFor } from "@open-instinct/apps";
@@ -45,6 +46,7 @@ import { actionsAllowed, appsForOthersGuidance } from "@open-instinct/apps"; // 
 import { ampleTools, type AmpleCredentials } from "@open-instinct/ample";
 import { AtomicMailBackend, atomicMailGuidance } from "@open-instinct/atomicmail";
 import { contextTools } from "@open-instinct/context";
+import { keenableTools } from "@open-instinct/keenable";
 import { networkTools } from "@open-instinct/network";
 // [sunshine:watcher]
 import { DEFAULT_DECIDE_MODEL, DEFAULT_SCREEN_MODEL, DEFAULT_WRITE_MODEL, NEWS_PROMPT, WATCH_GATE, createWatcher, modelCall, resolveWatcherModel, stepModelSpec, type ModelCall, type Watcher } from "@open-instinct/watcher";
@@ -69,6 +71,7 @@ import { createSkillCatalog, formatSkillsIndex, loadSkillTool, ownerSkillsDir, r
 
 /** How often the skill folders are re-read; an owner-installed skill shows up within this. */
 const SKILLS_REFRESH_MS = 30_000;
+import { ChannelRouter, whatsappEnabled } from "./whatsapp.js";
 
 export interface BootOptions {
   streamFn?: StreamFn;
@@ -222,6 +225,20 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
     log("Inkbox not configured: replies go to the console outbox");
   }
 
+  // WhatsApp: the agent's own account as a linked device. Replies on the whatsapp channel go
+  // through it; everything else keeps the transport above. It starts once the runtime exists.
+  let whatsappInbox: DurableInbox<InboundMessage> | undefined;
+  const whatsapp = whatsappEnabled(env)
+    ? new WhatsAppChannel({
+        authDir: state.path("secrets", "whatsapp"),
+        mediaDir: state.path("workspace", "inbound"),
+        ...(env.WHATSAPP_PHONE?.trim() ? { phone: env.WHATSAPP_PHONE.trim() } : {}),
+        onInbound: (message) => void whatsappInbox?.enqueue(message.id, message),
+        logger: log,
+      })
+    : undefined;
+  if (whatsapp) outbox = new ChannelRouter(outbox, { whatsapp });
+
   const registry = new ToolRegistry();
   const promptSections: string[] = [];
   // [sunshine:tool-loader] The owner's email, desktop, file and people tools load when a request needs
@@ -256,6 +273,8 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
         : {}),
       ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
       ...(env.BRAVE_SEARCH_API_KEY ? { searchApiKey: env.BRAVE_SEARCH_API_KEY } : {}),
+      // Opt-in: YDC_API_KEY, or YOU_SEARCH=1 for the keyless tier. Unset keeps Brave or DuckDuckGo.
+      ...(env.YDC_API_KEY || env.YOU_SEARCH === "1" ? { youSearch: env.YDC_API_KEY ? { apiKey: env.YDC_API_KEY } : {} } : {}),
     }),
   );
 
@@ -288,6 +307,17 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
     registry.registerMany(
       contextTools({
         apiKey: env.CONTEXT_DEV_API_KEY,
+        ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
+      }),
+    );
+  }
+
+  // Keenable works without a key, so it needs its own switch; a key also turns it on.
+  // The switch takes what the gateway takes (1, true, yes): `instinct deploy` forwards it as written.
+  if (/^(1|true|yes)$/i.test(env.KEENABLE_SEARCH?.trim() ?? "") || env.KEENABLE_API_KEY) {
+    registry.registerMany(
+      keenableTools({
+        ...(env.KEENABLE_API_KEY ? { apiKey: env.KEENABLE_API_KEY } : {}),
         ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
       }),
     );
@@ -680,6 +710,21 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
 
   const stopScheduler = scheduler.start((entry) => runtime.runScheduled(entry));
 
+  if (whatsapp) {
+    // Persisted before handling, like Inkbox webhooks, so a restart mid-reply does not lose a message.
+    whatsappInbox = new DurableInbox<InboundMessage>({
+      file: state.path("whatsapp-inbox.json"),
+      handle: async (message) => {
+        await runtime.handleInbound(message, { waitForCompletion: true });
+      },
+      onError: (id, status) => log(`WhatsApp message ${id}: ${status}`),
+    });
+    // Without start() the inbox persists every message and never hands one to the runtime.
+    // Starting it also picks up messages saved before a restart.
+    whatsappInbox.start();
+    await safely(log, "whatsapp", () => whatsapp.start());
+  }
+
   let sync: ScheduleSync | undefined;
   if (env.MARITIME_BACKEND_URL && env.MARITIME_INTERNAL_TOKEN && env.MARITIME_AGENT_ID) {
     sync = createScheduleSync({
@@ -721,6 +766,10 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
     ...(intake ? { intake } : {}), // [sunshine:intake]
     async close() {
       stopScheduler();
+      await safely(log, "whatsapp close", async () => {
+        await whatsapp?.stop();
+        await whatsappInbox?.close();
+      });
       sync?.stop();
       await safely(log, "computer close", () => computer?.close());
       await safely(log, "apps close", () => apps?.close());

@@ -26,6 +26,7 @@ skills/
   trusted-network/SKILL.md
   maritime-computer/SKILL.md
   web-apps/SKILL.md
+  nandaindex/SKILL.md
   news-watch/SKILL.md     [sunshine:watcher] only used where the news watch is on
 ```
 

@@ -2,7 +2,7 @@
 
 This fork (torsteinvestre/open-instinct) runs as **Sunshine**. It is based on
 [mariagorskikh/open-instinct](https://github.com/mariagorskikh/open-instinct) at commit `79a144a`,
-with upstream merged in up to `cb3d97c` on 2026-10-23 (see [Upstream merges](#upstream-merges)).
+with upstream merged in up to `3068c23` on 2026-10-30 (see [Upstream merges](#upstream-merges)).
 This page lists what the fork adds, so each change can be found, understood and removed.
 
 ## Tagged changes
@@ -1630,6 +1630,39 @@ were answered in full and the main risk kept in every version. Upstream's line s
 skills list, memory (`[sunshine:memory]`), the thinking level.
 
 ## Upstream merges
+
+### 2026-10-30: upstream up to `3068c23`
+
+**Why now.** Everything flowing into memory (DESIGN-memory-in-the-flow.md, job 1) comes in through one route on the
+gateway, and upstream had changed exactly that part: how the gateway forwards webhooks to agents. Merged first, so
+the route is built on it.
+
+**What came in** (22 commits): the gateway honours Maritime's `Retry-After` when forwarding a webhook, keeps a
+callback that was put off and wakes the inbox for a new one; a WhatsApp channel (the agent's own account as a linked
+device, Baileys; off unless `WHATSAPP_PHONE` or `WHATSAPP_ENABLED=1`); Keenable keyless web search and page fetch (off
+unless `KEENABLE_SEARCH` or a key); You.com web search (off unless `YDC_API_KEY` or `YOU_SEARCH=1`); cron checks (full
+day and month names, bad name suffixes refused); repair of transcripts left with orphan tool results; a `nandaindex`
+skill; their own fix for `+`-prefixed ten-digit numbers read as US.
+
+**Left out.** Nothing removed. WhatsApp stays off: the linked-device route is against WhatsApp's terms and risks the
+account (DESIGN-memory-in-the-flow.md, 27 Oct).
+
+**Collisions** (14 files and the lockfile). Both sides adding in one place, kept both: the Dockerfiles (`watcher` and
+`whatsapp`), `server/package.json`, imports in `boot.ts` and the gateway's `server.ts`, the gateway test's boot
+options, `agentExtraEnv` (our model and agent settings, their Keenable keys), the skills list. The lockfile is ours
+with upstream's new packages added by `pnpm install` (only additions; Baileys at upstream's version). Fitted by hand:
+- Phone numbers: upstream's fix covers `+` with ten digits; `[sunshine:phone]` (libphonenumber) covers that and local
+  formats, so ours is kept in core, network and the gateway, with upstream's new test cases (Norway, Denmark,
+  Singapore), which pass on it.
+- Channels: upstream added `whatsapp` as an owner channel. One list, `OWNER_THREADS` in `runtime.ts` (`[sunshine:grounding]`
+  `[sunshine:history]`), now decides both which owner threads are grounded and which are kept for searching (they were
+  two separate lists, both iMessage, SMS and chat); `[sunshine:reply-guard]`'s private owner thread uses upstream's
+  `TEXT_THREADS`. With WhatsApp off nothing changes.
+
+**Checked before committing** (all free). Upstream's prompt changes only add `whatsapp` beside `imessage` and `sms`, so
+an iMessage owner chat reads as before; `web_search` changes only when You.com is set; every new part is behind a
+setting this agent does not have (its env list checked). Build, type check, all tests (about 1,555) and the smoke test
+pass. Undo: `git reset --hard before-upstream-3068c23` (a tag on the commit before the merge).
 
 ### 2026-10-23: upstream up to `cb3d97c`
 

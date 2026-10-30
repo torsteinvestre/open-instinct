@@ -41,6 +41,9 @@ export interface GatewayEnv {
   /** COMPOSIO_MODE forwarded to each agent: direct or router. Unset lets the agent choose from its model. */
   composioMode?: string;
   contextDevApiKey?: string;
+  /** KEENABLE_SEARCH=1: each agent gets keenable_search and keenable_fetch, which need no key. */
+  keenableSearch: boolean;
+  keenableApiKey?: string;
   /** AMPLE_SIGNUP=1: each person's agent signs up for an Ample account of its own on its first deploy. */
   ampleSignup: boolean;
   /** An Ample credential set on the gateway. Never forwarded: every agent would share one account. */
@@ -124,6 +127,8 @@ export function readEnv(env: NodeJS.ProcessEnv): GatewayEnv {
     composioToolkits: env["COMPOSIO_TOOLKITS"] || env["INSTINCT_COMPOSIO_TOOLKITS"] || undefined,
     composioMode: env["COMPOSIO_MODE"]?.trim() || undefined,
     contextDevApiKey: env["CONTEXT_DEV_API_KEY"] || undefined,
+    keenableSearch: truthy(env["KEENABLE_SEARCH"]),
+    keenableApiKey: env["KEENABLE_API_KEY"] || undefined,
     ampleSignup: truthy(env["AMPLE_SIGNUP"]),
     ampleSharedCredential: Boolean(env["AMPLE_CLIENT_ID"] || env["AMPLE_CLIENT_SECRET"] || env["AMPLE_TOKEN"]),
     idleTtlSeconds: idle !== undefined && Number.isFinite(idle) ? idle : undefined,
@@ -162,13 +167,17 @@ export function checkSignupPolicy(cfg: Pick<GatewayEnv, "inkboxAdminApiKey" | "s
 }
 
 /** Settings every agent gets. Only keys safe to share across people belong here. */
-export function agentExtraEnv(cfg: Pick<GatewayEnv, "contextDevApiKey" | "ampleSignup" | "composioMode" | "agentModel" | "agentSettings">): Record<string, string> | undefined {
+export function agentExtraEnv(
+  cfg: Pick<GatewayEnv, "contextDevApiKey" | "keenableSearch" | "keenableApiKey" | "ampleSignup" | "composioMode" | "agentModel" | "agentSettings">,
+): Record<string, string> | undefined {
   // [sunshine:watcher] The operator's agent settings first; the keys below are the gateway's own.
   const env: Record<string, string> = { ...(cfg.agentSettings ?? {}) };
   if (cfg.composioMode) env["COMPOSIO_MODE"] = cfg.composioMode;
   // [sunshine:gateway-settings] Without this every agent runs core's default model. Maritime's metered proxy sets its own and wins.
   if (cfg.agentModel) env["INSTINCT_MODEL"] = cfg.agentModel;
   if (cfg.contextDevApiKey) env["CONTEXT_DEV_API_KEY"] = cfg.contextDevApiKey;
+  if (cfg.keenableSearch) env["KEENABLE_SEARCH"] = "1";
+  if (cfg.keenableApiKey) env["KEENABLE_API_KEY"] = cfg.keenableApiKey;
   if (cfg.ampleSignup) env["AMPLE_SIGNUP"] = "1";
   return Object.keys(env).length > 0 ? env : undefined;
 }

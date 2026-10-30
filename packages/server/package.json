@@ -40,9 +40,11 @@
     "@open-instinct/context": "workspace:*",
     "@open-instinct/core": "workspace:*",
     "@open-instinct/inkbox": "workspace:*",
+    "@open-instinct/keenable": "workspace:*",
     "@open-instinct/network": "workspace:*",
     "@open-instinct/payments": "workspace:*",
     "@open-instinct/watcher": "workspace:*",
+    "@open-instinct/whatsapp": "workspace:*",
     "@vectorize-io/hindsight-client": "1.1.0"
   },
   "devDependencies": {

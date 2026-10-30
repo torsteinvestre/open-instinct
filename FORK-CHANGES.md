@@ -1038,13 +1038,27 @@ fails; no model = words only, nothing stored). All tests (1,498), typecheck and 
 (searching only): "when is the J. Cole concert?" 12 Nov 19:00 first, with the ticket email's text; "what did Morten say
 about the Thursday meeting?" the meeting first, with the 12 recording lines word for word; about 0.5 s a search.
 
+**Step 1(b) test** (`scenarios/memory-real.mjs`, 2026-10-30): the 20-question key on his real data through the real path
+(the server on a copy of his agent's chat state, the grounding step, Sonnet 5.5 with its real tools; history_search real),
+arm A today's meaning search, arm B Hindsight (bank stored from the same archive through `HindsightMemory.sync()`). The
+copy is cut at the key's "now" (30 Oct 13:00 Oslo); two exchanges where he asked key questions live that morning and got
+the answers are taken out of thread and archive (an old answer in the thread would hand both arms the answer). His
+emails are kept items, as if the email door existed. Stand-ins: Gmail over his same exported emails, the calendar as
+read on 27-29 Oct; writes, sends and the web scripted and recorded; a guard refuses any write to Hindsight in answer
+runs; storing has a spend watcher on its own clock that stops the Hindsight server past MAX_USD. Free checks: the
+storing preview (162 documents: 112 emails, 4 recordings, 20 spells of his texts, 26 spells of Sunshine's words to the
+text-only bank; about $0.21 at the 30 Oct rate), both arms through the real path with a stand-in model (20/20 each; arm
+B on the 30 Oct bank, 2,268 background writes refused), the blind grading sheet on those answers. Seen in the preview:
+a tapback arrives as his text quoting Sunshine's reply ("Satte spørsmålstegn ved «...»"), so Sunshine's words can
+enter his spells (input policy: to fix with the email door's cleaning).
+
 **Open.** Hindsight's output language is a server setting (`HINDSIGHT_API_LLM_OUTPUT_LANGUAGE`), not per bank: one
 language for everyone on a shared server. Where it runs live (about 3 GB with its search models). An email's text shown
 under "the text it came from" can be mostly a recipient list (the invitation); the email door should clean that. "Did
 the reminder come through?" is answered from the copies of sent texts; the action log will be the exact record.
 
-**To remove.** Revert the commits (`git log --grep "sunshine:hindsight"`), or delete `hindsight.ts` and its test, the
-dependency, and the tagged lines in `boot.ts`, `ground.ts`, `intake.ts`, `lookup.ts` and `recall.ts`, core
+**To remove.** Revert the commits (`git log --grep "sunshine:hindsight"`), or delete `hindsight.ts` and its test,
+`scenarios/memory-real.mjs`, the dependency, and the tagged lines in `boot.ts`, `ground.ts`, `intake.ts`, `lookup.ts` and `recall.ts`, core
 `core-tools.ts` and `meaning.ts`.
 
 ### `[sunshine:intake]`: what reaches the owner from elsewhere is kept, summarized once and acted on

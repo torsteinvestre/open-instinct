@@ -40,6 +40,8 @@ export interface RecallDeps {
   /** Tests: shorter wait for the search model. */
   waitMs?: number;
   minNear?: number;
+  /** [sunshine:hindsight] Word search only: the backup when Hindsight is down, with no search model in the agent. */
+  wordsOnly?: boolean;
 }
 
 /**
@@ -82,7 +84,7 @@ export function createRecall(deps: RecallDeps): Recall {
     if (asked.length === 0) return undefined;
     const other = (p: Piece) => !(p.kind === "item" && p.item.id === opts.exclude) && !(p.kind === "chat" && opts.chatsBefore !== undefined && p.ts >= opts.chatsBefore);
     const best = new Map<string, { piece: Piece; score: number }>();
-    let wordsOnly = false;
+    let wordsOnly = deps.wordsOnly ?? false; // [sunshine:hindsight]
     for (const q of asked) {
       let hits: Array<{ piece: Piece; score: number; near?: number }>;
       try {

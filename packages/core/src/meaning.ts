@@ -193,7 +193,11 @@ interface Store {
 
 export interface MeaningSearchDeps {
   state: StateDir;
-  embedder: Embedder;
+  /**
+   * [sunshine:hindsight] Without one, words only (BM25), and no model in the agent: with Hindsight as the one search, this
+   * answers only when Hindsight is down.
+   */
+  embedder?: Embedder;
   config: InstinctConfig;
   history?: HistoryArchive;
   items?: ItemArchive;
@@ -228,7 +232,7 @@ export class MeaningSearch {
   }
 
   private load(): Store {
-    const model = this.deps.embedder.model;
+    const model = this.deps.embedder?.model ?? ""; // [sunshine:hindsight] no model: no vectors
     if (this.store?.model === model) return this.store;
     const saved = this.deps.state.readJson<Store>(MEANING_FILE, { model, vectors: {} });
     // Vectors from another model (or version) mean nothing to this one: start again.
@@ -289,6 +293,8 @@ export class MeaningSearch {
    * can slip in between). One run at a time; a change during a run makes it run again afterwards.
    */
   async sync(): Promise<{ added: number; removed: number }> {
+    const embedder = this.deps.embedder;
+    if (!embedder) return { added: 0, removed: 0 }; // [sunshine:hindsight] words only: nothing to store
     if (this.running) {
       this.again = true;
       await this.running;
@@ -306,7 +312,7 @@ export class MeaningSearch {
       let added = 0;
       try {
         for (const p of missing) {
-          const [v] = await this.deps.embedder.embed([p.lines.join("\n")], "document");
+          const [v] = await embedder.embed([p.lines.join("\n")], "document");
           if (!v) continue;
           // The model may have changed under a long run (a new version deployed): then stop.
           if (this.store !== store) break;
@@ -353,7 +359,9 @@ export class MeaningSearch {
     const pieces = this.pieces().filter(inRange);
     if (pieces.length === 0 || !query.trim()) return [];
     let near: Array<[Piece, number]> = [];
-    if (mode !== "words") {
+    // [sunshine:hindsight] Without a model, "both" is words alone; "meaning" alone cannot be answered.
+    if (mode === "meaning" && !this.deps.embedder) throw new Error("no search model");
+    if (mode !== "words" && this.deps.embedder) {
       const [q] = await this.deps.embedder.embed([query], "query");
       if (!q) throw new Error("the search model returned nothing");
       for (const p of pieces) {

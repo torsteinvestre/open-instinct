@@ -1009,12 +1009,43 @@ summer time about "dinner with Zia on 5 Nov at 19:00" (winter time) 2/2 at 19:00
 ticket email is Norwegian). 15 model calls, 97k tokens in (39k cached), 14k out. It showed one fault of this layer,
 fixed after it: a date without a time came back as his midnight and was shown as the day before.
 
-**Open.** Whether Hindsight's search can replace the agent's own meaning search (history_search) or should sit beside
-it. Hindsight's output language is a server setting (`HINDSIGHT_API_LLM_OUTPUT_LANGUAGE`), not per bank: one language
-for everyone on a shared server. Where it runs live (about 3 GB with its search models).
+**One search** (2026-10-30, Torstein: two searches over the same past can disagree and rank differently, and each needs
+its own upkeep). With Hindsight on, it is the only search:
+- The agent's `history_search` (core-tools.ts, new dep `memorySearch`) asks Hindsight first: what is known, best first;
+  the pieces of text the best facts came from (who said what, as said); and what Sunshine itself said, word for word.
+  When Hindsight fails or is slow, the archive's plain word search answers, as before. Its description says it also
+  finds what the agent said.
+- What Sunshine said (its replies, the texts it sent from elsewhere and the runtime's notes of them) goes to a bank of its
+  own, `<bank>-said`, set up text only (Hindsight's "chunks" mode, observations off) and read back before anything is
+  stored there; a bank that does not read back so stores nothing. Why its own bank: chunks are kept as ordinary "world"
+  memories, consolidation reads every unconsolidated one in a bank (`consolidator.py`), and a per-item strategy that is
+  missing falls back to normal extraction without a word; so in the main bank a reply could still have become a fact.
+  Checked live, free: 0 model calls, 0 observations, "what did you tell me about packing for the Maldives?" found that
+  reply first, word for word. The automatic recall reads only the main bank, so an old "your calendar is empty" cannot
+  steer a new answer. The makers' own default keeps both sides with a note on who is speaking; it settles who said a
+  thing, not that a reply reported another system's state at a moment (30 Oct: done their way, the reply became a fact).
+- No search model in the agent (about 2 GB, up to 8 s to load after a quiet spell): with `HINDSIGHT_URL` the meaning
+  search runs without one, words only (BM25; core `meaning.ts`, the embedder is now optional), as recall's backup
+  (`recall.ts` `wordsOnly`).
+- Recall and the search show observations instead of the facts they were built from (the makers' `preferObservations`;
+  on the time-check bank the invitation came back as 7 lines without it, 1 with it, the right fact first either way). An
+  observation names no document of its own, so it takes its first source fact's (`includeSourceFacts`): where it came
+  from, the text behind it and "leave out the item itself" keep working.
+Tested (free): `hindsight.test.ts` 9 (replies to their bank only, word for word; a bank not read back as text only stores
+nothing; the search's three parts and its date range; its replies part left out when that bank fails; an observation
+taking its source's document); core `meaning.test.ts` +2 (history_search asks the engine first, word search when it
+fails; no model = words only, nothing stored). All tests (1,498), typecheck and smoke pass. Free on the local server
+(searching only): "when is the J. Cole concert?" 12 Nov 19:00 first, with the ticket email's text; "what did Morten say
+about the Thursday meeting?" the meeting first, with the 12 recording lines word for word; about 0.5 s a search.
 
-**To remove.** Revert the commit (`git log --grep "sunshine:hindsight"`), or delete `hindsight.ts` and its test, the
-dependency, and the tagged lines in `boot.ts`, `ground.ts`, `intake.ts`, `lookup.ts` and `recall.ts`.
+**Open.** Hindsight's output language is a server setting (`HINDSIGHT_API_LLM_OUTPUT_LANGUAGE`), not per bank: one
+language for everyone on a shared server. Where it runs live (about 3 GB with its search models). An email's text shown
+under "the text it came from" can be mostly a recipient list (the invitation); the email door should clean that. "Did
+the reminder come through?" is answered from the copies of sent texts; the action log will be the exact record.
+
+**To remove.** Revert the commits (`git log --grep "sunshine:hindsight"`), or delete `hindsight.ts` and its test, the
+dependency, and the tagged lines in `boot.ts`, `ground.ts`, `intake.ts`, `lookup.ts` and `recall.ts`, core
+`core-tools.ts` and `meaning.ts`.
 
 ### `[sunshine:intake]`: what reaches the owner from elsewhere is kept, summarized once and acted on
 

@@ -8,7 +8,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { HindsightMemory, SPELL_QUIET_MS, createHindsightRecall, localIso, type HindsightApi, type HindsightFact } from "../src/hindsight.js";
+import { HindsightMemory, SPELL_QUIET_MS, createHindsightRecall, createHindsightSearch, isTextOnly, localIso, type HindsightApi, type HindsightFact } from "../src/hindsight.js";
 import type { Recall } from "../src/recall.js";
 
 const T = Date.parse("2026-10-30T10:00:00Z"); // Fri 30 Oct, 11:00 in Oslo (CET)
@@ -16,24 +16,43 @@ const MIN = 60_000;
 const user = (text: string, ts: number) => ({ role: "user", content: text, timestamp: ts }) as unknown as AgentMessage;
 const assistant = (text: string, ts: number) => ({ role: "assistant", content: [{ type: "text", text }], timestamp: ts }) as unknown as AgentMessage;
 
-function fakeApi(opts: { facts?: HindsightFact[]; near?: HindsightFact[]; failing?: Set<string>; slow?: boolean } = {}) {
+interface FakeOpts {
+  facts?: HindsightFact[];
+  near?: HindsightFact[];
+  /** The replies bank's search results, and the pieces of text facts came from. */
+  said?: HindsightFact[];
+  chunks?: Record<string, { id: string; text: string }>;
+  sourceFacts?: Record<string, HindsightFact>;
+  failing?: Set<string>;
+  slow?: boolean;
+  /** The replies bank's settings as read back (default: text only, as asked). */
+  saidConfig?: unknown;
+  saidDown?: boolean;
+}
+
+function fakeApi(opts: FakeOpts = {}) {
   const calls = { banks: [] as Array<Record<string, unknown>>, stored: [] as Array<Record<string, unknown>>, deleted: [] as string[], recalls: [] as Array<Record<string, unknown>>, lists: [] as Array<Record<string, unknown>> };
   const api: HindsightApi = {
     createBank: async (bank, o) => {
       calls.banks.push({ bank, ...o });
       return {};
     },
-    retainBatch: async (_bank, items, o) => {
+    getBankConfig: async () => opts.saidConfig ?? { bank_id: "x", config: { retain_extraction_mode: "chunks", enable_observations: false } },
+    retainBatch: async (bank, items, o) => {
       for (const it of items) {
         if (opts.failing?.has(it.document_id ?? "")) throw new Error("server busy");
-        calls.stored.push({ ...it, async: o?.async });
+        calls.stored.push({ bank, ...it, async: o?.async });
       }
       return { usage: { total_tokens: 100 } };
     },
-    recall: async (_bank, query, o) => {
-      calls.recalls.push({ query, ...o });
+    recall: async (bank, query, o) => {
+      calls.recalls.push({ bank, query, ...o });
       if (opts.slow) return new Promise(() => {});
-      return { results: opts.near ?? [] };
+      if (bank.endsWith("-said")) {
+        if (opts.saidDown) throw new Error("bank not found");
+        return { results: opts.said ?? [] };
+      }
+      return { results: opts.near ?? [], ...(o?.includeChunks ? { chunks: opts.chunks ?? {} } : {}), ...(o?.includeSourceFacts ? { source_facts: opts.sourceFacts ?? {} } : {}) };
     },
     listMemories: async (_bank, o) => {
       calls.lists.push({ ...o });
@@ -80,9 +99,12 @@ describe("hindsight: what goes in", () => {
     const { api, calls } = fakeApi();
     const s = setup(api);
     fill(s);
-    expect(await s.memory.sync()).toEqual({ stored: 3, deleted: 0, failed: 0 });
-    expect(calls.banks).toEqual([{ bank: "sunshine-torstein", retainMission: expect.stringContaining("Memory for Torstein's personal assistant"), retainExtractionMode: "concise", enableObservations: true }]);
-    const [old, rec, spell] = calls.stored as Array<Record<string, string>>;
+    expect(await s.memory.sync()).toEqual({ stored: 4, deleted: 0, failed: 0 });
+    expect(calls.banks).toEqual([
+      { bank: "sunshine-torstein", retainMission: expect.stringContaining("Memory for Torstein's personal assistant"), retainExtractionMode: "concise", enableObservations: true },
+      { bank: "sunshine-torstein-said", retainExtractionMode: "chunks", enableObservations: false },
+    ]);
+    const [old, rec, spell, said] = calls.stored as Array<Record<string, string>>;
     // Before the clocks went back (CEST) and after (CET): his wall-clock time with its offset, never UTC.
     expect(old!.timestamp).toBe("2026-10-20T12:00:00+02:00");
     expect(old!.content).toBe("[2026-10-20 12:00] Torstein: I prefer morning meetings");
@@ -95,6 +117,11 @@ describe("hindsight: what goes in", () => {
     expect(spell!.timestamp).toBe("2026-10-30T08:00:00+01:00");
     expect(spell!.context).toBe("Torstein's own text messages to Sunshine, their personal AI assistant (only Torstein's side of the chat). Times are Europe/Oslo time unless it names another zone.");
     expect(String(spell!.document_id)).toMatch(/^chat:/);
+    // What Sunshine said (its reply, the runtime's note of a text it sent) goes to the replies bank only, word for word.
+    expect(said).toMatchObject({ bank: "sunshine-torstein-said", content: "[2026-10-30 08:00] Sunshine: Noted! Your calendar has no events that day.\n[2026-10-30 08:01] (note): [Not a message from Torstein: the reminder Sunshine sent]" });
+    expect(String(said!.document_id)).toMatch(/^said:/);
+    expect(said!.context).toBe("What Sunshine, Torstein's personal AI assistant, said to Torstein: its own replies and the texts it sent (as said then, not facts). Times are Europe/Oslo time unless it names another zone.");
+    expect(calls.stored.filter((d) => d.bank === "sunshine-torstein").map((d) => d.content).join("\n")).not.toMatch(/Sunshine:|\(note\)/);
     expect(calls.stored.map((d) => d.content).join("\n")).not.toContain("next week");
 
     // The spell still going on goes in once it has been quiet.
@@ -102,7 +129,7 @@ describe("hindsight: what goes in", () => {
     s.setNow(T - 5 * MIN + SPELL_QUIET_MS + 1);
     expect(await s.memory.sync()).toMatchObject({ stored: 1 });
     expect(calls.stored.at(-1)!.content).toBe("[2026-10-30 10:55] Torstein: what's on next week?");
-    expect(calls.banks).toHaveLength(1);
+    expect(calls.banks).toHaveLength(2);
 
     // A source that is not a conversation is named as what it is.
     s.items.add({ id: "mail-1", source: "email", title: "Your tickets", startedAt: T - 60 * MIN, text: "Order: J. Cole, 12.11.26 19:00" });
@@ -122,7 +149,7 @@ describe("hindsight: follows the archive", () => {
     const { api, calls } = fakeApi({ failing });
     const s = setup(api);
     fill(s);
-    expect(await s.memory.sync()).toEqual({ stored: 2, deleted: 0, failed: 1 });
+    expect(await s.memory.sync()).toEqual({ stored: 3, deleted: 0, failed: 1 });
     expect(s.audit.read({ kinds: ["error"] })[0]!.detail).toMatchObject({ hindsight: "store failed", doc: "item:rec-1", message: "server busy" });
     failing.clear();
     expect(await s.memory.sync()).toEqual({ stored: 1, deleted: 0, failed: 0 });
@@ -139,6 +166,76 @@ describe("hindsight: follows the archive", () => {
     expect(calls.deleted).toEqual([before]);
     expect(calls.stored.at(-1)!.content).toBe("[2026-10-30 08:01] Torstein: thanks");
     expect(s.audit.read({ kinds: ["policy"] }).some((e) => JSON.stringify(e.detail).includes("dinner"))).toBe(false);
+  });
+});
+
+describe("hindsight: the replies bank", () => {
+  it("stores nothing there unless Hindsight reads it back as text only; the rest goes in", async () => {
+    // As if the bank kept its old settings (or a strategy fell back): replies would become facts there.
+    const { api, calls } = fakeApi({ saidConfig: { config: { retain_extraction_mode: "concise", enable_observations: true } } });
+    const s = setup(api);
+    fill(s);
+    expect(await s.memory.sync()).toEqual({ stored: 3, deleted: 0, failed: 1 });
+    expect(calls.stored.some((d) => d.bank === "sunshine-torstein-said")).toBe(false);
+    expect(s.audit.read({ kinds: ["error"] })[0]!.detail).toMatchObject({ hindsight: "store failed", message: "bank sunshine-torstein-said is not text only (chunks, observations off)" });
+    expect(isTextOnly({ config: { retain_extraction_mode: "chunks", enable_observations: false } })).toBe(true);
+    expect(isTextOnly({ retain_extraction_mode: "chunks" })).toBe(false);
+  });
+});
+
+describe("hindsight: the agent's own search", () => {
+  const fact = (id: string, text: string, extra: Partial<HindsightFact> = {}): HindsightFact => ({ id, text, mentioned_at: "2026-10-26T11:52:00+00:00", document_id: "item:rec-1", ...extra });
+
+  it("shows what is known, the text it came from and what Sunshine said, each marked for what it is", async () => {
+    const { api, calls } = fakeApi({
+      near: [
+        fact("k1", "Torstein and Morten decided OVH is fine for V1", { chunk_id: "c1" }),
+        fact("k2", "The server must be in Europe because of GDPR", { chunk_id: "c1" }),
+        fact("k3", "Torstein prefers morning meetings", { document_id: "chat:abc:1", mentioned_at: "2026-10-20T10:00:00+00:00", chunk_id: "c2" }),
+      ],
+      chunks: { c1: { id: "c1", text: "[22:01] Torstein: which server we're gonna use\n[22:10] Morten: OVH is fine for V1" }, c2: { id: "c2", text: "[2026-10-20 12:00] Torstein: I prefer morning meetings" } },
+      said: [fact("s1", "[2026-10-29 11:41] Sunshine: Your calendar has no events from 2 to 8 November.", { document_id: "said:abc:1", mentioned_at: "2026-10-29T10:41:00+00:00" })],
+    });
+    const s = setup(api);
+    s.items.add({ id: "rec-1", source: "recording", title: "Server talk", startedAt: Date.parse("2026-10-26T11:52:00Z"), text: "[00:01] Morten: OVH then" });
+    const search = createHindsightSearch({ memory: s.memory, config: s.config, items: s.items, audit: s.audit, now: () => new Date(T) });
+    expect(await search("what did we decide about the server?")).toBe(
+      [
+        "What you know, best first (from what Torstein told you and what reached them; dated, so things may have changed since):",
+        "[noted 26 Oct 2026] Torstein and Morten decided OVH is fine for V1 (recorded on their phone: Server talk)",
+        "[noted 26 Oct 2026] The server must be in Europe because of GDPR (recorded on their phone: Server talk)",
+        "[noted 20 Oct 2026] Torstein prefers morning meetings (their own texts)",
+        "",
+        "The text it came from:",
+        "(recorded on their phone: Server talk)",
+        "  [22:01] Torstein: which server we're gonna use",
+        "  [22:10] Morten: OVH is fine for V1",
+        "(their own texts)",
+        "  [2026-10-20 12:00] Torstein: I prefer morning meetings",
+        "",
+        "What you (Sunshine) said to Torstein before, word for word (your words then, not facts: check anything about other systems again):",
+        "[2026-10-29 11:41] Sunshine: Your calendar has no events from 2 to 8 November.",
+      ].join("\n"),
+    );
+    expect(calls.recalls.map((r) => [r.bank, r.includeChunks ?? false])).toEqual([["sunshine-torstein", true], ["sunshine-torstein-said", false]]);
+
+    // A range keeps what was said or noted in it.
+    const inOct26 = await search("server", { since: Date.parse("2026-10-25T23:00:00Z"), until: Date.parse("2026-10-26T23:00:00Z") });
+    expect(inOct26).toContain("OVH is fine");
+    expect(inOct26).not.toContain("morning meetings");
+    expect(inOct26).not.toContain("no events from 2 to 8");
+  });
+
+  it("leaves out what Sunshine said when its bank fails, and says nothing when nothing is found", async () => {
+    const down = fakeApi({ near: [fact("k1", "Torstein and Morten decided OVH is fine for V1")], saidDown: true });
+    const s = setup(down.api);
+    const search = createHindsightSearch({ memory: s.memory, config: s.config, audit: s.audit, now: () => new Date(T) });
+    const text = await search("server");
+    expect(text).toContain("OVH is fine");
+    expect(text).not.toContain("said to Torstein before");
+    expect(s.audit.read({ kinds: ["error"] })[0]!.detail).toMatchObject({ memorySearch: "replies bank left out" });
+    const empty = setup(fakeApi().api);
+    expect(await createHindsightSearch({ memory: empty.memory, config: empty.config, now: () => new Date(T) })("passport")).toBeUndefined();
   });
 });
 
@@ -172,7 +269,19 @@ describe("hindsight: recall", () => {
     const text = await recall(["Anything happening next week for me", "events next week"], { exclude: "rec-new", chatsBefore: T - 86_400_000, days: ["2026-11-02/2026-11-08"] });
     // The owner's days, widened to hold dates kept as midnight UTC.
     expect(calls.lists).toEqual([{ timeField: "occurred_start", startDate: "2026-11-01T23:00:00.000Z", endDate: "2026-11-09T00:00:00.000Z", state: "valid", limit: 50 }]);
-    expect(calls.recalls).toEqual([{ query: "Anything happening next week for me; events next week", budget: "mid", maxTokens: 1500, queryTimestamp: "2026-10-30T11:00:00+01:00" }]);
+    expect(calls.recalls).toEqual([
+      {
+        bank: "sunshine-torstein",
+        query: "Anything happening next week for me; events next week",
+        budget: "mid",
+        maxTokens: 1500,
+        queryTimestamp: "2026-10-30T11:00:00+01:00",
+        types: ["observation", "world", "experience"],
+        preferObservations: true,
+        includeSourceFacts: true,
+        maxSourceFactsTokens: 2000,
+      },
+    ]);
     expect(text).toBe(
       [
         "On the days it concerns, by when each thing happens:",
@@ -185,6 +294,16 @@ describe("hindsight: recall", () => {
         "[noted 26 Oct 2026] Torstein and Morten decided OVH is fine for V1 (recorded on their phone: Server talk)",
       ].join("\n"),
     );
+  });
+
+  it("gives an observation the document of its source fact: where it came from, and the item itself left out", async () => {
+    const fromServerTalk: HindsightFact = { id: "o1", text: "Torstein and Morten settled on OVH for V1", source_fact_ids: ["s1"] };
+    const fromTheNewNote: HindsightFact = { id: "o2", text: "Torstein recorded a note about the presentation", source_fact_ids: ["s2"] };
+    const { recall } = recallSetup({
+      near: [fromServerTalk, fromTheNewNote],
+      sourceFacts: { s1: { id: "s1", text: "OVH is fine for V1", document_id: "item:rec-1", chunk_id: "c1" }, s2: { id: "s2", text: "a note", document_id: "item:rec-new" } },
+    });
+    expect(await recall(["the server"], { exclude: "rec-new" })).toBe(["Related, best first:", "Torstein and Morten settled on OVH for V1 (recorded on their phone: Server talk)"].join("\n"));
   });
 
   it("says nothing when nothing is kept, and lets the meaning search answer when Hindsight is slow", async () => {

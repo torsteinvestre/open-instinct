@@ -56,7 +56,7 @@ import { createRecall } from "./recall.js"; // [sunshine:in-the-flow]
 import { composioSources, createLookUp, type LiveSources } from "./lookup.js"; // [sunshine:in-the-flow]
 import { DEFAULT_GROUND_MODEL, createGround } from "./ground.js"; // [sunshine:grounding]
 import { HindsightClient } from "@vectorize-io/hindsight-client"; // [sunshine:hindsight]
-import { HindsightMemory, createHindsightRecall } from "./hindsight.js"; // [sunshine:hindsight]
+import { HindsightMemory, createHindsightRecall, createHindsightSearch } from "./hindsight.js"; // [sunshine:hindsight]
 import { createLocalEmbedder } from "./embedder.js"; // [sunshine:meaning-search]
 import { MAX_SENT_RECORDING_BYTES, RECORDINGS_GATE, createRecordings, type Recordings } from "./recordings.js"; // [sunshine:recordings]
 import { ChatAwareOutbox, ConsoleOutbox, type ChatReplyBuffer } from "./console-outbox.js";
@@ -157,24 +157,26 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
   const history = config.features?.history === false ? undefined : new HistoryArchive(state, { onChange: changed });
   // [sunshine:intake] What reached the owner from elsewhere: the same archive, the same switch.
   const items = history ? new ItemArchive(state, { onChange: changed }) : undefined;
+  // [sunshine:hindsight] The memory engine, on with HINDSIGHT_URL (HINDSIGHT_API_KEY when the server asks for one; the bank is
+  // HINDSIGHT_BANK or the agent's handle, what Sunshine said in "<bank>-said"). It is then the one search: no search model in
+  // the agent, word search over the archive only as the backup when Hindsight is down.
+  const hindsightUrl = history ? env.HINDSIGHT_URL?.trim() || undefined : undefined;
   // [sunshine:meaning-search] Search by meaning over both: on with INSTINCT_MEANING_SEARCH=1 (the model is
   // fetched into /data/models on first use, about 0.9 GB), or with a search model passed in.
-  const localEmbedder = history && !opts.embedder && env.INSTINCT_MEANING_SEARCH === "1" ? createLocalEmbedder({ cacheDir: state.path("models"), log }) : undefined;
-  const embedder = opts.embedder ?? localEmbedder;
+  const localEmbedder = history && !hindsightUrl && !opts.embedder && env.INSTINCT_MEANING_SEARCH === "1" ? createLocalEmbedder({ cacheDir: state.path("models"), log }) : undefined;
+  const embedder = hindsightUrl ? undefined : opts.embedder ?? localEmbedder;
   if (embedder && history) {
     meaning = new MeaningSearch({ state, embedder, config, history, ...(items ? { items } : {}), audit });
     const { pieces, stored } = meaning.status();
     log(`meaning search: on (${stored} of ${pieces} pieces stored)`);
     if (stored < pieces) meaning.schedule(MEANING_BACKFILL_DELAY_MS);
   }
-  // [sunshine:hindsight] The memory engine, on with HINDSIGHT_URL (HINDSIGHT_API_KEY when the server asks for one; the bank is
-  // HINDSIGHT_BANK or the agent's handle). It follows the archives; recall then goes through it, the meaning search behind it.
-  const hindsightUrl = env.HINDSIGHT_URL?.trim();
   if (hindsightUrl && history) {
+    meaning = new MeaningSearch({ state, config, history, ...(items ? { items } : {}), audit }); // words only: the backup
     const api = new HindsightClient({ baseUrl: hindsightUrl, userAgent: "sunshine", ...(env.HINDSIGHT_API_KEY?.trim() ? { apiKey: env.HINDSIGHT_API_KEY.trim() } : {}) });
     const bank = env.HINDSIGHT_BANK?.trim() || config.agent.handle || "owner";
     hindsight = new HindsightMemory({ api, bank, state, config, history, ...(items ? { items } : {}), audit });
-    log(`hindsight: on (bank ${bank})`);
+    log(`hindsight: on (banks ${bank} and ${hindsight.saidBank}); meaning search in the agent off, word search as the backup`);
     hindsight.schedule(MEANING_BACKFILL_DELAY_MS);
   }
   const a2aStore = new A2AStore(state);
@@ -238,7 +240,8 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
       workspaceDir: state.path("workspace"),
       ...(history ? { history } : {}), // [sunshine:history]
       ...(items ? { items } : {}), // [sunshine:intake]
-      ...(meaning ? { meaning } : {}), // [sunshine:meaning-search]
+      // [sunshine:meaning-search] [sunshine:hindsight] Hindsight's search when it is on (the archive's word search behind it).
+      ...(hindsight ? { memorySearch: createHindsightSearch({ memory: hindsight, config, audit, ...(items ? { items } : {}) }) } : meaning ? { meaning } : {}),
       onApprovalSettled: (approval, approved) => runtime.afterApproval(approval, approved),
       // Image generation rides on an OpenAI-compatible key: a dedicated IMAGE_API_KEY, else the model key
       // (an OpenAI-compatible proxy that forwards /images/generations works too). The shell never sees either.
@@ -572,11 +575,11 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
 
   // [sunshine:in-the-flow] What is kept, brought to what is new (with meaning search), and the email and calendar read
   // by code (Composio's, or a scenario's stand-ins): for each recording's hand-off and ([sunshine:grounding]) each of
-  // the owner's messages. [sunshine:hindsight] Through Hindsight when it is on, the meaning search answering when it fails.
+  // the owner's messages. [sunshine:hindsight] Through Hindsight when it is on, word search over the archive when it fails.
   const recallWith = (waitMs?: number) => {
-    const byMeaning = meaning ? createRecall({ meaning, config, audit, ...(waitMs ? { waitMs } : {}) }) : undefined;
-    if (!hindsight) return byMeaning;
-    return createHindsightRecall({ memory: hindsight, config, audit, ...(items ? { items } : {}), ...(byMeaning ? { fallback: byMeaning } : {}), ...(waitMs ? { waitMs } : {}) });
+    const local = meaning ? createRecall({ meaning, config, audit, ...(waitMs ? { waitMs } : {}), ...(hindsight ? { wordsOnly: true } : {}) }) : undefined;
+    if (!hindsight) return local;
+    return createHindsightRecall({ memory: hindsight, config, audit, ...(items ? { items } : {}), ...(local ? { fallback: local } : {}), ...(waitMs ? { waitMs } : {}) });
   };
   const recall = recallWith();
   const live = opts.liveSources ?? (apps ? composioSources(apps, () => config.owner.timezone || "UTC") : undefined);

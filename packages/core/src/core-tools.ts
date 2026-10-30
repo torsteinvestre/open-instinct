@@ -43,6 +43,11 @@ export interface CoreToolDeps {
   items?: ItemArchive;
   /** [sunshine:meaning-search] With it, history_search ranks by meaning and words; word search answers when it fails. */
   meaning?: MeaningSearch;
+  /**
+   * [sunshine:hindsight] The memory engine's search (what is known, the text it came from, what the agent said), as text;
+   * undefined when it finds nothing. With it, history_search asks it first; word search answers when it fails.
+   */
+  memorySearch?: (query: string, range: HistoryRange) => Promise<string | undefined>;
 }
 
 export const DEFAULT_IMAGE_BASE_URL = "https://api.openai.com/v1";
@@ -172,7 +177,7 @@ function aroundMatch(text: string, words: string[], max: number): string {
   return clip(`${speaker} …${text.slice(at - 120)}`, max);
 }
 
-function historyTools({ history, items, config, meaning, audit }: CoreToolDeps): RegisteredTool[] {
+function historyTools({ history, items, config, meaning, memorySearch, audit }: CoreToolDeps): RegisteredTool[] {
   if (!history && !items) return []; // [sunshine:intake] items alone are enough
   const tz = () => config.owner.timezone || "UTC";
   const name = (e: HistoryEntry) => (e.who === "owner" ? config.owner.name : e.who === "agent" ? config.agent.name : "(note)");
@@ -226,18 +231,29 @@ function historyTools({ history, items, config, meaning, audit }: CoreToolDeps):
     name: "history_search",
     label: "Search earlier conversations",
     // [sunshine:intake] also what reached the owner from elsewhere; [sunshine:meaning-search] by meaning, and search again in other words
-    description: meaning
-      ? "Search earlier conversations by meaning and words: all your chats with the owner, also older than you can see, and conversations of theirs that reached you from elsewhere (a meeting the band heard), with who said what and when. Results are dated; things may have changed since. If what comes back does not answer it, search again in other words."
-      : "Search earlier conversations by words: all your chats with the owner, also older than you can see, and conversations of theirs that reached you from elsewhere (a meeting the band heard), with who said what and when. Results are dated; things may have changed since.",
+    description: memorySearch // [sunshine:hindsight]
+      ? "Search what you know and earlier conversations, by meaning and words: what the owner told you, conversations of theirs that reached you from elsewhere (a recording, a meeting the band heard), with who said what and when, and what you yourself said to them. Results are dated; things may have changed since. If what comes back does not answer it, search again in other words."
+      : meaning
+        ? "Search earlier conversations by meaning and words: all your chats with the owner, also older than you can see, and conversations of theirs that reached you from elsewhere (a meeting the band heard), with who said what and when. Results are dated; things may have changed since. If what comes back does not answer it, search again in other words."
+        : "Search earlier conversations by words: all your chats with the owner, also older than you can see, and conversations of theirs that reached you from elsewhere (a meeting the band heard), with who said what and when. Results are dated; things may have changed since.",
     parameters: Type.Object({
-      query: Type.String({ description: meaning ? "What you are looking for: a question or a few words, e.g. \"what did we decide about the fund\"" : "Words, e.g. \"fund apartment\"" }),
+      query: Type.String({ description: memorySearch || meaning ? "What you are looking for: a question or a few words, e.g. \"what did we decide about the fund\"" : "Words, e.g. \"fund apartment\"" }),
       since: Type.Optional(Type.String({ description: "YYYY-MM-DD" })),
       until: Type.Optional(Type.String({ description: "YYYY-MM-DD" })),
     }),
     meta: { capabilities: ["memory.write"], group: "memory", describe: (a) => `search earlier conversations: ${argText(a, "query")}` },
     execute: async ({ query, since, until }) => {
+      // [sunshine:hindsight] The one search when it is on; word search below when it fails or is slow.
+      if (memorySearch) {
+        try {
+          const found = await within(memorySearch(query, range(since, until)), MEANING_WAIT_MS);
+          if (found) return textResult(found);
+        } catch (error) {
+          audit.append({ kind: "error", detail: { memorySearch: "word search answered instead", message: error instanceof Error ? error.message : String(error) } });
+        }
+      }
       // [sunshine:meaning-search] By meaning and words when the search model answers in time; else word search below.
-      if (meaning) {
+      if (meaning && !memorySearch) {
         try {
           const found = await within(meaning.search(query, range(since, until)), MEANING_WAIT_MS);
           if (found.length > 0) return textResult(showPieces(found));

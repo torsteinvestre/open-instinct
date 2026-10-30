@@ -211,4 +211,42 @@ describe("meaning search: finding", () => {
     expect(out).toBe("Newest first:\n[Sat 24 Oct, 04:14] Maria: the manuals worry me");
     expect(audit.read({ kinds: ["error"] }).some((e) => e.kind === "error" && JSON.stringify(e.detail).includes("model not loaded"))).toBe(true);
   });
+
+  it("[sunshine:hindsight] history_search asks the memory engine first, and word search answers when it fails", async () => {
+    const { state, config, now, history, audit } = setup();
+    history.record("imessage:c1", [msg("user", "the manuals worry me", T)]);
+    const asked: Array<{ query: string; range: unknown }> = [];
+    let down = false;
+    const memorySearch = async (query: string, range: unknown) => {
+      asked.push({ query, range });
+      if (down) throw new Error("Hindsight is down");
+      return "What you know, best first: the manuals are late";
+    };
+    const registry = new ToolRegistry();
+    registry.registerMany(coreTools({ memory: new MemoryStore(state), scheduler: new Scheduler(state), approvals: new ApprovalStore(state), audit, config, outbox: { send: async () => {} }, history, memorySearch }));
+    const tool = registry.get("history_search")!;
+    expect(tool.spec.description).toContain("what you yourself said to them");
+    const ctx = { principal: principalOf("owner"), conversationKey: "imessage:c1", channel: "imessage" as const, ownerTurn: true, now };
+    const run = async (args: Record<string, string>) => {
+      const r = await tool.spec.execute(args as never, ctx);
+      return typeof r === "string" ? r : r.content.map((c) => (c.type === "text" ? c.text : "")).join("");
+    };
+    expect(await run({ query: "manuals", since: "2026-10-01" })).toBe("What you know, best first: the manuals are late");
+    expect(asked[0]!.query).toBe("manuals");
+    expect((asked[0]!.range as { since?: number }).since).toBeGreaterThan(0);
+    down = true;
+    expect(await run({ query: "manuals" })).toBe("Newest first:\n[Sat 24 Oct, 04:14] Maria: the manuals worry me");
+    expect(audit.read({ kinds: ["error"] }).some((e) => JSON.stringify(e.detail).includes("Hindsight is down"))).toBe(true);
+  });
+
+  it("[sunshine:hindsight] without a search model: words only, nothing stored, meaning alone refused", async () => {
+    const { state, config, history } = setup();
+    history.record("imessage:c1", [msg("user", "should I ring the bank", T), msg("user", "the cabin roof", T + 120 * MIN)]);
+    const words = new MeaningSearch({ state, config, history });
+    expect(await words.sync()).toEqual({ added: 0, removed: 0 });
+    const hits = await words.searchScored("cabin");
+    expect(hits[0]!.piece.lines.join(" ")).toContain("the cabin roof");
+    expect(hits[0]!.near).toBeUndefined();
+    await expect(words.searchScored("cabin", {}, "meaning")).rejects.toThrow("no search model");
+  });
 });

@@ -18,6 +18,14 @@
  *   the J. Cole ticket email was kept as 19:00 UTC, an hour late; the invitation that said "(CET)" came out right.
  * - Bringing it to what is new, behind the Recall seam (recall.ts): for the days asked, every fact by when it happens (a list,
  *   no ranking); for the rest, by meaning, with now as the query time.
+ * - One search (Torstein, 2026-10-30: two searches over the same past can disagree and rank differently). The agent's
+ *   history_search asks Hindsight too: what is known, the text it came from, and what Sunshine itself said. Sunshine's
+ *   replies (and the texts it sent from elsewhere) go to a bank of their own, text only: Hindsight's "chunks" mode
+ *   stores them word for word with no model call, and with observations off for that bank they never become facts. Not
+ *   in the main bank: chunks are kept as ordinary "world" memories there and consolidation reads every one of them, and a
+ *   per-item strategy that is missing falls back to normal extraction without a word (checked in Hindsight's code, and a
+ *   live check: 0 model calls, 0 observations). The automatic recall reads only the main bank, so an old "your calendar
+ *   is empty" cannot steer a new answer.
  */
 import { createHash } from "node:crypto";
 import type { AuditLog, ArchiveItem, HistoryArchive, HistoryEntry, InstinctConfig, ItemArchive, StateDir } from "@open-instinct/core";
@@ -44,6 +52,16 @@ const RECALL_TOKENS = 1_500;
 const PER_SPAN = 50;
 const BY_DATE_MAX = 40;
 const LINE_MAX = 300;
+/** The agent's own search: facts shown, pieces of the text they came from (and how much of each), what Sunshine said. */
+const SEARCH_FACTS = 15;
+const CHUNK_TOKENS = 2_000;
+/** Enough of an observation's source facts to find its document and text. */
+const SOURCE_FACT_TOKENS = 2_000;
+const SOURCE_PIECES = 3;
+const SOURCE_CHARS = 1_000;
+const SAID_TOKENS = 800;
+const SAID_SHOWN = 4;
+const SAID_CHARS = 500;
 
 /** A fact as Hindsight returns it from recall or a listing (the fields this layer reads). */
 export interface HindsightFact {
@@ -54,19 +72,37 @@ export interface HindsightFact {
   mentioned_at?: string | null;
   document_id?: string | null;
   metadata?: Record<string, unknown> | null;
-  /** An observation (Hindsight's consolidated view): the facts it was built from. */
+  /** An observation (Hindsight's consolidated view): the facts it was built from (in a listing; in recall, source_fact_ids). */
   source_memory_ids?: string[] | null;
+  source_fact_ids?: string[] | null;
+  /** The piece of the document's text it was taken from. */
+  chunk_id?: string | null;
 }
 
 /** The part of the makers' client (@vectorize-io/hindsight-client) this layer uses; tests pass a stand-in. */
 export interface HindsightApi {
   createBank(bankId: string, options: { retainMission?: string; retainExtractionMode?: string; enableObservations?: boolean }): Promise<unknown>;
+  getBankConfig(bankId: string): Promise<unknown>;
   retainBatch(
     bankId: string,
     items: Array<{ content: string; timestamp?: string; context?: string; metadata?: Record<string, string>; document_id?: string }>,
     options?: { async?: boolean },
   ): Promise<{ usage?: unknown }>;
-  recall(bankId: string, query: string, options?: { budget?: "low" | "mid" | "high"; maxTokens?: number; queryTimestamp?: string }): Promise<{ results: HindsightFact[] }>;
+  recall(
+    bankId: string,
+    query: string,
+    options?: {
+      budget?: "low" | "mid" | "high";
+      maxTokens?: number;
+      queryTimestamp?: string;
+      types?: string[];
+      preferObservations?: boolean;
+      includeChunks?: boolean;
+      maxChunkTokens?: number;
+      includeSourceFacts?: boolean;
+      maxSourceFactsTokens?: number;
+    },
+  ): Promise<{ results: HindsightFact[]; chunks?: Record<string, { id: string; text: string }> | null; source_facts?: Record<string, HindsightFact> | null }>;
   listMemories(
     bankId: string,
     options?: { timeField?: "occurred_start"; startDate?: string; endDate?: string; state?: "valid"; limit?: number },
@@ -124,11 +160,16 @@ function stamp(ms: number, tz: string): string {
 
 /** The document id of a kept item. */
 export const itemDocId = (id: string) => `item:${id}`;
+/** Documents of what Sunshine said start so: they live in the replies bank. */
+const SAID = "said:";
 
-/** The owner's own messages, a spell at a time: their consecutive messages in one thread, a new spell after a long pause. */
-export function ownerSpells(entries: HistoryEntry[]): Array<{ key: string; entries: HistoryEntry[] }> {
+/**
+ * Lines of one side, a spell at a time: consecutive entries of one thread whose `who` is asked for (the owner's own
+ * messages; or what Sunshine said and the runtime's notes of what it sent), a new spell after a long pause.
+ */
+export function spells(entries: HistoryEntry[], who: Array<HistoryEntry["who"]>): Array<{ key: string; entries: HistoryEntry[] }> {
   const threads = new Map<string, HistoryEntry[]>();
-  for (const e of entries) if (e.who === "owner" && e.text.trim()) threads.set(e.key, [...(threads.get(e.key) ?? []), e]);
+  for (const e of entries) if (who.includes(e.who) && e.text.trim()) threads.set(e.key, [...(threads.get(e.key) ?? []), e]);
   const out: Array<{ key: string; entries: HistoryEntry[] }> = [];
   for (const [key, thread] of threads) {
     let cur: HistoryEntry[] = [];
@@ -167,18 +208,34 @@ export interface HindsightDeps {
 
 interface Kept {
   bank: string;
-  /** Document id -> hash of what was stored. */
+  /** Document id -> hash of what was stored (ids starting "said:" in the replies bank). */
   docs: Record<string, string>;
+}
+
+/** Whether a bank's settings, as Hindsight reads them back, store text only and never make facts of it. */
+export function isTextOnly(config: unknown): boolean {
+  const c = ((config as { config?: unknown } | null)?.config ?? config) as Record<string, unknown> | null;
+  return c?.retain_extraction_mode === "chunks" && c?.enable_observations === false;
 }
 
 export class HindsightMemory {
   private kept: Kept | undefined;
   private bankReady = false;
+  private saidReady = false;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private running: Promise<void> | undefined;
   private again = false;
 
   constructor(private readonly deps: HindsightDeps) {}
+
+  /** The bank of what Sunshine said: text only, never facts. */
+  get saidBank(): string {
+    return `${this.deps.bank}-said`;
+  }
+
+  private bankOf(docId: string): string {
+    return docId.startsWith(SAID) ? this.saidBank : this.deps.bank;
+  }
 
   private tz(): string {
     return this.deps.config.owner.timezone || "UTC";
@@ -216,19 +273,37 @@ export class HindsightMemory {
     return { id: `chat:${hashOf(key).slice(0, 6)}:${first}`, content, timestamp, context, metadata: { source: "chat" }, hash: hashOf(`${timestamp}|${context}|${content}`) };
   }
 
+  /** What Sunshine said in a spell: its replies, the texts it sent from elsewhere and the runtime's notes of them. */
+  private saidDoc(key: string, entries: HistoryEntry[]): HindsightDoc {
+    const { owner, agent } = this.deps.config;
+    const first = entries[0]!.ts;
+    const content = entries.map((e) => `${stamp(e.ts, this.tz())} ${e.who === "note" ? "(note)" : agent.name}: ${e.text.replace(/\s+/g, " ").trim()}`).join("\n");
+    const context = `What ${agent.name}, ${owner.name}'s personal AI assistant, said to ${owner.name}: its own replies and the texts it sent (as said then, not facts). ${this.zoneLine()}`;
+    const timestamp = localIso(first, this.tz());
+    return { id: `${SAID}${hashOf(key).slice(0, 6)}:${first}`, content, timestamp, context, metadata: { source: "said" }, hash: hashOf(`${timestamp}|${context}|${content}`) };
+  }
+
   /**
-   * What should be in Hindsight now, oldest first: every kept item and every spell of the owner's messages that has gone
-   * quiet; `wakeAt`: when the spell still going on goes quiet.
+   * What should be in Hindsight now, oldest first: every kept item, every spell of the owner's messages that has gone
+   * quiet, and (in the replies bank) every quiet spell of what Sunshine said; `wakeAt`: when a spell still going on goes
+   * quiet.
    */
   documents(): { docs: Array<HindsightDoc & { at: number }>; wakeAt?: number } {
     const now = this.now();
     const docs: Array<HindsightDoc & { at: number }> = [];
     let wakeAt: number | undefined;
     for (const it of this.deps.items?.all() ?? []) if (it.text.trim()) docs.push({ ...this.itemDoc(it), at: it.startedAt });
-    for (const s of ownerSpells(this.deps.history?.all() ?? [])) {
-      const quietAt = s.entries[s.entries.length - 1]!.ts + SPELL_QUIET_MS;
-      if (quietAt > now) wakeAt = Math.min(wakeAt ?? quietAt, quietAt);
-      else docs.push({ ...this.spellDoc(s.key, s.entries), at: s.entries[0]!.ts });
+    const entries = this.deps.history?.all() ?? [];
+    const sides: Array<[Array<HistoryEntry["who"]>, (key: string, e: HistoryEntry[]) => HindsightDoc]> = [
+      [["owner"], (k, e) => this.spellDoc(k, e)],
+      [["agent", "note"], (k, e) => this.saidDoc(k, e)],
+    ];
+    for (const [who, make] of sides) {
+      for (const s of spells(entries, who)) {
+        const quietAt = s.entries[s.entries.length - 1]!.ts + SPELL_QUIET_MS;
+        if (quietAt > now) wakeAt = Math.min(wakeAt ?? quietAt, quietAt);
+        else docs.push({ ...make(s.key, s.entries), at: s.entries[0]!.ts });
+      }
     }
     return { docs: docs.sort((a, b) => a.at - b.at), ...(wakeAt !== undefined ? { wakeAt } : {}) };
   }
@@ -250,6 +325,14 @@ export class HindsightMemory {
     // The makers' integrations stamp a bank's settings on first use; "create" updates a bank that exists.
     await this.deps.api.createBank(this.deps.bank, { retainMission: retainMission(this.deps.config.owner.name), retainExtractionMode: "concise", enableObservations: true });
     this.bankReady = true;
+  }
+
+  /** The replies bank, set up text only and read back: nothing is stored there unless Hindsight confirms it. */
+  private async ensureSaidBank(): Promise<void> {
+    if (this.saidReady) return;
+    await this.deps.api.createBank(this.saidBank, { retainExtractionMode: "chunks", enableObservations: false });
+    if (!isTextOnly(await this.deps.api.getBankConfig(this.saidBank))) throw new Error(`bank ${this.saidBank} is not text only (chunks, observations off)`);
+    this.saidReady = true;
   }
 
   /** Store after a pause, in the background; a failure is audited, never thrown. */
@@ -288,35 +371,34 @@ export class HindsightMemory {
         this.deps.audit?.append({ kind: "error", detail: { hindsight: "store failed", doc, message: error instanceof Error ? error.message : String(error) } });
       };
       if (gone.length > 0 || todo.length > 0) {
-        try {
-          await this.ensureBank();
-          for (const id of gone) {
-            try {
-              await this.deps.api.deleteDocument(this.deps.bank, id);
-            } catch (error) {
-              // Already gone there is gone.
-              if ((error as { statusCode?: number }).statusCode !== 404) {
-                fail(id, error);
-                continue;
-              }
+        // Each document in its bank, the bank set up first: a replies bank that is not text only stops the replies only.
+        const ready = (id: string) => (id.startsWith(SAID) ? this.ensureSaidBank() : this.ensureBank());
+        for (const id of gone) {
+          try {
+            await ready(id);
+            await this.deps.api.deleteDocument(this.bankOf(id), id);
+          } catch (error) {
+            // Already gone there is gone.
+            if ((error as { statusCode?: number }).statusCode !== 404) {
+              fail(id, error);
+              continue;
             }
-            delete kept.docs[id];
-            deleted++;
+          }
+          delete kept.docs[id];
+          deleted++;
+          this.save();
+        }
+        for (const d of todo) {
+          try {
+            await ready(d.id);
+            const reply = await this.deps.api.retainBatch(this.bankOf(d.id), [{ content: d.content, timestamp: d.timestamp, context: d.context, metadata: d.metadata, document_id: d.id }], { async: false });
+            kept.docs[d.id] = d.hash;
+            stored++;
             this.save();
+            this.deps.audit?.append({ kind: "policy", detail: { hindsight: { stored: d.id, chars: d.content.length, usage: reply.usage ?? null } } });
+          } catch (error) {
+            fail(d.id, error);
           }
-          for (const d of todo) {
-            try {
-              const reply = await this.deps.api.retainBatch(this.deps.bank, [{ content: d.content, timestamp: d.timestamp, context: d.context, metadata: d.metadata, document_id: d.id }], { async: false });
-              kept.docs[d.id] = d.hash;
-              stored++;
-              this.save();
-              this.deps.audit?.append({ kind: "policy", detail: { hindsight: { stored: d.id, chars: d.content.length, usage: reply.usage ?? null } } });
-            } catch (error) {
-              fail(d.id, error);
-            }
-          }
-        } catch (error) {
-          fail("(bank)", error);
         }
         this.deps.audit?.append({ kind: "policy", detail: { hindsight: { stored, deleted, failed, waiting: todo.length - stored - failed, ms: Date.now() - started } } });
       }
@@ -369,9 +451,45 @@ export class HindsightMemory {
     return [...out.values()].sort((a, b) => Date.parse(a.occurred_start ?? "") - Date.parse(b.occurred_start ?? ""));
   }
 
-  /** The facts closest to `query` by Hindsight's own search (meaning, words, time and links, re-ranked), "now" as given. */
+  /**
+   * The main bank's facts closest to `query` by Hindsight's own search (meaning, words, time and links, re-ranked), "now" as
+   * given. Observations instead of the facts they were built from, as the makers' `preferObservations` does (2026-10-30, on
+   * the time-check bank: one invitation 7 lines without it, 1 with it, the right fact first either way). An observation
+   * names no document or text of its own, so it takes those of its first source fact.
+   */
+  private async recallKnown(query: string, now: Date, chunks: boolean): Promise<{ facts: HindsightFact[]; chunks: Record<string, { id: string; text: string }> }> {
+    const res = await this.deps.api.recall(this.deps.bank, clip(query, QUERY_MAX), {
+      budget: "mid",
+      maxTokens: RECALL_TOKENS,
+      queryTimestamp: localIso(now.getTime(), this.tz()),
+      types: ["observation", "world", "experience"],
+      preferObservations: true,
+      includeSourceFacts: true,
+      maxSourceFactsTokens: SOURCE_FACT_TOKENS,
+      ...(chunks ? { includeChunks: true, maxChunkTokens: CHUNK_TOKENS } : {}),
+    });
+    const sources = res.source_facts ?? {};
+    const facts = (res.results ?? []).map((f) => {
+      if (f.document_id) return f;
+      const from = (f.source_fact_ids ?? []).map((id) => sources[id]).find((s) => s?.document_id);
+      return from ? { ...f, document_id: from.document_id, chunk_id: f.chunk_id ?? from.chunk_id ?? null, metadata: f.metadata ?? from.metadata ?? null } : f;
+    });
+    return { facts, chunks: res.chunks ?? {} };
+  }
+
+  /** The facts closest to `query`, for recall (recallKnown). */
   async byMeaning(query: string, now: Date): Promise<HindsightFact[]> {
-    const res = await this.deps.api.recall(this.deps.bank, clip(query, QUERY_MAX), { budget: "mid", maxTokens: RECALL_TOKENS, queryTimestamp: localIso(now.getTime(), this.tz()) });
+    return (await this.recallKnown(query, now, false)).facts;
+  }
+
+  /** For the agent's own search: the facts closest to `query`, with the pieces of text they came from. */
+  async searchKnown(query: string, now: Date): Promise<{ facts: HindsightFact[]; chunks: Record<string, { id: string; text: string }> }> {
+    return this.recallKnown(query, now, true);
+  }
+
+  /** For the agent's own search: what Sunshine said closest to `query`, word for word (the replies bank). */
+  async searchSaid(query: string, now: Date): Promise<HindsightFact[]> {
+    const res = await this.deps.api.recall(this.saidBank, clip(query, QUERY_MAX), { budget: "mid", maxTokens: SAID_TOKENS, queryTimestamp: localIso(now.getTime(), this.tz()) });
     return res.results ?? [];
   }
 }
@@ -410,13 +528,21 @@ export interface HindsightRecallDeps {
   now?: () => Date;
 }
 
-/**
- * Recall through Hindsight, the same seam as recall.ts: for the days asked (opts.days), every fact by when it happens; for
- * the rest, the queries as one search by meaning. The item itself and chats from `chatsBefore` on left out.
- */
-export function createHindsightRecall(deps: HindsightRecallDeps): Recall {
-  const tz = () => deps.config.owner.timezone || "UTC";
-  const now = () => deps.now?.() ?? new Date();
+/** Where a fact came from, in words: "their own texts", "recorded on their phone: Server talk", "from email: <subject>". */
+function sourceOf(f: HindsightFact, items?: ItemArchive): string {
+  const id = f.document_id ?? "";
+  if (id.startsWith("chat:")) return "their own texts";
+  const it = id.startsWith("item:") ? items?.get(id.slice("item:".length)) : undefined;
+  const meta = (k: string) => (typeof f.metadata?.[k] === "string" ? (f.metadata[k] as string) : undefined);
+  const source = it?.source ?? meta("source");
+  const title = it?.title ?? it?.summary?.title ?? meta("title");
+  if (!source) return "";
+  return `${SOURCES[source]?.words ?? `from ${source}`}${title ? `: ${clip(title, 80)}` : ""}`;
+}
+
+/** A fact as one line: when it happens and when it was noted (the owner's time), the fact, where it came from. */
+function factLine(config: InstinctConfig, items?: ItemArchive): (f: HindsightFact) => string {
+  const tz = () => config.owner.timezone || "UTC";
   const day = (iso: string) => {
     const kind = dateKind(iso, tz());
     const date = { weekday: "short", day: "numeric", month: "short", year: "numeric" } as const;
@@ -427,22 +553,26 @@ export function createHindsightRecall(deps: HindsightRecallDeps): Recall {
   };
   const noted = (iso: string) => new Intl.DateTimeFormat("en-GB", { timeZone: tz(), day: "numeric", month: "short", year: "numeric" }).format(new Date(Date.parse(iso)));
   const origin = (f: HindsightFact): string => {
-    const id = f.document_id ?? "";
-    if (id.startsWith("chat:")) return " (their own texts)";
-    const it = id.startsWith("item:") ? deps.items?.get(id.slice("item:".length)) : undefined;
-    const meta = (k: string) => (typeof f.metadata?.[k] === "string" ? (f.metadata[k] as string) : undefined);
-    const source = it?.source ?? meta("source");
-    const title = it?.title ?? it?.summary?.title ?? meta("title");
-    if (!source) return "";
-    return ` (${SOURCES[source]?.words ?? `from ${source}`}${title ? `: ${clip(title, 80)}` : ""})`;
+    const s = sourceOf(f, items);
+    return s ? ` (${s})` : "";
   };
-  const show = (f: HindsightFact): string => {
+  return (f: HindsightFact): string => {
     const when = [
       ...(f.occurred_start && !Number.isNaN(Date.parse(f.occurred_start)) ? [`happens ${day(f.occurred_start)}`] : []),
       ...(f.mentioned_at && !Number.isNaN(Date.parse(f.mentioned_at)) ? [`noted ${noted(f.mentioned_at)}`] : []),
     ].join("; ");
     return `${when ? `[${when}] ` : ""}${clip(f.text ?? "", LINE_MAX)}${origin(f)}`;
   };
+}
+
+/**
+ * Recall through Hindsight, the same seam as recall.ts: for the days asked (opts.days), every fact by when it happens; for
+ * the rest, the queries as one search by meaning. The item itself and chats from `chatsBefore` on left out. The main bank
+ * only: what Sunshine said is not brought along unasked.
+ */
+export function createHindsightRecall(deps: HindsightRecallDeps): Recall {
+  const now = () => deps.now?.() ?? new Date();
+  const show = factLine(deps.config, deps.items);
 
   return async (queries, opts = {}) => {
     const asked = [...new Set(queries.map((q) => q.trim()).filter(Boolean))];
@@ -472,6 +602,59 @@ export function createHindsightRecall(deps: HindsightRecallDeps): Recall {
     const blocks = [
       ...(byDate.length > 0 ? [["On the days it concerns, by when each thing happens:", ...byDate.map(show)].join("\n")] : []),
       ...(related.length > 0 ? [["Related, best first:", ...related.map(show)].join("\n")] : []),
+    ];
+    return blocks.length > 0 ? blocks.join("\n\n") : undefined;
+  };
+}
+
+export interface HindsightSearchDeps {
+  memory: HindsightMemory;
+  config: InstinctConfig;
+  items?: ItemArchive;
+  audit?: AuditLog;
+  now?: () => Date;
+}
+
+/**
+ * The agent's own search (history_search) through Hindsight, the one search: what is known, best first; the pieces of text
+ * the best facts came from (who said what, as said); what Sunshine itself said, word for word, from the replies bank.
+ * `range` (ms) keeps what was said or noted in it. The main bank failing is thrown (word search over the archive then
+ * answers); the replies bank failing leaves its part out.
+ */
+export function createHindsightSearch(deps: HindsightSearchDeps): (query: string, range?: { since?: number; until?: number }) => Promise<string | undefined> {
+  const { owner, agent } = deps.config;
+  const now = () => deps.now?.() ?? new Date();
+  const show = factLine(deps.config, deps.items);
+  return async (query, range = {}) => {
+    const inRange = (f: HindsightFact) => {
+      const at = Date.parse(f.mentioned_at ?? f.occurred_start ?? "");
+      return Number.isNaN(at) || ((range.since === undefined || at > range.since) && (range.until === undefined || at <= range.until));
+    };
+    const started = Date.now();
+    const [known, said] = await Promise.all([
+      deps.memory.searchKnown(query, now()),
+      deps.memory.searchSaid(query, now()).catch((error: unknown) => {
+        deps.audit?.append({ kind: "error", detail: { memorySearch: "replies bank left out", message: error instanceof Error ? error.message : String(error) } });
+        return [] as HindsightFact[];
+      }),
+    ]);
+    const facts = known.facts.filter((f) => f.text?.trim() && inRange(f)).slice(0, SEARCH_FACTS);
+    // The text behind the best facts, each piece once.
+    const pieces: string[] = [];
+    const seen = new Set<string>();
+    for (const f of facts) {
+      const c = f.chunk_id ? known.chunks[f.chunk_id] : undefined;
+      if (!c?.text?.trim() || seen.has(c.id) || pieces.length >= SOURCE_PIECES) continue;
+      seen.add(c.id);
+      const text = c.text.trim().length <= SOURCE_CHARS ? c.text.trim() : `${c.text.trim().slice(0, SOURCE_CHARS - 1)}…`;
+      pieces.push([`(${sourceOf(f, deps.items) || "kept"})`, ...text.split("\n").map((l) => `  ${l}`)].join("\n"));
+    }
+    const ownWords = said.filter((f) => f.text?.trim() && inRange(f)).slice(0, SAID_SHOWN).map((f) => clip(f.text ?? "", SAID_CHARS));
+    deps.audit?.append({ kind: "policy", detail: { memorySearch: { facts: facts.length, pieces: pieces.length, said: ownWords.length, ms: Date.now() - started } } });
+    const blocks = [
+      ...(facts.length > 0 ? [[`What you know, best first (from what ${owner.name} told you and what reached them; dated, so things may have changed since):`, ...facts.map(show)].join("\n")] : []),
+      ...(pieces.length > 0 ? [["The text it came from:", ...pieces].join("\n")] : []),
+      ...(ownWords.length > 0 ? [[`What you (${agent.name}) said to ${owner.name} before, word for word (your words then, not facts: check anything about other systems again):`, ...ownWords].join("\n")] : []),
     ];
     return blocks.length > 0 ? blocks.join("\n\n") : undefined;
   };

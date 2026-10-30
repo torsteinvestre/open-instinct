@@ -1051,6 +1051,14 @@ text-only bank; about $0.21 at the 30 Oct rate), both arms through the real path
 B on the 30 Oct bank, 2,268 background writes refused), the blind grading sheet on those answers. Seen in the preview:
 a tapback arrives as his text quoting Sunshine's reply ("Satte spørsmålstegn ved «...»"), so Sunshine's words can
 enter his spells (input policy: to fix with the email door's cleaning).
+Paid (Torstein OK'd store + arm B, arm A only where B missed; $1.02): storing $0.246, 0 failed; read back: no fact made of
+a reply (0 "calendar empty", 0 about what Sunshine said), the tapback quote not a fact. Arm B, 20 questions $0.71: every
+recall answered by Hindsight, nothing written; graded against the key by reading: 19 full, 1 partial (30 Oct, own
+answerer: 17 + 3); dates 5/5, people 4/4, changes 4/4, said 2/2, nowhere 1/1, owed 1/1, commitments 2/3. The partial,
+"What did I say I'd do after the call with Morten?", missed the European server: Hindsight hands over separate facts, and
+the date list for that day was filled with unrelated facts of the same day; arm A on it ($0.065) answered fully from the
+recording's summary (tasks per person). Grounding took 8-10 s a text with Hindsight on the laptop CPU (two recalls in a
+row), 2 s with the meaning search.
 
 **Open.** Hindsight's output language is a server setting (`HINDSIGHT_API_LLM_OUTPUT_LANGUAGE`), not per bank: one
 language for everyone on a shared server. Where it runs live (about 3 GB with its search models). An email's text shown

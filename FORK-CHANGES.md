@@ -973,7 +973,10 @@ DESIGN-memory-in-the-flow.md`, "Hindsight as the engine". This is step 1(a) (fre
 - Local times: Hindsight reads a time without a zone as UTC (its `stored_dates.py`); the 30 Oct documents went in as
   UTC, so "19:00" in the J. Cole ticket email was kept as 19:00 UTC (20:00 in Oslo) and "Thursday at 14:00" as 14:00
   UTC; the invitation that said "(CET)" came out right. The makers' own plugins also send UTC. Fix here: local time with
-  the offset, the zone named. Not yet checked with a real store (paid).
+  the offset, the zone named. Checked with a real store (below): 5 of 5 right. A date with no time now comes back as the
+  owner's midnight (23:00 UTC the day before in winter): filed and shown as that day.
+- A source that is not a conversation (email, later team chat) is named as what it is in its context ("From Torstein's
+  email."), not "A conversation of Torstein's, from email".
 - `createHindsightRecall`, the same `Recall` seam (recall.ts) the hand-offs and grounding use: for the days asked
   (`opts.days`, new; the grounding step's and the summary's days), every fact whose event falls on them, by the owner's
   days (widened for dates kept as midnight UTC), in time order, one per source and event time, observations (Hindsight's
@@ -996,9 +999,19 @@ the real local server's 30 Oct bank (recall and listing only, no model call; scr
 lists the 3 Nov facts (13 lines before the per-source and observation rules, 3 after), "December" Firi's fee change and
 Dune on the 18th, "what did me and Morten decide about the server?" the right answer; 3-4 s each on the laptop CPU.
 
-**Open.** A real store with the local-time fix (paid, about 2-3 cents). Whether Hindsight's search can replace the agent's
-own meaning search (history_search) or should sit beside it. Hindsight's output language is a server setting
-(`HINDSIGHT_API_LLM_OUTPUT_LANGUAGE`), not per bank. Where it runs live (about 3 GB with its search models).
+**Paid** (Torstein OK'd, $0.013; `~/sunshine-memory/hindsight_time_check.mjs`, results in hindsight-real/results/
+time-check.json): five documents through `HindsightMemory.sync()` into a fresh bank on the local server, with
+`HINDSIGHT_API_LLM_OUTPUT_LANGUAGE=English`. Every fact on the right time: the J. Cole ticket email ("12.11.26 19:00", no
+zone, sent in February) 2/2 at 18:00 UTC = 19:00 Oslo; the Founders Story invite ("5pm - 8pm (CET)", the control) 7/7;
+12 real lines of the 26 Oct recording ("another meeting on Thursday ... two o'clock") 2/2 at Thu 29 Oct 14:00 Oslo; his
+real text of 16 Oct, summer time ("Book a meeting today at 11") 2/2 at 11:00 Oslo; a stand-in text sent 20 Oct in
+summer time about "dinner with Zia on 5 Nov at 19:00" (winter time) 2/2 at 19:00 Oslo. 26 facts, all in English (the
+ticket email is Norwegian). 15 model calls, 97k tokens in (39k cached), 14k out. It showed one fault of this layer,
+fixed after it: a date without a time came back as his midnight and was shown as the day before.
+
+**Open.** Whether Hindsight's search can replace the agent's own meaning search (history_search) or should sit beside
+it. Hindsight's output language is a server setting (`HINDSIGHT_API_LLM_OUTPUT_LANGUAGE`), not per bank: one language
+for everyone on a shared server. Where it runs live (about 3 GB with its search models).
 
 **To remove.** Revert the commit (`git log --grep "sunshine:hindsight"`), or delete `hindsight.ts` and its test, the
 dependency, and the tagged lines in `boot.ts`, `ground.ts`, `intake.ts`, `lookup.ts` and `recall.ts`.

@@ -198,7 +198,10 @@ export class HindsightMemory {
     const caveat = SOURCES[it.source]?.caveat;
     // Recordings and the band stamp each line with the time into the conversation ("[12:34]"), not the time of day.
     const intoIt = /^\[\d{1,2}:\d{2}(?::\d{2})?\]/m.test(it.text) ? "Each line starts with the time into the conversation, not the time of day. " : "";
-    const context = `A conversation of ${owner}'s, ${words}${it.people?.length ? `, with ${it.people.join(", ")}` : ""}. ${caveat ? `${caveat} ` : ""}${intoIt}${this.zoneLine()}`;
+    const withWhom = it.people?.length ? `, with ${it.people.join(", ")}` : "";
+    // A source with no words of its own (email, later team chat) is named as what it is, not called a conversation.
+    const what = SOURCES[it.source] ? `A conversation of ${owner}'s, ${words}${withWhom}.` : `From ${owner}'s ${it.source}.`;
+    const context = `${what} ${caveat ? `${caveat} ` : ""}${intoIt}${this.zoneLine()}`;
     const timestamp = localIso(it.startedAt, this.tz());
     const metadata = { source: it.source, ...(it.title ? { title: it.title.slice(0, 200) } : {}) };
     return { id: itemDocId(it.id), content: it.text, timestamp, context, metadata, hash: hashOf(`${timestamp}|${context}|${it.text}`) };
@@ -373,12 +376,17 @@ export class HindsightMemory {
   }
 }
 
-/** A stored time with no time of day (a date only): Hindsight keeps it as midnight UTC, plus at most a few ms it adds for order. */
-function dateOnly(iso: string, tz: string): boolean {
+/**
+ * Whether a stored time is a date only, and whose: Hindsight keeps a date written without a zone as midnight UTC, and one
+ * written with the owner's offset (as the documents now carry) as the owner's midnight (2026-10-30 check: "bought on 25
+ * Feb" kept as 24 Feb 23:00 UTC); plus at most a few ms it adds for order.
+ */
+function dateKind(iso: string, tz: string): "utc-date" | "local-date" | "time" {
   const ms = Date.parse(iso);
-  if (Number.isNaN(ms)) return false;
+  if (Number.isNaN(ms)) return "time";
+  if (ms % 86_400_000 < 1_000) return "utc-date";
   const p = parts(ms, tz);
-  return ms % 86_400_000 < 1_000 || (p.hour === "00" && p.minute === "00" && p.second === "00");
+  return p.hour === "00" && p.minute === "00" && p.second === "00" ? "local-date" : "time";
 }
 
 /** The owner's day a fact's event falls on, YYYY-MM-DD. */
@@ -409,10 +417,14 @@ export interface HindsightRecallDeps {
 export function createHindsightRecall(deps: HindsightRecallDeps): Recall {
   const tz = () => deps.config.owner.timezone || "UTC";
   const now = () => deps.now?.() ?? new Date();
-  const day = (iso: string) =>
-    dateOnly(iso, tz())
-      ? new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", weekday: "short", day: "numeric", month: "short", year: "numeric" }).format(new Date(Date.parse(iso)))
-      : new Intl.DateTimeFormat("en-GB", { timeZone: tz(), weekday: "short", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(Date.parse(iso)));
+  const day = (iso: string) => {
+    const kind = dateKind(iso, tz());
+    const date = { weekday: "short", day: "numeric", month: "short", year: "numeric" } as const;
+    const at = new Date(Date.parse(iso));
+    if (kind === "utc-date") return new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", ...date }).format(at);
+    if (kind === "local-date") return new Intl.DateTimeFormat("en-GB", { timeZone: tz(), ...date }).format(at);
+    return new Intl.DateTimeFormat("en-GB", { timeZone: tz(), ...date, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(at);
+  };
   const noted = (iso: string) => new Intl.DateTimeFormat("en-GB", { timeZone: tz(), day: "numeric", month: "short", year: "numeric" }).format(new Date(Date.parse(iso)));
   const origin = (f: HindsightFact): string => {
     const id = f.document_id ?? "";

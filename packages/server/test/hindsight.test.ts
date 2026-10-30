@@ -103,6 +103,10 @@ describe("hindsight: what goes in", () => {
     expect(await s.memory.sync()).toMatchObject({ stored: 1 });
     expect(calls.stored.at(-1)!.content).toBe("[2026-10-30 10:55] Torstein: what's on next week?");
     expect(calls.banks).toHaveLength(1);
+
+    // A source that is not a conversation is named as what it is.
+    s.items.add({ id: "mail-1", source: "email", title: "Your tickets", startedAt: T - 60 * MIN, text: "Order: J. Cole, 12.11.26 19:00" });
+    expect(s.memory.documents().docs.find((d) => d.id === "item:mail-1")!.context).toBe("From Torstein's email. Times are Europe/Oslo time unless it names another zone.");
   });
 
   it("writes times as local wall-clock time with the offset that holds then", () => {
@@ -162,7 +166,9 @@ describe("hindsight: recall", () => {
     const observed: HindsightFact = { id: "o1", text: "Torstein plans to see Dune: Part Three at Odeon Storo", occurred_start: "2026-11-06T18:00:00+00:00", document_id: null, source_memory_ids: ["d1", "d2"] };
     const dune1: HindsightFact = { id: "d1", text: "Torstein wants Dune tickets", occurred_start: "2026-11-06T18:00:00+00:00", document_id: "item:rec-dune" };
     const dune2: HindsightFact = { id: "d2", text: "Torstein asked for Dune tickets at Odeon", occurred_start: "2026-11-06T18:00:00+00:00", document_id: "chat:abc123:3" };
-    const { recall, calls } = recallSetup({ facts: [founders, again, dateOnly, lateSunday, itself, dune1, observed, dune2], near: [server, founders, dune1, recentChat] });
+    // A date written with his offset is kept as his midnight (23:00 UTC the day before): still that day, no time shown.
+    const localDate: HindsightFact = { id: "f7", text: "Torstein's passport expires", occurred_start: "2026-11-06T23:00:00.010000+00:00", document_id: "item:email-3" };
+    const { recall, calls } = recallSetup({ facts: [founders, again, dateOnly, lateSunday, itself, dune1, observed, dune2, localDate], near: [server, founders, dune1, recentChat] });
     const text = await recall(["Anything happening next week for me", "events next week"], { exclude: "rec-new", chatsBefore: T - 86_400_000, days: ["2026-11-02/2026-11-08"] });
     // The owner's days, widened to hold dates kept as midnight UTC.
     expect(calls.lists).toEqual([{ timeField: "occurred_start", startDate: "2026-11-01T23:00:00.000Z", endDate: "2026-11-09T00:00:00.000Z", state: "valid", limit: 50 }]);
@@ -173,6 +179,7 @@ describe("hindsight: recall", () => {
         "[happens Tue, 3 Nov 2026; noted 27 Oct 2026] Torstein has an event on 3 November (their own texts)",
         "[happens Tue, 3 Nov 2026, 17:00; noted 30 Oct 2026] Torstein is invited to The Founder's Story Oslo at Startup Lab (from email: Invitation: The Founder's Story Oslo)",
         "[happens Fri, 6 Nov 2026, 19:00] Torstein plans to see Dune: Part Three at Odeon Storo",
+        "[happens Sat, 7 Nov 2026] Torstein's passport expires",
         "",
         "Related, best first:",
         "[noted 26 Oct 2026] Torstein and Morten decided OVH is fine for V1 (recorded on their phone: Server talk)",

@@ -10,6 +10,10 @@
  * tools still to come. So it is criteria, not cases (the act-or-ask principle, NOTES 2026-10-24): how clearly it is
  * theirs, what a mistake would cost, whether it can be undone, who else it touches, how sure the source is. Judgment
  * stays with the model; the hard limits stay in the policy engine.
+ *
+ * The first test (2026-10-30, look-before-ask.mjs SET=acting) passed every case but the one it was built for: found
+ * while answering a question, Founders Story was still offered ("Want me to add it?"), 0/2. The rule had no reason in
+ * it; Anthropic's prompting guide advises giving the motivation behind an instruction, so the "Why:" line was added.
  */
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool, textResult, type InstinctConfig, type Principal, type RegisteredTool, type StateDir } from "@open-instinct/core";
@@ -61,6 +65,8 @@ export function actingSection(owner: string, level: Proactivity): string {
   return [
     `# How you act for ${owner}`,
     `The same in everything you do for ${owner}: their messages, what reaches you from elsewhere (recordings, email, other tools) and your scheduled work.`,
+    // The motivation, so the criteria carry to cases nobody wrote down (Anthropic's prompting guide: give the why).
+    `Why: ${owner} wants to hand things off, not manage you. A question they have to answer costs them more than a step they can easily undo, and a wrong step towards other people, their money or their name costs more than a question.`,
     `- Find out before you ask. Use what you know and what you can look up (their email, calendar, earlier conversations, the web) before asking ${owner} anything, and check how things stand before you change them (the calendar before adding to it). Ask only what is still unclear after that, all in one message.`,
     `- Weigh each step: how clearly it is ${owner}'s and what they want, what a mistake would cost them, and whether it can be undone.`,
     `- ${owner}'s setting is "${level}". ${DOING[level](owner)}`,

@@ -30,6 +30,7 @@ describe("[sunshine:acting] how Sunshine acts for the owner", () => {
       const s = actingSection("Maya", level);
       expect(s).toMatch(/^# How you act for Maya\n/);
       expect(s).toContain("The same in everything you do for Maya: their messages, what reaches you from elsewhere (recordings, email, other tools) and your scheduled work.");
+      expect(s).toContain("Why: Maya wants to hand things off, not manage you. A question they have to answer costs them more than a step they can easily undo, and a wrong step towards other people, their money or their name costs more than a question.");
       expect(s).toContain("- Find out before you ask.");
       expect(s).toContain("check how things stand before you change them");
       expect(s).toContain("Ask only what is still unclear after that, all in one message.");

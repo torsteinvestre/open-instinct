@@ -933,6 +933,18 @@ only, the same text for the same setting, the setting tool), `intake.test.ts` (t
 carries no copy), and the real server booted offline (scratchpad prompt-check.mjs): the section is in the owner's text
 thread and in a system task, not in a friend's. All tests (1,488) and smoke pass.
 
+**Paid** (Torstein OK'd each). First version, $0.51: texts 8/10 (a direct calendar ask 2/2 added; a passing thought 2/2,
+a deck owed to Morten 2/2 and dinner with Zia on the 3rd 2/2 left alone), recordings 5/5; the target, "Anything happening
+next week for me", 0/2: once the grounding step searched no email and never found the event, once it found it and asked
+"Want me to add the Founders Story event to your calendar?". 0 thinking blocks in 8 of 10 texts. With the "Why:" line
+(Anthropic's guide: give the motivation), $0.25: the target 0/3 (once not found, twice found and offered), the three
+not-to-act texts 3/3, two not-to-act recordings 2/2. Reading: the rule breaks nothing and the setting now reaches texts,
+but wording does not turn an offer into an action for something found while answering a question (Sonnet 5.5 at medium
+effort answers such texts without thinking; Anthropic notes it checks in more at low and medium effort). The same lesson
+as reply length (2026-10-15) and looking before asking (2026-10-29). The structural answer for a registered event is
+email flowing in: added when the email arrives, through the hand-off; records for the grounding step's misses (found 3
+of 5 times here). Wording changes for this case stop here.
+
 **To remove.** Revert the commit (`git log --grep "sunshine:acting"`): the hand-off gets its own lines back and texts
 lose the rule.
 

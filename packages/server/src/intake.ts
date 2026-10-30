@@ -17,12 +17,14 @@
  * yesterday's journal are in every owner prompt (MemoryStore.digest); older items are found by search.
  *
  * [sunshine:in-the-flow] The hand-off brings what is already known (recall.ts), what the email and calendar show now for
- * what is unclear (lookup.ts, read by code) and the email and calendar tools along, and says where doing ends and asking
- * starts, by the owner's proactivity setting. His first voice note (2026-10-27) was answered with a question whose
- * answer was in his email.
+ * what is unclear (lookup.ts, read by code) and the email and calendar tools along. His first voice note (2026-10-27)
+ * was answered with a question whose answer was in his email.
+ *
+ * [sunshine:acting] How to act on it (look before asking, where doing ends by the owner's setting, heard is not typed,
+ * ask before anything outward) is the owner's one rule in the system prompt (acting.ts), the same as for their own
+ * messages; the hand-off points to it.
  */
-import { Type } from "@earendil-works/pi-ai";
-import { defineTool, textResult, wrapUntrusted, type ArchiveItem, type AuditLog, type InstinctConfig, type ItemArchive, type ItemSummary, type MemoryStore, type RegisteredTool, type StateDir } from "@open-instinct/core";
+import { wrapUntrusted, type ArchiveItem, type AuditLog, type InstinctConfig, type ItemArchive, type ItemSummary, type MemoryStore } from "@open-instinct/core";
 import type { ModelCall } from "@open-instinct/watcher";
 import type { Recall } from "./recall.js";
 import { weeksLine, type LookUp, type LookUpAsk } from "./lookup.js";
@@ -73,47 +75,10 @@ export interface IntakeDeps {
   runTask: (task: { id: string; name?: string; prompt: string; load?: string[] }) => Promise<string>;
   /** [sunshine:in-the-flow] What is already known about the item's subjects (needs meaning search). */
   recall?: Recall;
-  /** [sunshine:in-the-flow] The owner's proactivity setting. */
-  proactivity?: () => Proactivity;
   /** [sunshine:in-the-flow] Tool groups the hand-off starts with ("apps": email and calendar). */
   load?: string[];
   /** [sunshine:in-the-flow] Email and calendar read by code for what the summary says is unclear (lookup.ts). */
   lookUp?: LookUp;
-}
-
-/**
- * [sunshine:in-the-flow] How much the owner wants done for them on Sunshine's own initiative with what reaches it from
- * elsewhere (decided with Torstein 2026-10-27; clutter, not only safety, sets the line, and real use tunes it). Going to
- * other people, costing money and speaking for the owner always ask first, whatever the setting.
- */
-export const PROACTIVITY_LEVELS = ["ask first", "prepare and offer", "just do it"] as const;
-export type Proactivity = (typeof PROACTIVITY_LEVELS)[number];
-export const DEFAULT_PROACTIVITY: Proactivity = "prepare and offer";
-const PROACTIVITY_FILE = "proactivity.json";
-
-export function readProactivity(state: StateDir): Proactivity {
-  const level = state.readJson<{ level?: string }>(PROACTIVITY_FILE, {}).level;
-  return (PROACTIVITY_LEVELS as readonly string[]).includes(level ?? "") ? (level as Proactivity) : DEFAULT_PROACTIVITY;
-}
-
-/** [sunshine:in-the-flow] The owner sets how much Sunshine does on its own, in words, until the app has a setting. */
-export function proactivityTool(state: StateDir, config: InstinctConfig): RegisteredTool {
-  const owner = config.owner.name;
-  return defineTool({
-    name: "proactivity",
-    label: "How much to do on your own",
-    description:
-      `When ${owner} tells you how much to do for them on your own with what reaches you from elsewhere (recordings, and later email and other tools): ` +
-      `"ask first" (ask before doing anything for them), "prepare and offer" (do small things that are easy to undo, prepare bigger work and offer it; the default), ` +
-      `"just do it" (do what is clearly theirs and tell them). Anything that goes to other people, costs money or speaks for ${owner} is asked first at every level. Without a level it says the current one.`,
-    parameters: Type.Object({ level: Type.Optional(Type.Union(PROACTIVITY_LEVELS.map((l) => Type.Literal(l)))) }),
-    meta: { capabilities: ["memory.write"], group: "memory", describe: (a) => `proactivity: ${String((a as { level?: unknown }).level ?? "read")}` },
-    execute: async ({ level }) => {
-      if (!level) return textResult(`Now: ${readProactivity(state)}.`);
-      state.writeJson(PROACTIVITY_FILE, { level, at: new Date().toISOString() });
-      return textResult(`Set: ${level}.`);
-    },
-  });
 }
 
 export interface Intake {
@@ -243,13 +208,6 @@ export function createIntake(deps: IntakeDeps): Intake {
     return summary ? { summary, ask: parseAsk(reply.text), costUsd: reply.costUsd } : { costUsd: reply.costUsd };
   }
 
-  // [sunshine:in-the-flow] Where doing ends and offering or asking starts, by the owner's setting.
-  const doing: Record<Proactivity, string> = {
-    "prepare and offer": `Do what is clearly ${owner}'s and easy to undo (their own calendar, a reminder) and tell them in one line what you did. For bigger work for them (a document, a deck, research), prepare the cheap part (what you know, an outline) and offer once to do the rest.`,
-    "ask first": `${owner} wants to be asked before you do anything for them: gather what you know and can find, then ask in one text, saying what you would do.`,
-    "just do it": `Do what is clearly ${owner}'s (their own calendar, reminders, documents, decks, research) and tell them in one line what you did; offer first only a big piece of work they may not want.`,
-  };
-
   /**
    * What the agent gets: the summary and what is already known, as data, and how to act on them. `known`: what recall
    * found; null when it found nothing; undefined when nothing was looked up (no meaning search, or it failed). `live`:
@@ -279,11 +237,8 @@ export function createIntake(deps: IntakeDeps): Intake {
           : []),
       // [sunshine:in-the-flow] Read by code just now, so looking is not left to remembering to look.
       ...(live ? [`What ${owner}'s email and calendar show for it, looked up just now for what is still unclear and the days it is about:`, wrapUntrusted(live, "email and calendar"), ""] : []),
-      "Handle it as a great personal assistant would:",
-      `- First settle what you can yourself: what you already know${live ? " and what was just looked up" : ""}, then ${owner}'s email, calendar and earlier conversations for what is still missing or may have changed (check the calendar before adding to it). Ask ${owner} only what is still unclear after that, all in one text.`,
-      `- ${doing[deps.proactivity?.() ?? DEFAULT_PROACTIVITY]}`,
-      ...(caveat ? [`- Heard is not typed: a task in a recording may be someone else's, a passing thought or misheard; act on it only when it is clearly ${owner}'s.`] : []),
-      `- Anything that goes to other people, costs money or speaks for ${owner}: ask first.`,
+      // [sunshine:acting] The owner's one rule (acting.ts, in the system prompt) says how; this item is what it applies to.
+      `Handle it as you handle everything for ${owner} (How you act for ${owner}), starting from what is above.`,
       `The summary is already kept with the conversation and noted in today's journal; your memory notes are for lasting facts about ${owner} and their people.`,
       `Text ${owner} when there is something to tell or ask; otherwise end with exactly NO_REPLY.`,
     ].join("\n");

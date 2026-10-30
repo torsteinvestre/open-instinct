@@ -13,8 +13,8 @@
 //   DRY=1   checks the checks on known answers (the live reply of 2026-10-27 and written ones) and the stand-in inbox's
 //           matching on known searches; no model call
 //   LOOKUP=0  without the code's look-up of email and calendar before the hand-off (2026-10-29, lookup.ts)
-//   NO_SETTLE=1  the hand-off without its line "First settle what you can yourself ... Ask only what is still unclear
-//             after that, all in one text." (from before the code looked things up; is it still worth having?)
+// [sunshine:acting] Since 2026-10-30 how to act on it is the owner's one rule in the system prompt (acting.ts), not lines
+// in the hand-off; the NO_SETTLE option (the hand-off without its "First settle..." line) went with those lines.
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -283,14 +283,6 @@ async function once(name) {
   // LOOKUP=0 leaves the look-up out (a version without it ignores the option anyway).
   const live = process.env.LOOKUP === "0" ? {} : { liveSources: liveSources(record) };
   const app = await boot(env, { embedder, extraTools: appsTools(record), ...live, outbox: { send: async (m) => void sent.push(m), typing: async () => {}, markRead: async () => {} }, logger: () => {} });
-  if (process.env.NO_SETTLE) {
-    const run = app.runtime.runSystemTask.bind(app.runtime);
-    app.runtime.runSystemTask = (task) => {
-      const without = task.prompt.replace(/^- First settle what you can yourself[^\n]*\n/m, "");
-      if (without === task.prompt) throw new Error("NO_SETTLE: the line is not in this hand-off; nothing to compare");
-      return run({ ...task, prompt: without });
-    };
-  }
   const result = await app.intake.receive({ id: `rec-${name}`, source: "recording", startedAt: NOW - 10 * 60_000, endedAt: NOW - 9 * 60_000, text: CASES[name].text });
   const audit = new AuditLog(state).read({});
   const calls = audit.filter((e) => e.kind === "tool_call").map((e) => e.detail);

@@ -747,7 +747,8 @@ where it is not clearly his. Town feeds the relevant part of its memory into eve
   "prepare and offer" (default: small undoable things done and told in one line, bigger work prepared and offered
   once), "ask first", "just do it"; heard tasks acted on only when clearly the owner's (band and recordings); other
   people, money and speaking for the owner always ask first. The `proactivity` tool (owner only) sets the level in
-  words, in `/data/proactivity.json`.
+  words, in `/data/proactivity.json`. Since 2026-10-30 these criteria and the setting are one rule for everything the
+  owner's Sunshine does, in the system prompt: `[sunshine:acting]`.
 - `runtime.ts` (core): `runSystemTask({ load })` starts a task with tool groups loaded (a hand-off with `apps`: email
   and calendar), after the run's cold-cache unload (which would drop them again), with what loading says in the prompt
   ("ready now"). `boot.ts` passes `apps` when Composio (or a scenario's stand-in apps tools, `extraTools`) is there.
@@ -898,6 +899,42 @@ read JSON out of free text; same change when they are next touched.
 
 **To remove.** Revert the commit (`git log --grep "sunshine:fixed-form"`); the second try and the lenient reader come
 back with it.
+
+### `[sunshine:acting]`: one rule for how Sunshine acts for its owner, in everything it does
+
+**Why** (2026-10-30). The rule for when to just do something and when to ask (act or ask, sunshine-ops NOTES 2026-10-24;
+the owner's proactivity setting, 27 Oct) lived only in a recording's hand-off. His own texts had the base prompt's
+general lines ("Prefer doing over describing", "Ask one question at a time"), so a text that turned up something to do
+got an offer: live, "Anything happening for me next week" found Founders Story in his email, not in his calendar, and
+ended "Want me to add it?". The setting did nothing for texts. The policy lets the owner's own calendar be written
+without approval, so nothing in code made it ask. Torstein: one rule, written to hold for everything Sunshine does,
+including sources and tools still to come.
+
+**What the fork adds**
+- `packages/server/src/acting.ts`: `actingSection(owner, level)`, a section "# How you act for <owner>" written as
+  criteria: find out before asking, and check how things stand before changing them; weigh how clearly it is theirs,
+  what a mistake would cost and whether it can be undone; the setting's line; how sure the source is (typed, or heard
+  in a recording or read in someone else's message); anything that goes to other people, costs money or speaks for them
+  asks first; unasked, tell only what is worth their attention. `actingPromptFor` gives it to the verified owner's
+  conversations only (owner tier: not an email from their address, not other people) through boot's `promptExtra`, so
+  texts, recordings' hand-offs (system tasks) and scheduled jobs read the same text. Fixed text per setting, so the
+  prompt cache holds between messages. The setting (`PROACTIVITY_LEVELS`, `readProactivity`, the `proactivity` tool)
+  moved here from intake.ts; the tool is registered for every agent and its description covers everything Sunshine does.
+- `intake.ts`: the hand-off's own copy (first settle what you can, the level, heard is not typed, ask first) is one line
+  pointing to the rule; `IntakeDeps.proactivity` removed.
+- Scenarios: `look-before-ask.mjs` SET=acting, five texts on the copy of his thread: should act (next week's event found
+  in email, a direct calendar request), should not (a passing thought, something owed to someone else, a question
+  involving another person). Graders checked on 12 known answers incl. the live reply; the event's name is now also
+  matched as "Founder's" (the live reply's spelling, which the earlier checks would have missed). `in-the-flow.mjs`:
+  NO_SETTLE removed (the line it took out is gone).
+
+**Tested** (free): `test/acting.test.ts` (the criteria at every level, no channel, source or tool as its scope, owner
+only, the same text for the same setting, the setting tool), `intake.test.ts` (the hand-off points to the rule and
+carries no copy), and the real server booted offline (scratchpad prompt-check.mjs): the section is in the owner's text
+thread and in a system task, not in a friend's. All tests (1,488) and smoke pass.
+
+**To remove.** Revert the commit (`git log --grep "sunshine:acting"`): the hand-off gets its own lines back and texts
+lose the rule.
 
 ### `[sunshine:intake]`: what reaches the owner from elsewhere is kept, summarized once and acted on
 

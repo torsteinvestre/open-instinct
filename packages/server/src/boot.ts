@@ -50,7 +50,8 @@ import { networkTools } from "@open-instinct/network";
 import { DEFAULT_DECIDE_MODEL, DEFAULT_SCREEN_MODEL, DEFAULT_WRITE_MODEL, NEWS_PROMPT, WATCH_GATE, createWatcher, modelCall, resolveWatcherModel, stepModelSpec, type ModelCall, type Watcher } from "@open-instinct/watcher";
 import { researchWith, writerContextFor } from "./watcher-writer.js";
 import { DEFAULT_MEMORY_MODEL, MEMORY_GATE, MEMORY_REASONING, createMemoryPass } from "./memory-pass.js"; // [sunshine:memory]
-import { DEFAULT_INTAKE_MODEL, INTAKE_REASONING, createIntake, proactivityTool, readProactivity, type Intake } from "./intake.js"; // [sunshine:intake] [sunshine:in-the-flow] proactivity
+import { DEFAULT_INTAKE_MODEL, INTAKE_REASONING, createIntake, type Intake } from "./intake.js"; // [sunshine:intake]
+import { actingPromptFor, proactivityTool, readProactivity } from "./acting.js"; // [sunshine:acting]
 import { createRecall } from "./recall.js"; // [sunshine:in-the-flow]
 import { composioSources, createLookUp, type LiveSources } from "./lookup.js"; // [sunshine:in-the-flow]
 import { DEFAULT_GROUND_MODEL, createGround } from "./ground.js"; // [sunshine:grounding]
@@ -239,8 +240,8 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
     }),
   );
 
-  // [sunshine:in-the-flow] The owner tells Sunshine how much to do on its own with what reaches it from elsewhere.
-  if (items) registry.register(proactivityTool(state, config));
+  // [sunshine:acting] The owner tells Sunshine how much to do on its own, in everything it does for them.
+  registry.register(proactivityTool(state, config));
 
   // [sunshine:recordings] Recordings the owner sends: transcribed by the service, kept through the intake, the audio
   // deleted. With TRANSCRIBE_URL and TRANSCRIBE_KEY; the intake and runtime are made further down.
@@ -595,6 +596,8 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
       ...promptExtraFor(principal, channel),
       // [sunshine:watcher] With the news watch on, the owner's prompt says how to talk about it.
       ...(watcher && principal.kind === "owner" ? [NEWS_PROMPT] : []),
+      // [sunshine:acting] How Sunshine acts for the owner, with their setting: texts, hand-offs and jobs alike.
+      ...actingPromptFor(principal, config.owner.name, () => readProactivity(state)),
       // [sunshine:app-permissions] Someone else's conversation: the owner's app actions their tier may use.
       ...appsForOthers(principal),
     ],
@@ -639,10 +642,9 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
           audit,
           ...(call ? { call } : {}),
           runTask: (task) => runtime.runSystemTask(task),
-          // [sunshine:in-the-flow] What is already known comes with each hand-off (with meaning search), the owner's
-          // setting decides where doing ends, and email and calendar are loaded for looking things up before asking.
+          // [sunshine:in-the-flow] What is already known comes with each hand-off (with meaning search), and email and
+          // calendar are loaded for looking things up before asking. Where doing ends: [sunshine:acting], in the prompt.
           ...(recall ? { recall } : {}),
-          proactivity: () => readProactivity(state),
           ...(apps || opts.extraTools?.some((t) => t.spec.meta.group === "apps") ? { load: ["apps"] } : {}),
           ...(lookUp ? { lookUp } : {}),
         });

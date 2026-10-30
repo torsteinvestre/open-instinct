@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { AuditLog, ItemArchive, MemoryStore, StateDir, defaultConfig } from "@open-instinct/core";
 import type { ModelCall } from "@open-instinct/watcher";
-import { SUMMARY_SCHEMA, createIntake, parseAsk, parseSummary, proactivityTool, readProactivity, speakersOf, type IntakeDeps } from "../src/intake.js";
+import { SUMMARY_SCHEMA, createIntake, parseAsk, parseSummary, speakersOf, type IntakeDeps } from "../src/intake.js";
 import type { LookUpAsk } from "../src/lookup.js";
 
 const dirs: string[] = [];
@@ -47,7 +47,7 @@ function fakeModel(replies: Array<string | Error>): ModelCall & { asked: Array<{
   return call;
 }
 
-function setup(call?: ModelCall, extra: Partial<Pick<IntakeDeps, "recall" | "proactivity" | "load" | "lookUp">> = {}) {
+function setup(call?: ModelCall, extra: Partial<Pick<IntakeDeps, "recall" | "load" | "lookUp">> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "intake-"));
   dirs.push(dir);
   const state = new StateDir(dir);
@@ -105,8 +105,10 @@ describe("intake", () => {
     expect(prompt).toContain('<untrusted source="summary of the recording">');
     expect(prompt).toContain("Maya's tasks:\n- Research what consumers think of instruction manuals before the next meeting");
     expect(prompt).toContain("Decided:\n- Target buyer: young, business-class people, mid-range price");
-    expect(prompt).toContain("Do what is clearly Maya's and easy to undo");
-    expect(prompt).toContain("Ask Maya only what is still unclear after that, all in one text.");
+    // [sunshine:acting] How to act is the owner's one rule in the system prompt; the hand-off points to it.
+    expect(prompt).toContain("Handle it as you handle everything for Maya (How you act for Maya), starting from what is above.");
+    expect(prompt).not.toContain("easy to undo");
+    expect(prompt).not.toContain("ask first");
     expect(prompt).toMatch(/otherwise end with exactly NO_REPLY\.$/);
     expect(prompt).not.toContain("Instruction manuals, I'd say");
     // [sunshine:in-the-flow] Without meaning search nothing was looked up, and the prompt does not pretend it was.
@@ -165,8 +167,8 @@ describe("intake", () => {
     expect(prompt).toContain("Still unclear:\n- Which event is on 3 Nov, and at what time");
     expect(prompt).toContain('What you already know that may bear on it (earlier conversations and kept items, best first; dated, so things may have changed since):\n<untrusted source="what you already know">');
     expect(prompt).toContain("Owner's tasks: Book the venue for the 3 Nov launch");
-    expect(prompt).toContain("First settle what you can yourself: what you already know, then Maya's email, calendar and earlier conversations");
-    expect(prompt).toContain("Heard is not typed"); // a band recording
+    expect(prompt).toContain("starting from what is above."); // [sunshine:acting]
+    expect(prompt).toContain("Speaker names come from voice recognition and the words from speech recognition; both can be wrong."); // a band recording: how sure the source is
     expect(tasks[0]!.load).toEqual(["apps"]);
   });
 
@@ -187,7 +189,7 @@ describe("intake", () => {
 
     const prompt = tasks[0]!.prompt;
     expect(prompt).toContain('What Maya\'s email and calendar show for it, looked up just now for what is still unclear and the days it is about:\n<untrusted source="email and calendar">\nEmail, searched for "3 November" OR "Nov 3":\n- Sat, 17 Oct 2026, from Oslo Startup Lab: Founders Story Oslo');
-    expect(prompt).toContain("First settle what you can yourself: what you already know and what was just looked up, then Maya's email");
+    expect(prompt.indexOf("looked up just now")).toBeLessThan(prompt.indexOf("starting from what is above.")); // [sunshine:acting]
     // The searches are for this hand-off only; the kept summary does not carry them.
     expect(items.get("es2004b")!.summary).not.toHaveProperty("searches");
     expect(items.get("es2004b")!.summary).not.toHaveProperty("days");
@@ -200,7 +202,7 @@ describe("intake", () => {
     await quiet.intake.receive(meeting);
     expect(called).toBe(0);
     expect(quiet.tasks[0]!.prompt).not.toContain("looked up just now");
-    expect(quiet.tasks[0]!.prompt).toContain("First settle what you can yourself: what you already know, then Maya's email");
+    expect(quiet.tasks[0]!.prompt).toContain("starting from what is above."); // [sunshine:acting]
 
     const failing = setup(fakeModel([answer({ ...SUMMARY_JSON, searches: ["Founders"] })]), {
       lookUp: async () => {
@@ -211,35 +213,13 @@ describe("intake", () => {
     expect(failing.tasks[0]!.prompt).not.toContain("looked up just now");
   });
 
-  it("[sunshine:in-the-flow] says so when nothing kept bears on it, and the owner's setting decides where doing ends", async () => {
-    const levels = ["ask first", "prepare and offer", "just do it"] as const;
-    const prompts: string[] = [];
-    for (const level of levels) {
-      const { intake, tasks } = setup(fakeModel([answer(SUMMARY_JSON)]), { recall: async () => undefined, proactivity: () => level });
-      await intake.receive({ ...meeting, source: "claude-code" });
-      prompts.push(tasks[0]!.prompt);
-    }
-    for (const p of prompts) {
-      expect(p).toContain("Nothing you have kept seems to bear on it.");
-      expect(p).toContain("Anything that goes to other people, costs money or speaks for Maya: ask first.");
-      expect(p).not.toContain("Heard is not typed"); // typed work, not a recording
-    }
-    expect(prompts[0]).toContain("Maya wants to be asked before you do anything for them");
-    expect(prompts[1]).toContain("prepare the cheap part (what you know, an outline) and offer once to do the rest");
-    expect(prompts[2]).toContain("offer first only a big piece of work they may not want");
-  });
-
-  it("[sunshine:in-the-flow] the owner sets how much is done on its own; the default is to prepare and offer", async () => {
-    const { state, config } = setup();
-    expect(readProactivity(state)).toBe("prepare and offer");
-    const tool = proactivityTool(state, config);
-    const text = (r: unknown) => (r as { content: Array<{ text?: string }> }).content.map((c) => c.text ?? "").join("");
-    const ctx = {} as never;
-    expect(text(await tool.spec.execute({ level: "just do it" }, ctx))).toBe("Set: just do it.");
-    expect(readProactivity(state)).toBe("just do it");
-    expect(text(await tool.spec.execute({}, ctx))).toBe("Now: just do it.");
-    state.writeJson("proactivity.json", { level: "whatever" });
-    expect(readProactivity(state)).toBe("prepare and offer");
+  it("[sunshine:in-the-flow] says so when nothing kept bears on it; typed work carries no speech-recognition caveat", async () => {
+    const { intake, tasks } = setup(fakeModel([answer(SUMMARY_JSON)]), { recall: async () => undefined });
+    await intake.receive({ ...meeting, source: "claude-code" });
+    const p = tasks[0]!.prompt;
+    expect(p).toContain("Nothing you have kept seems to bear on it.");
+    expect(p).not.toContain("speech recognition");
+    expect(p).toContain("starting from what is above."); // [sunshine:acting]
   });
 
   it("reads the summary leniently and finds the named speakers", () => {

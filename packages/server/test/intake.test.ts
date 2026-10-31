@@ -267,6 +267,31 @@ describe("intake", () => {
     expect(p).toContain("May need you now:\n- An event Maya signed up for: Founders Story, Tue 3 Nov 17:00-20:00");
   });
 
+  // [sunshine:flowing-in] The code decides from the kind (the 2026-10-31 gate check: codes and "if this wasn't you" were handed over).
+  const email = { id: "email-k", source: "email", title: "Your code", startedAt: T, text: "From: Brave <search-api@brave.com>\nTo: Maya\n\nYour code is 001839." };
+  const reading = (needs: unknown[]) => answer({ title: "t", summary: "A code Maya asked for.", decisions: [], owner_tasks: [], others_tasks: [], open: [], to_settle: [], searches: [], days: [], needs });
+
+  it("[sunshine:flowing-in] asks for each need's kind, and keeps an email whose needs are all of a quiet kind without waking the agent", async () => {
+    const small = fakeModel([reading([{ kind: "own_action", what: "Enter code 001839" }, { kind: "if_not_you", what: "Change the password if Maya did not sign in" }, { kind: "info", what: "The account is active" }])]);
+    const { intake, tasks, audits } = setup(fakeModel([]), { smallCall: small });
+    expect(await intake.receive(email)).toMatchObject({ outcome: "kept, nothing to act on" });
+    expect(tasks).toHaveLength(0);
+    expect(audits()[0]).toMatchObject({ intake: "kept, nothing to act on", needs: ["own_action", "if_not_you", "info"] });
+    expect(small.asked[0]!.system).toContain('"own_action" (a code, link or confirmation for something Maya is doing themselves just now)');
+    expect(JSON.stringify(GATED_SUMMARY_SCHEMA.properties.needs)).toContain('"enum":["event","request","deadline","change","promise","offer","own_action","if_not_you","info"]');
+  });
+
+  it("[sunshine:flowing-in] hands over when any need is of another kind or of none, with only those in the hand-off", async () => {
+    const small = fakeModel([reading([{ kind: "info", what: "The terms changed" }, { kind: "deadline", what: "Sign the NDA by Friday" }]), reading([{ kind: "", what: "Something unclear" }])]);
+    const { intake, tasks, audits } = setup(fakeModel([]), { smallCall: small });
+    expect(await intake.receive(email)).toMatchObject({ outcome: "handed over" });
+    expect(tasks[0]!.prompt).toContain("May need you now:\n- Sign the NDA by Friday");
+    expect(tasks[0]!.prompt).not.toContain("The terms changed");
+    expect(audits()[0]).toMatchObject({ intake: "handed over", needs: ["info", "deadline"] });
+    expect(await intake.receive({ ...email, id: "email-k2" })).toMatchObject({ outcome: "handed over" });
+    expect(tasks[1]!.prompt).toContain("May need you now:\n- Something unclear");
+  });
+
   it("[sunshine:flowing-in] keeps the owner's own change as it is: no reading, no hand-off, the note in the journal", async () => {
     const model = fakeModel([]);
     const { items, memory, intake, tasks, audits } = setup(model);
@@ -280,7 +305,11 @@ describe("intake", () => {
   });
 
   it("reads the summary leniently and finds the named speakers", () => {
-    expect(parseNeeds(answer({ summary: "S.", needs: [" Reply to Morten by Friday ", 2, ""] }))).toEqual(["Reply to Morten by Friday"]); // [sunshine:flowing-in]
+    // [sunshine:flowing-in] Each need with its kind; a plain line has no kind; empty or odd entries are dropped.
+    expect(parseNeeds(answer({ summary: "S.", needs: [{ kind: " Request ", what: " Reply to Morten by Friday " }, " Plain line ", 2, "", { kind: "info" }, null] }))).toEqual([
+      { kind: "request", what: "Reply to Morten by Friday" },
+      { kind: "", what: "Plain line" },
+    ]);
     expect(parseNeeds("{not json")).toEqual([]);
     expect(parseSummary(answer({ summary: " Short. ", decisions: ["a", 3, " ", "b"], owner_tasks: "none" }))).toEqual({ summary: "Short.", decisions: ["a", "b"], ownerTasks: [], othersTasks: [], open: [] });
     expect(parseSummary(answer({ summary: "S.", to_settle: ["When is it?", 4] }))!.toSettle).toEqual(["When is it?"]); // [sunshine:in-the-flow]

@@ -1123,7 +1123,14 @@ an item through the intake, like a recording. Each source adds only a small rule
   **The gate**: what the owner sent on purpose (`onPurpose`: a recording) always goes to the agent, in the form it
   always had; anything that arrives by itself (email, calendar, the band) is read with one more field, `needs` (what
   may call for the assistant to do something or tell the owner now), and goes to the agent only when that is not empty;
-  otherwise it is kept, summarized and journaled ("kept, nothing to act on"). Short sources (`small`) are read by
+  otherwise it is kept, summarized and journaled ("kept, nothing to act on"). Since 2026-10-31 each need carries a
+  KIND from a fixed list (`NEED_KINDS`, an enum in the fixed form) and the code decides from it: `own_action` (a code,
+  link or confirmation for something the owner is doing themselves), `if_not_you` (matters only if the owner did not
+  do it) and `info` (asks nothing) never wake the agent on their own (`QUIET_NEEDS`); `event`, `request`, `deadline`,
+  `change`, `promise`, `offer`, or no kind, do; the hand-off lists only those; the audit keeps every kind. Why: the gate
+  check on his real email (below) handed over 15 of 70 emails that ask nothing, 13 of them codes, resets, "if this
+  wasn't you" notices and notices that ask nothing. The bar stays LOW on purpose (Torstein, 31 Oct): a miss means
+  Sunshine never tells him unasked, noise costs one agent turn (~5 c) that the agent can end silently. Short sources (`small`) are read by
   `INTAKE_SMALL_MODEL` (default Claude Haiku 5.5, low thinking; "off" = `INTAKE_MODEL` reads them), as the 29 Oct
   design said. `receive(item, { keepOnly })` keeps and journals with a note, no reading and no hand-off.
 

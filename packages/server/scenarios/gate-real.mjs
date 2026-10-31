@@ -13,6 +13,7 @@
 //       writes the listing to key from, counts the reading's input tokens (Anthropic's free count_tokens) for the
 //       estimate, checks the grader on known answers
 //   OWNER_NAME=... OWNER_EMAIL=... ANTHROPIC_API_KEY=... MAX_USD=0.3 node scenarios/gate-real.mjs   the paid run
+//   COMPARE=<an earlier results-*.json>   also lists every email whose outcome changed since that run
 // Files (defaults): EMAILS ~/sunshine-memory/hindsight-real/emails.json, NOTES ~/sunshine-memory/hindsight-real/MEMORY.md,
 // OUT ~/sunshine-memory/gate-real (KEY defaults to OUT/key.json; results-<time>.json written there).
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -21,7 +22,7 @@ import { join } from "node:path";
 import { AuditLog, ItemArchive, MemoryStore, StateDir, defaultConfig } from "@open-instinct/core";
 import { modelCall, resolveWatcherModel } from "@open-instinct/watcher";
 import { TRIGGERS, createFlowIn } from "../dist/flowing-in.js";
-import { DEFAULT_INTAKE_SMALL_MODEL, GATED_SUMMARY_SCHEMA, INTAKE_SMALL_REASONING, createIntake } from "../dist/intake.js";
+import { DEFAULT_INTAKE_SMALL_MODEL, GATED_SUMMARY_SCHEMA, INTAKE_SMALL_REASONING, createIntake, parseNeeds } from "../dist/intake.js";
 
 const TZ = "Europe/Oslo";
 const need = (n) => process.env[n]?.trim() || (() => { throw new Error(`${n} must be set`); })();
@@ -72,9 +73,16 @@ mkdirSync(OUT, { recursive: true });
 
 // The reader: the real small model, or (DRY) a stand-in that keeps what it was asked, for counting.
 const asked = [];
-const call = DRY
+const model = DRY
   ? async (req) => (asked.push(req), { text: JSON.stringify({ title: "t", summary: "s.", decisions: [], owner_tasks: [], others_tasks: [], open: [], to_settle: [], searches: [], days: [], needs: [] }), costUsd: 0 })
   : modelCall(resolveWatcherModel(process.env.INTAKE_SMALL_MODEL?.trim() || DEFAULT_INTAKE_SMALL_MODEL, process.env), { reasoning: INTAKE_SMALL_REASONING, apiKey: need("ANTHROPIC_API_KEY") });
+// Every need the reading wrote, with its kind (the hand-off shows only those that call for the agent).
+let lastNeeds = [];
+const call = async (req) => {
+  const reply = await model(req);
+  lastNeeds = parseNeeds(reply.text);
+  return reply;
+};
 
 const dir = mkdtempSync(join(tmpdir(), "gate-real-"));
 const results = [];
@@ -96,17 +104,19 @@ try {
 
   for (const e of emails) {
     if (spent >= MAX_USD) { console.log(`stopped: $${spent.toFixed(4)} spent (cap $${MAX_USD})`); break; }
+    lastNeeds = [];
     const r = await flow.receive({ type: "app.event", id: `gate-${e.id}`, trigger: TRIGGERS.emailReceived, data: { id: e.id, thread_id: e.thread, label_ids: e.labels, sender: e.from, to: e.to, subject: e.subject, message_timestamp: e.at, message_text: e.text } });
     const cost = r.intake?.costUsd ?? 0;
     spent += cost;
     const kept = r.itemId ? items.get(r.itemId) : undefined;
     const prompt = r.itemId ? handed.get(`intake-${r.itemId}`) : undefined;
     const needs = /May need you now:\n((?:- .*\n?)+)/.exec(prompt ?? "")?.[1]?.trim().split("\n").map((l) => l.replace(/^- /, "")) ?? [];
-    results.push({ id: e.id, at: e.at, from: e.from, subject: e.subject, labels: e.labels, flow: r.outcome, why: r.why, intake: r.intake?.outcome, needs, title: kept?.summary?.title, summary: kept?.summary?.summary, costUsd: cost, text: DRY ? kept?.text : undefined });
+    results.push({ id: e.id, at: e.at, from: e.from, subject: e.subject, labels: e.labels, flow: r.outcome, why: r.why, intake: r.intake?.outcome, needs, kinds: lastNeeds, title: kept?.summary?.title, summary: kept?.summary?.summary, costUsd: cost, text: DRY ? kept?.text : undefined });
     if (!DRY) {
       const g = gotOf(results.at(-1));
       const want = key[e.id]?.want ?? "?";
-      console.log(`${String(results.length).padStart(3)} ${g === "hand" ? "HAND " : g === "quiet" ? "quiet" : (r.intake?.outcome ?? r.outcome).padEnd(5)} key=${want.padEnd(6)} ${when(Date.parse(e.at))} ${e.subject.slice(0, 70)}${needs.length ? `\n      needs: ${needs.join(" | ").slice(0, 200)}` : ""}`);
+      const all = lastNeeds.map((n) => `${n.kind || "?"}: ${n.what}`).join(" | ");
+      console.log(`${String(results.length).padStart(3)} ${g === "hand" ? "HAND " : g === "quiet" ? "quiet" : (r.intake?.outcome ?? r.outcome).padEnd(5)} key=${want.padEnd(6)} ${when(Date.parse(e.at))} ${e.subject.slice(0, 70)}${all ? `\n      needs: ${all.slice(0, 220)}` : ""}`);
     }
   }
 } finally {
@@ -152,6 +162,15 @@ const taken = results.filter((r) => r.flow === "taken in");
 console.log(`\nspent $${spent.toFixed(4)} for ${taken.length} readings ($${(spent / Math.max(1, taken.length)).toFixed(5)} each); results ${file}`);
 console.log(`handed over ${taken.filter((r) => gotOf(r) === "hand").length} of ${taken.length}`);
 console.log(`key: hand ${g.hand}, quiet ${g.quiet}, either ${g.either}; MISSED ${g.missed.length}, NOISE ${g.noise.length}, unkeyed ${g.unkeyed.length}, unread ${g.unread.length}`);
-for (const r of g.missed) console.log(`  missed: ${when(Date.parse(r.at))} ${r.subject.slice(0, 80)} (key: ${key[r.id]?.why ?? ""})`);
+for (const r of g.missed) console.log(`  missed: ${when(Date.parse(r.at))} ${r.subject.slice(0, 80)} (key: ${key[r.id]?.why ?? ""}) -> ${(r.kinds ?? []).map((n) => `${n.kind}: ${n.what}`).join(" | ").slice(0, 160)}`);
 for (const r of g.noise) console.log(`  noise:  ${when(Date.parse(r.at))} ${r.subject.slice(0, 80)} -> ${r.needs.join(" | ").slice(0, 160)}`);
 for (const r of g.unread) console.log(`  unread: ${r.subject.slice(0, 80)} (${r.intake})`);
+
+// The same emails in an earlier run: what changed, by what the key says.
+if (process.env.COMPARE) {
+  const before = new Map(JSON.parse(readFileSync(home(process.env.COMPARE), "utf8")).results.map((r) => [r.id, r]));
+  const flips = results.filter((r) => before.has(r.id) && gotOf(before.get(r.id)) !== gotOf(r));
+  const was = grade([...before.values()], key);
+  console.log(`\ncompared with ${process.env.COMPARE}: before missed ${was.missed.length}, noise ${was.noise.length}, handed ${[...before.values()].filter((r) => gotOf(r) === "hand").length}; ${flips.length} emails changed`);
+  for (const r of flips) console.log(`  ${gotOf(before.get(r.id))} -> ${gotOf(r)}  key=${key[r.id]?.want ?? "?"}  ${r.subject.slice(0, 70)}`);
+}

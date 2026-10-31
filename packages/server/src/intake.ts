@@ -132,10 +132,28 @@ export const SUMMARY_SCHEMA = {
   required: ["title", "summary", "decisions", "owner_tasks", "others_tasks", "open", "to_settle", "searches", "days"],
   additionalProperties: false,
 };
+/**
+ * [sunshine:flowing-in] What in an item may need the assistant, each with its kind; the code decides from the kind
+ * (QUIET_NEEDS), so the line is drawn here, not in the reading's judgment. The gate check on his real email (2026-10-31,
+ * scenarios/gate-real.mjs): with one free-form list, 15 of 70 emails that ask nothing were handed over, 13 of them codes,
+ * resets and sign-in notices for what he did himself ("if this wasn't you ...") or notices that ask nothing.
+ */
+export const NEED_KINDS = ["event", "request", "deadline", "change", "promise", "offer", "own_action", "if_not_you", "info"] as const;
+/** [sunshine:flowing-in] Kinds that never call for the agent on their own. Any other kind, or none, goes to the agent. */
+export const QUIET_NEEDS: ReadonlySet<string> = new Set(["own_action", "if_not_you", "info"]);
+export interface Need {
+  /** One of NEED_KINDS; empty when the reading gave none (it then goes to the agent). */
+  kind: string;
+  what: string;
+}
+const NEEDS = {
+  type: "array",
+  items: { type: "object", properties: { kind: { type: "string", enum: [...NEED_KINDS] }, what: { type: "string" } }, required: ["kind", "what"], additionalProperties: false },
+};
 /** [sunshine:flowing-in] The form for what arrives by itself: the same, and what in it may need the assistant now. */
 export const GATED_SUMMARY_SCHEMA = {
   ...SUMMARY_SCHEMA,
-  properties: { ...SUMMARY_SCHEMA.properties, needs: LINES },
+  properties: { ...SUMMARY_SCHEMA.properties, needs: NEEDS },
   required: [...SUMMARY_SCHEMA.required, "needs"],
 };
 
@@ -167,7 +185,7 @@ export function intakeSystem(owner: string, source: string): string {
     `- days: the dates ${owner}'s tasks and open points are about, worked out from the day the record was made, as YYYY-MM-DD, or YYYY-MM-DD/YYYY-MM-DD for a span such as "next week". Their calendar is read for these days.`,
     // [sunshine:flowing-in] What decides whether the agent gets it at all (gated sources only).
     ...(gated(source)
-      ? [`- needs: what in it may call for the assistant to do something or tell ${owner} now: an event ${owner} is going to or is invited to, a request or a deadline for ${owner}, a change to ${owner}'s plans, something ${owner} promised. Each short. Empty when it is only worth remembering.`]
+      ? [`- needs: what in it may call for the assistant to do something or tell ${owner} now, each as {"kind": ..., "what": "short"}. Kinds: "event" (an event ${owner} is going to or is invited to: tickets, a registration, an invitation, even when nothing is asked), "request" (someone asks ${owner} to do something), "deadline" (something ${owner} must do or decide by a date, or something ${owner} has that ends on a date, such as a plan, a trial or access), "change" (a change to ${owner}'s plans), "promise" (something ${owner} promised), "offer" (a deal or an event on offer), "own_action" (a code, link or confirmation for something ${owner} is doing themselves just now), "if_not_you" (matters only if ${owner} did not do it themselves), "info" (tells something and asks nothing of ${owner}, and is none of the kinds above). Empty when it is only worth remembering.`]
       : []),
     "Each line short and complete on its own, in the plain words someone would later search for. Only what the record supports; empty lists are fine.",
     // [sunshine:in-the-flow] 2026-10-27: a summary's guess that a concert was "not in the calendar yet" was kept, and the agent offered to add one already there.
@@ -212,14 +230,30 @@ export function parseAsk(text: string): LookUpAsk {
   }
 }
 
-/** [sunshine:flowing-in] What the reading says may need the assistant now; for this hand-off only, like the ask. */
-export function parseNeeds(text: string): string[] {
+/**
+ * [sunshine:flowing-in] What the reading says may need the assistant now; for this hand-off only, like the ask. A plain
+ * line (no kind) is read as a need of no kind, which goes to the agent.
+ */
+export function parseNeeds(text: string): Need[] {
   try {
     const v = (JSON.parse(text) as Record<string, unknown>).needs;
-    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.trim().length > 0).map((x) => clip(x.trim(), LINE_MAX)).slice(0, LIST_MAX) : [];
+    if (!Array.isArray(v)) return [];
+    const out: Need[] = [];
+    for (const x of v) {
+      const o = x && typeof x === "object" ? (x as Record<string, unknown>) : undefined;
+      const what = typeof x === "string" ? x : typeof o?.what === "string" ? o.what : "";
+      if (!what.trim()) continue;
+      out.push({ kind: typeof o?.kind === "string" ? o.kind.trim().toLowerCase() : "", what: clip(what.trim(), LINE_MAX) });
+    }
+    return out.slice(0, LIST_MAX);
   } catch {
     return [];
   }
+}
+
+/** [sunshine:flowing-in] The needs that call for the agent: every kind but the quiet ones. */
+export function needsForAgent(needs: Need[]): Need[] {
+  return needs.filter((n) => !QUIET_NEEDS.has(n.kind));
 }
 
 /** The named speakers of "[12:34] Name: ..." lines, in order of first turn, without the owner or unknown voices. */
@@ -262,7 +296,7 @@ export function createIntake(deps: IntakeDeps): Intake {
   // [sunshine:in-the-flow] The record's date with its year, for the summary's days.
   const isoDay = (ms: number) => new Intl.DateTimeFormat("en-CA", { timeZone: tz(), year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(ms));
 
-  async function summarize(it: ArchiveItem, call: ModelCall): Promise<{ summary?: ItemSummary; ask?: LookUpAsk; needs?: string[]; costUsd: number }> {
+  async function summarize(it: ArchiveItem, call: ModelCall): Promise<{ summary?: ItemSummary; ask?: LookUpAsk; needs?: Need[]; costUsd: number }> {
     const notes = deps.memory.readDurable().trim();
     const record = SOURCES[it.source]?.record; // [sunshine:flowing-in]
     const user = [
@@ -370,14 +404,17 @@ export function createIntake(deps: IntakeDeps): Intake {
         const kept = deps.items.get(it.id) ?? { ...it, summary };
         journal(kept, summary.summary);
         const s = kept.summary ?? summary;
-        // [sunshine:flowing-in] What arrived by itself goes to the agent only when the reading found something for it.
-        if (gated(it.source) && needs.length === 0) {
-          record(kept, "kept, nothing to act on", { costUsd: cost });
+        // [sunshine:flowing-in] What arrived by itself goes to the agent only when the reading found something for it,
+        // of a kind that calls for it; the kinds are kept in the audit either way.
+        const forAgent = needsForAgent(needs);
+        const kinds = needs.length > 0 ? { needs: needs.map((n) => n.kind || "?") } : {};
+        if (gated(it.source) && forAgent.length === 0) {
+          record(kept, "kept, nothing to act on", { costUsd: cost, ...kinds });
           return { outcome: "kept, nothing to act on", summary, costUsd: cost };
         }
         const [known, live] = await Promise.all([knownAbout(kept, s, ask?.days), liveAbout(kept, ask)]); // [sunshine:in-the-flow] [sunshine:hindsight] days
-        const reply = await deps.runTask({ id: `intake-${it.id}`, name: kept.title ?? summary.title ?? "conversation", prompt: handOff(kept, s, known, live, needs), ...(deps.load?.length ? { load: deps.load } : {}) });
-        record(kept, "handed over", { costUsd: cost, ownerTasks: summary.ownerTasks.length, decisions: summary.decisions.length });
+        const reply = await deps.runTask({ id: `intake-${it.id}`, name: kept.title ?? summary.title ?? "conversation", prompt: handOff(kept, s, known, live, forAgent.map((n) => n.what)), ...(deps.load?.length ? { load: deps.load } : {}) });
+        record(kept, "handed over", { costUsd: cost, ownerTasks: summary.ownerTasks.length, decisions: summary.decisions.length, ...kinds });
         return { outcome: "handed over", summary, costUsd: cost, reply };
       } catch (err) {
         record(it, "failed", { costUsd: cost, error: String(err instanceof Error ? err.message : err).slice(0, 300) });

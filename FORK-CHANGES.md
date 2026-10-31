@@ -1151,10 +1151,11 @@ an agent's settings). CROSS-CHECKED with Composio's own SDK (0.22.0, offline, ra
 accepts our signature format and rejects a wrong secret as ours does (body with æøå and an emoji); its V3 reading gives
 the same person, trigger and data. All 1,587 tests, type check and smoke pass.
 
-**Open.** Switching the triggers on for his account: the project's webhook subscription (V3, URL
-`<gateway>/webhooks/composio`; its secret goes on Railway as `COMPOSIO_WEBHOOK_SECRET`) and one trigger per source
-for his connected accounts; then a gateway image, Railway redeploy, an agent image with 752e0d0 and the flow switched
-on. Whether the Gmail trigger's own `query` should leave out promotions and social at the source (Composio's setting
+**Open.** Switching on, in this order: the project's webhook subscription (V3, URL `<gateway>/webhooks/composio`; its
+secret goes on Railway as `COMPOSIO_WEBHOOK_SECRET`); the gateway image and a Railway redeploy (`/health` shows
+`appEvents: true`); his agent on an image with 752e0d0 (the flow has no switch of its own: it is on wherever the intake
+is); LAST one trigger per source for his connected accounts, because an agent without 752e0d0 acknowledges an
+`app.event` and drops it. Whether the Gmail trigger's own `query` should leave out promotions and social at the source (Composio's setting
 used as intended) as well as the agent's rule. Telling the person when Composio says a connection expired (now only
 logged). The reading with `needs` is untested with a real model (paid, his OK). Whether Composio's managed connections
 can check more often than every 15 minutes (the trigger default says 2; one page says 15 at least). A tapback quoting

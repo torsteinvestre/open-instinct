@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { type SignupLimits, SlidingWindowLimiter, clientAddress, pendingCount, signupLimits } from "./limits.js";
 import { type Logger, consoleLogger } from "./logger.js";
 import { type Brand, DEFAULT_BRAND } from "./brand.js"; // [sunshine:gateway-settings]
+import { composioDeliveryOf, verifyComposioSignature } from "./composio.js"; // [sunshine:flowing-in]
 import { contactCard } from "./contact.js"; // [sunshine:contact-card]
 import { GITHUB_URL, type LandingOptions, type PageOptions, type RouterInfo, connectRouterFor, renderConnect, renderLanding, renderLinkDone, renderMessage, renderPending } from "./pages.js";
 import { type LinkPassthrough, type MaritimeProvisionOptions, newUserId, provisionUser } from "./provision.js";
@@ -41,6 +42,11 @@ export interface GatewayOptions {
   composioApiKey?: string;
   /** Comma-separated Composio toolkits sent with the key. Default gmail,googlecalendar,googlecontacts. */
   composioToolkits?: string;
+  /**
+   * [sunshine:flowing-in] The signing secret of the Composio project's webhook subscription. Turns on
+   * POST /webhooks/composio: every person's app events, each forwarded to the agent whose handle Composio names.
+   */
+  composioWebhookSecret?: string;
   /** Stripe Link credentials copied into every agent, with the redirect URI pointing at this gateway. */
   link?: LinkPassthrough;
   logger?: Logger;
@@ -427,6 +433,46 @@ export function createGateway(opts: GatewayOptions): GatewayServer {
     res.end();
   }
 
+  /**
+   * [sunshine:flowing-in] One URL for everyone's app events (Composio has one webhook subscription per project). A
+   * verified trigger event goes into the durable inbox like a text, so a sleeping or busy agent gets it later. What
+   * can never reach anyone (an unknown handle, a notice) is answered 204 and logged, so Composio does not retry it.
+   */
+  async function handleComposioWebhook(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const secret = opts.composioWebhookSecret;
+    if (!secret) throw new HttpError(404, "not found");
+    const raw = await readBody(req, maxBody);
+    if (!verifyComposioSignature(raw, req.headers as HeaderMap, secret, { now })) {
+      log.warn("composio.unauthorized", {});
+      return json(res, 401, { error: "invalid signature" });
+    }
+    let delivery: ReturnType<typeof composioDeliveryOf>;
+    try {
+      delivery = composioDeliveryOf(JSON.parse(raw.toString("utf8")));
+    } catch {
+      delivery = undefined;
+    }
+    if (!delivery) {
+      log.warn("composio.unreadable", {});
+      return json(res, 400, { error: "expected a Composio V3 event" });
+    }
+    const user = delivery.userId ? opts.store.byHandle(delivery.userId) : undefined;
+    if (delivery.kind === "notice") {
+      // A connection expired or a trigger was disabled: the flow stopped. Telling the person comes later.
+      log.warn("composio.notice", { type: delivery.type, ...(user ? { userId: user.id } : { composioUserId: delivery.userId }) });
+    } else if (!user) {
+      log.warn("composio.unknown_user", { composioUserId: delivery.userId, trigger: delivery.event.trigger });
+    } else {
+      const { event } = delivery;
+      const queued = inbox.enqueue(`composio:${user.id}:${event.id}`, {
+        kind: "gateway", userId: user.id, identityId: user.identityId, event: { ...event }, conversationId: `flow-in:${user.id}`,
+      });
+      log.info("composio.event", { userId: user.id, trigger: event.trigger, status: queued ? "queued" : "duplicate" });
+    }
+    res.writeHead(204);
+    res.end();
+  }
+
   /** Link sends the browser here after approval. The code goes to the agent, which holds the PKCE verifier. */
   // [sunshine:gateway-settings] Upstream calls this `page`, the name the fork uses for the brand options;
   // without a front door's own renderer it draws the branded message page.
@@ -470,7 +516,8 @@ export function createGateway(opts: GatewayOptions): GatewayServer {
       return html(res, 200, landing());
     }
     if (parts[0] === "health" && parts.length === 1) {
-      return json(res, 200, { ok: true, users: opts.store.all().length, signup: Boolean(opts.inkbox), github: GITHUB_URL, inbox: inbox.summary() });
+      // [sunshine:flowing-in] appEvents: whether the Composio route is on (the secret is set), checkable from outside.
+      return json(res, 200, { ok: true, users: opts.store.all().length, signup: Boolean(opts.inkbox), appEvents: Boolean(opts.composioWebhookSecret), github: GITHUB_URL, inbox: inbox.summary() });
     }
     if (parts[0] === "api" && parts[1] === "signup" && parts.length === 2) {
       if (method !== "POST") throw new HttpError(405, "method not allowed");
@@ -511,6 +558,11 @@ export function createGateway(opts: GatewayOptions): GatewayServer {
     if (parts[0] === "webhooks" && parts[1] === "inkbox" && parts.length === 3) {
       if (method !== "POST") throw new HttpError(405, "method not allowed");
       return handleWebhook(req, res, decodeURIComponent(parts[2] ?? ""));
+    }
+    // [sunshine:flowing-in]
+    if (parts[0] === "webhooks" && parts[1] === "composio" && parts.length === 2) {
+      if (method !== "POST") throw new HttpError(405, "method not allowed");
+      return handleComposioWebhook(req, res);
     }
     if (parts[0] === "oauth" && parts[1] === "link" && parts[2] === "callback" && parts.length === 4) {
       if (method !== "GET") throw new HttpError(405, "method not allowed");

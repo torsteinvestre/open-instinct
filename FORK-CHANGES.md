@@ -1074,10 +1074,26 @@ the reminder come through?" is answered from the copies of sent texts; the actio
 **Why** (2026-10-30). Torstein: "this is not an email door; everything flows through the memory instead of a manual
 search" (DESIGN-memory-in-the-flow.md, job 1). An inbox search cannot answer "what's on next week?" or notice anything
 unasked; only reading each thing once as it arrives can (the 3 Nov case: the answer sat in his email 12 days). Built
-once for every app: Composio reports an event (a trigger), the gateway will check and forward it (next step, not built
-yet), and here it becomes an item through the intake, like a recording. Each source adds only a small rule.
+once for every app: Composio reports an event (a trigger), the gateway checks and forwards it, and the agent makes it
+an item through the intake, like a recording. Each source adds only a small rule.
 
 **What the fork adds**
+- **The gateway route** (2026-10-31; gateway `composio.ts`, `server.ts` `handleComposioWebhook`, `main.ts`):
+  `POST /webhooks/composio`, ONE URL for every person (Composio allows one webhook subscription per project). On only
+  with `COMPOSIO_WEBHOOK_SECRET` (the subscription's signing secret; never forwarded to agents); `/health` says
+  `appEvents: true|false`. The signature is Composio's Standard Webhooks check (HMAC-SHA256 of
+  `<webhook-id>.<webhook-timestamp>.<body>`, secret used as is, `v1,<base64>`, several allowed while a secret rotates,
+  5 minutes' tolerance as in their SDK), written like upstream's Inkbox check, so the gateway takes no Composio
+  dependency. The V3 body names the person in `metadata.user_id`: the Composio user id the agent uses, its handle
+  (checked 31 Oct: his Gmail and Calendar connections are `sunshine-torstein-sho5`, Zia's `sunshine-zia-t81g`), found
+  with the store's `byHandle`. The `app.event` takes the body's top-level `id` (the event's own; the SDK's normalized
+  `id` is the TRIGGER's, the same for every email), `metadata.trigger_slug`, `timestamp` and `data` unchanged; an id
+  the agent would refuse becomes a stable `composio-<hash>`. It goes into upstream's durable inbox (`kind: "gateway"`,
+  key `composio:<user>:<event id>`, conversation `flow-in:<user>`) like a text: answered 204 at once, forwarded through
+  Maritime /chat with retries, Retry-After and the agent-not-ready wait; a repeat delivery is forwarded once. Answered
+  204 without forwarding, logged: an unknown handle, and Composio's own notices (`composio.connected_account.expired`
+  / `.activated`, `composio.trigger.disabled`: the flow stopping or starting). 401 for a bad signature, 400 for a body
+  that is not V3 (a V1/V2 subscription would show as failing in Composio's log, not pass silently).
 - `app.event` (core `envelope.ts`, `appEventOf`): the connector's event id, the trigger slug and the app's own fields;
   `http.ts` hands it to the flow past the HTTP budget, never to owner chat; refused when the flow is off.
 - `packages/server/src/flowing-in.ts`, `createFlowIn`. Rules shared by every source: no catch-up (decided 30 Oct:
@@ -1125,14 +1141,28 @@ real data** (free, code only, his 112 exported emails through the received rule)
 comes as sent); kept text 29% of the raw 584,000 characters (links were 41% of what was kept before the link rule);
 median 917 characters, longest 7,206; no HTML left, no empty bodies; the invitation's 171 recipients shown as six and
 "and 165 more".
+The gateway route (free): `composio.test.ts` (9): Composio's signature passes, a wrong secret, a changed body, a
+missing header, an old delivery and a non-v1 signature do not, one good signature among several does; a V3 trigger
+becomes an `app.event` with the event's own id; a bad id gets a stable stand-in; notices read, V1/V2 bodies and a
+missing person refused; over HTTP: forwarded to the person's agent once as an `app.event` (repeat delivery answered,
+not forwarded), kept in the durable inbox while Maritime answers 503, 401/405/400, unknown handle and notice answered
+without forwarding, off (404) without the secret, `/health` `appEvents`. `main.test.ts` +1 (the secret read, never in
+an agent's settings). CROSS-CHECKED with Composio's own SDK (0.22.0, offline, random secret): its `verifyWebhook`
+accepts our signature format and rejects a wrong secret as ours does (body with æøå and an emoji); its V3 reading gives
+the same person, trigger and data. All 1,587 tests, type check and smoke pass.
 
-**Open.** The gateway route (signature check, durable inbox, Composio's `user_id` = the agent's handle -> the agent)
-and switching the triggers on for his account are the next step. The reading with `needs` is untested with a real
-model (paid, his OK). Whether Composio's managed connections can check more often than every 15 minutes (the trigger
-default says 2; one page says 15 at least). A tapback quoting Sunshine's reply still enters his spells (input policy).
+**Open.** Switching the triggers on for his account: the project's webhook subscription (V3, URL
+`<gateway>/webhooks/composio`; its secret goes on Railway as `COMPOSIO_WEBHOOK_SECRET`) and one trigger per source
+for his connected accounts; then a gateway image, Railway redeploy, an agent image with 752e0d0 and the flow switched
+on. Whether the Gmail trigger's own `query` should leave out promotions and social at the source (Composio's setting
+used as intended) as well as the agent's rule. Telling the person when Composio says a connection expired (now only
+logged). The reading with `needs` is untested with a real model (paid, his OK). Whether Composio's managed connections
+can check more often than every 15 minutes (the trigger default says 2; one page says 15 at least). A tapback quoting
+Sunshine's reply still enters his spells (input policy).
 
 **To remove.** Revert the commit (`git log --grep "sunshine:flowing-in"`), or delete `flowing-in.ts` and its test and
-the tagged lines in `intake.ts`, `hindsight.ts`, `http.ts`, `boot.ts` and core `envelope.ts`.
+the tagged lines in `intake.ts`, `hindsight.ts`, `http.ts`, `boot.ts` and core `envelope.ts`; for the gateway route,
+delete gateway `composio.ts` and its test and the tagged lines in gateway `server.ts`, `main.ts` and `main.test.ts`.
 
 ### `[sunshine:action-log]`: what Sunshine changes in the owner's apps is written down by code
 

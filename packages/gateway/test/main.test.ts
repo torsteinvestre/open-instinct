@@ -100,6 +100,14 @@ describe("Ample for every agent", () => {
     expect(agentExtraEnv(readEnv({ MARITIME_API_KEY: "mk", KEENABLE_SEARCH: "1" }))).toEqual({ KEENABLE_SEARCH: "1" });
   });
 
+  // [sunshine:flowing-in]
+  it("reads COMPOSIO_WEBHOOK_SECRET and never forwards it to an agent", () => {
+    const cfg = readEnv({ MARITIME_API_KEY: "mk", COMPOSIO_WEBHOOK_SECRET: " cmp_whsec " });
+    expect(cfg.composioWebhookSecret).toBe("cmp_whsec");
+    expect(JSON.stringify(agentExtraEnv(cfg) ?? {})).not.toContain("cmp_whsec");
+    expect(readEnv({ MARITIME_API_KEY: "mk" }).composioWebhookSecret).toBeUndefined();
+  });
+
   it("sends nothing extra when neither Context.dev nor Ample is on", () => {
     const cfg = readEnv({ MARITIME_API_KEY: "mk" });
     expect(cfg.keenableSearch).toBe(false);

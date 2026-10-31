@@ -40,6 +40,8 @@ export interface GatewayEnv {
   composioToolkits?: string;
   /** COMPOSIO_MODE forwarded to each agent: direct or router. Unset lets the agent choose from its model. */
   composioMode?: string;
+  /** [sunshine:flowing-in] COMPOSIO_WEBHOOK_SECRET: the project's webhook signing secret; turns on POST /webhooks/composio. Never forwarded. */
+  composioWebhookSecret?: string;
   contextDevApiKey?: string;
   /** KEENABLE_SEARCH=1: each agent gets keenable_search and keenable_fetch, which need no key. */
   keenableSearch: boolean;
@@ -126,6 +128,7 @@ export function readEnv(env: NodeJS.ProcessEnv): GatewayEnv {
     composioApiKey: env["COMPOSIO_API_KEY"] || undefined,
     composioToolkits: env["COMPOSIO_TOOLKITS"] || env["INSTINCT_COMPOSIO_TOOLKITS"] || undefined,
     composioMode: env["COMPOSIO_MODE"]?.trim() || undefined,
+    composioWebhookSecret: env["COMPOSIO_WEBHOOK_SECRET"]?.trim() || undefined, // [sunshine:flowing-in]
     contextDevApiKey: env["CONTEXT_DEV_API_KEY"] || undefined,
     keenableSearch: truthy(env["KEENABLE_SEARCH"]),
     keenableApiKey: env["KEENABLE_API_KEY"] || undefined,
@@ -227,6 +230,7 @@ export function startGateway(cfg: GatewayEnv): GatewayServer {
     anthropicApiKey: cfg.anthropicApiKey,
     composioApiKey: cfg.composioApiKey,
     composioToolkits: cfg.composioToolkits,
+    composioWebhookSecret: cfg.composioWebhookSecret, // [sunshine:flowing-in]
     link: cfg.link,
     trustProxy: cfg.trustProxy,
     logger: log,
@@ -234,7 +238,7 @@ export function startGateway(cfg: GatewayEnv): GatewayServer {
     routerInfoFor: (user) => new InkboxProvisioner({ adminApiKey: user.identityApiKey, baseUrl: cfg.inkboxBaseUrl }).routerInfo(),
   });
   server.listen(cfg.port, "0.0.0.0", () => {
-    log.info("gateway.listening", { port: cfg.port, publicUrl: cfg.publicUrl, users: store.all().length, signup: Boolean(inkbox), link: Boolean(cfg.link) });
+    log.info("gateway.listening", { port: cfg.port, publicUrl: cfg.publicUrl, users: store.all().length, signup: Boolean(inkbox), link: Boolean(cfg.link), appEvents: Boolean(cfg.composioWebhookSecret) }); // [sunshine:flowing-in] appEvents
     server.resumePending();
     // Older subscriptions were made before call.ended existed; each boot tops them up.
     void server.backfillWebhookEvents();
